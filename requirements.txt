@@ -7,6 +7,9 @@ passlib[bcrypt]==1.7.4
 pydantic[email]==2.10.3
 python-dotenv==1.0.0
 langchain-text-splitters==0.3.3
+# torch must come before sentence-transformers — pinned to CPU-only to avoid 2GB CUDA download
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.1.2+cpu
 sentence-transformers==2.2.2
 faiss-cpu==1.7.4
 PyMuPDF==1.23.7
