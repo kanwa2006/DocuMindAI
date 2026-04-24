@@ -17,8 +17,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy and install Python dependencies
 COPY requirements.txt .
+# ── Install torch CPU-only FIRST ─────────────────────────────────────────────
+# This stops sentence-transformers from pulling the full 2GB CUDA build.
+# CPU-only torch is ~300MB. Must be installed before requirements.txt.
 RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir \
+       torch==2.1.2+cpu \
+       --extra-index-url https://download.pytorch.org/whl/cpu \
     && pip install --no-cache-dir -r requirements.txt
+
+# ── Pre-download embedding model into the image ───────────────────────────────
+# Bakes BAAI/bge-small-en-v1.5 (~90MB) into the Docker layer.
+# Without this, the first PDF upload would trigger a ~90MB download in prod.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
