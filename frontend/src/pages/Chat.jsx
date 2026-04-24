@@ -333,6 +333,15 @@ export default function Chat() {
   const pollingRef = useRef({});
   const activeSessionRef = useRef(null); // ref to track current session in callbacks
   const isProcessing = trackedFiles.some(f => f.status==="uploading"||f.status==="processing");
+  // Mobile detection — sidebar overlays on small screens
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener("resize", onResize);
+    // Auto-close sidebar on initial mobile load
+    if (window.innerWidth <= 768) setSidebar(false);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   const bottomRef   = useRef(null);
   const textareaRef = useRef(null);
@@ -371,6 +380,8 @@ export default function Chat() {
     if (s.doc_ids && s.doc_ids.length > 0) {
       setSessionDocIds(prev => ({ ...prev, [s.id]: s.doc_ids }));
     }
+    // On mobile, close sidebar after selecting a session
+    if (isMobile) setSidebar(false);
   };
   const newChat = async () => { const s = await apiFetch("/qa/sessions", { method:"POST" }); setSessions(p => [s,...p]); setActive(s); activeSessionRef.current = s; setMessages([]); setTracked([]); };
   const deleteSession = async (e, id) => { e.stopPropagation(); await apiFetch(`/qa/sessions/${id}`, { method:"DELETE" }); setSessions(p => p.filter(s => s.id !== id)); if (activeSession?.id===id) { setActive(null); setMessages([]); } };
@@ -475,9 +486,16 @@ export default function Chat() {
         @keyframes bounce{0%,60%,100%{transform:translateY(0);opacity:0.3}30%{transform:translateY(-5px);opacity:1}}
       `}</style>
 
+      {/* Mobile backdrop — tap to close sidebar */}
+      {sidebarOpen && isMobile && (
+        <div onClick={() => setSidebar(false)}
+          style={{ position:"fixed", inset:0, top:60, background:"rgba(0,0,0,0.4)", zIndex:140, backdropFilter:"blur(2px)" }}
+        />
+      )}
+
       {/* SIDEBAR */}
       {sidebarOpen && (
-        <div style={{ width:240, flexShrink:0, background:sideCol, borderRight:`1px solid ${border}`, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+        <div className="chat-sidebar-overlay" style={{ width:240, flexShrink:0, background:sideCol, borderRight:`1px solid ${border}`, display:"flex", flexDirection:"column", overflow:"hidden" }}>
           <div style={{ padding:"12px 8px 6px" }}>
             <button className="new-btn" onClick={newChat}
               style={{ width:"100%", background:accent, color:"#fff", border:"none", borderRadius:6, padding:"8px 12px", cursor:"pointer", fontSize:13, fontWeight:500, fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, justifyContent:"center" }}>
@@ -511,15 +529,15 @@ export default function Chat() {
       )}
 
       {/* MAIN */}
-      <div style={{ flex:1, display:"flex", flexDirection:"column", minWidth:0, overflow:"hidden" }}>
+      <div className="chat-main" style={{ flex:1, display:"flex", flexDirection:"column", minWidth:0, overflow:"hidden" }}>
         {/* Sidebar toggle */}
-        <button onClick={() => setSidebar(s => !s)}
-          style={{ position:"absolute", top:72, left:sidebarOpen?268:8, zIndex:20, background:cardCol, border:`1px solid ${border}`, color:subCol, width:26, height:26, borderRadius:6, cursor:"pointer", fontSize:11, display:"flex", alignItems:"center", justifyContent:"center", transition:"left 0.2s" }}>
+        <button className="sidebar-toggle-btn" onClick={() => setSidebar(s => !s)}
+          style={{ position:"absolute", top:72, left:sidebarOpen&&!isMobile?268:8, zIndex:20, background:cardCol, border:`1px solid ${border}`, color:subCol, width:26, height:26, borderRadius:6, cursor:"pointer", fontSize:11, display:"flex", alignItems:"center", justifyContent:"center", transition:"left 0.2s" }}>
           {sidebarOpen?"◀":"▶"}
         </button>
 
         {/* Messages area */}
-        <div className="main-scroll" style={{ flex:1, overflowY:"auto", padding:`24px ${sidebarOpen?"48px":"72px"} 200px` }}>
+        <div className="chat-messages-area main-scroll" style={{ flex:1, overflowY:"auto", padding:`24px ${sidebarOpen&&!isMobile?"48px":"72px"} 200px` }}>
 
           {/* Empty state */}
           {messages.length===0 && (
@@ -630,7 +648,7 @@ export default function Chat() {
         </div>
 
         {/* INPUT */}
-        <div style={{ flexShrink:0, padding:"8px 48px 16px", background:`linear-gradient(to top,${bg} 80%,transparent)` }}>
+        <div className="chat-input-area" style={{ flexShrink:0, padding:"8px 48px 16px", background:`linear-gradient(to top,${bg} 80%,transparent)` }}>
           <ProcessingBar files={trackedFiles} dark={dark}/>
           {isProcessing && (
             <div style={{ marginBottom:8, padding:"7px 12px", background:dark?"rgba(234,179,8,0.08)":"rgba(234,179,8,0.07)", border:"1px solid rgba(234,179,8,0.25)", borderRadius:9, fontSize:12, color:dark?"#fbbf24":"#92400e", display:"flex", alignItems:"center", gap:7 }}>
