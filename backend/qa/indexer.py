@@ -13,7 +13,7 @@ import json
 import math
 import numpy as np
 import faiss
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from backend.qa.embedder import get_embedder, encode_query, encode_documents
 from backend.documents.storage import get_index_dir
 from backend.config import CHUNK_SIZE, CHUNK_OVERLAP
