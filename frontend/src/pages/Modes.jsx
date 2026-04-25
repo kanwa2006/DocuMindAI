@@ -244,6 +244,7 @@ function TeacherMode({ docs, dark, t }) {
           </button>
           {loading && <button onClick={stop} style={{ padding:"10px 16px", background:"rgba(248,81,73,0.15)", border:"1px solid #f85149", color:"#f85149", borderRadius:9, cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:"inherit" }}>⏹ Stop</button>}
         </div>
+      )}
       {tab !== "bank" && result && (
         <div style={{ marginTop:12 }}>
           <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:6 }}>
