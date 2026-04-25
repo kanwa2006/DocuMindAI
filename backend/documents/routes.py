@@ -50,15 +50,33 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    import hashlib
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    unique_name = f"{uuid.uuid4().hex}_{file.filename}"
-    file_path = save_uploaded_file(current_user.id, unique_name, await file.read())
-    doc = Document(user_id=current_user.id, filename=unique_name, original_name=file.filename, is_indexed=0)
+    file_content = await file.read()
+    content_hash = hashlib.sha256(file_content).hexdigest()
+    # Deduplication: same content already indexed by this user?
+    existing = db.query(Document).filter(
+        Document.user_id == current_user.id,
+        Document.content_hash == content_hash,
+        Document.canonical_doc_id == None
+    ).first()
+    if existing and existing.is_indexed == 1:
+        alias = Document(user_id=current_user.id, filename=existing.filename,
+                         original_name=file.filename, is_indexed=1,
+                         content_hash=content_hash, canonical_doc_id=existing.id)
+        db.add(alias); db.commit(); db.refresh(alias)
+        return {"message": "Content already processed - reused instantly",
+                "doc_id": alias.id, "filename": file.filename, "reused": True, "status": "Ready"}
+    unique_name = str(uuid.uuid4().hex) + "_" + file.filename
+    file_path = save_uploaded_file(current_user.id, unique_name, file_content)
+    doc = Document(user_id=current_user.id, filename=unique_name, original_name=file.filename,
+                   is_indexed=0, content_hash=content_hash, canonical_doc_id=None)
     db.add(doc); db.commit(); db.refresh(doc)
     from backend.config import DATABASE_URL
     background_tasks.add_task(_process_and_index, current_user.id, file_path, doc.id, DATABASE_URL)
-    return {"message": "Upload successful", "doc_id": doc.id, "filename": file.filename}
+    return {"message": "Upload successful", "doc_id": doc.id, "filename": file.filename,
+            "reused": False, "status": "Processing"}
 
 
 @router.get("/list")

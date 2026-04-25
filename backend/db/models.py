@@ -25,6 +25,8 @@ class Document(Base):
     uploaded_at   = Column(DateTime, default=datetime.datetime.utcnow)
     page_count    = Column(Integer, default=0)
     is_indexed    = Column(Integer, default=0)  # 0=pending, 1=done, 2=failed
+    content_hash  = Column(String, nullable=True, index=True)  # SHA256 for deduplication
+    canonical_doc_id = Column(Integer, nullable=True)  # points to original if duplicate
     owner         = relationship("User", back_populates="documents")
 
 

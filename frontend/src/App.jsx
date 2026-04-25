@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "./context/ThemeContext";
+import { DocProvider } from "./context/DocContext";
 import { Login, Register } from "./pages/Login";
 import Chat from "./pages/Chat";
 import Documents from "./pages/Documents";
@@ -27,6 +28,7 @@ export default function App() {
 
   return (
     <ThemeProvider>
+      <DocProvider>
       <BrowserRouter>
         {token && <Navbar onLogout={handleLogout} />}
         <Routes>
@@ -41,6 +43,7 @@ export default function App() {
           <Route path="/"         element={<Navigate to={token ? "/chat" : "/login"} />} />
         </Routes>
       </BrowserRouter>
+    </DocProvider>
     </ThemeProvider>
   );
 }
