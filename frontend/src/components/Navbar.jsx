@@ -66,7 +66,7 @@ export default function Navbar({ onLogout }) {
       </Link>
 
       {/* Nav links — neutral, no color on active */}
-      {[{ to: "/chat", label: "Chat" }, { to: "/documents", label: "Documents" }].map(({ to, label }) => {
+      {[{ to: "/chat", label: "Chat" }, { to: "/documents", label: "Documents" }, { to: "/modes", label: "Modes" }].map(({ to, label }) => {
         const active = loc.pathname.startsWith(to);
         return (
           <Link key={to} to={to} className="nav-link"

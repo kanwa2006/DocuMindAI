@@ -269,7 +269,7 @@ def call_gemini(prompt: str, model_name: str) -> str:
         GEMINI_TOP_P,
     )
 
-    max_attempts = min(len(rotator.keys), 6)
+    max_attempts = len(rotator.keys)  # Try ALL available keys, no artificial cap
 
     for attempt in range(max_attempts):
         key = rotator.get_current_key()

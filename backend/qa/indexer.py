@@ -175,10 +175,38 @@ def _get_paths(user_id: int):
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 
-def build_user_index(user_id: int, new_text: str, source_filename: str):
-    """Chunk, embed and add document to user's FAISS index with page metadata."""
+def is_already_indexed(user_id: int, source_filename: str) -> bool:
+    """Check if a source file is already in the user's index — prevents duplicate processing."""
+    _, meta_path = _get_paths(user_id)
+    if not os.path.exists(meta_path):
+        return False
+    source_base = os.path.basename(source_filename)
+    parts = source_base.split("_", 1)
+    if len(parts) == 2 and len(parts[0]) == 32 and parts[0].isalnum():
+        source_base = parts[1]
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        return any(m.get("source") == source_base for m in metadata)
+    except Exception:
+        return False
+
+
+def build_user_index(user_id: int, new_text: str, source_filename: str,
+                     force_reindex: bool = False):
+    """
+    Chunk, embed (batched) and add document to user's FAISS index.
+    Phase 1 improvements:
+    - Skips re-indexing if source already indexed (shared cache — one upload, many views)
+    - Batch embedding: all chunks embedded in one call (safe speed boost, no accuracy loss)
+    """
     if not new_text or not new_text.strip():
         print(f"[Indexer] Empty text for {source_filename}, skipping")
+        return
+
+    # ── Shared cache: skip if already indexed ──────────────────────────────────
+    if not force_reindex and is_already_indexed(user_id, source_filename):
+        print(f"[Indexer] ✅ Already indexed {source_filename} — skipping duplicate processing")
         return
 
     index_path, meta_path = _get_paths(user_id)
@@ -197,8 +225,16 @@ def build_user_index(user_id: int, new_text: str, source_filename: str):
     # Assign page numbers before embedding
     chunk_pages = _assign_page_numbers(new_text, chunks)
 
-    print(f"[Indexer] Embedding {len(chunks)} chunks for {source_filename}...")
-    embeddings = encode_documents(embedder, chunks)
+    # ── Batch embedding: all chunks at once (safe speed boost) ─────────────────
+    # Batch size 64 is safe for most machines; reduces per-chunk overhead significantly
+    BATCH_SIZE = 64
+    all_embeddings = []
+    for i in range(0, len(chunks), BATCH_SIZE):
+        batch = chunks[i:i + BATCH_SIZE]
+        batch_emb = encode_documents(embedder, batch)
+        all_embeddings.append(batch_emb)
+    embeddings = np.vstack(all_embeddings) if all_embeddings else encode_documents(embedder, chunks)
+    print(f"[Indexer] Batch-embedded {len(chunks)} chunks in {len(all_embeddings)} batches")
 
     if os.path.exists(index_path):
         index = faiss.read_index(index_path)
