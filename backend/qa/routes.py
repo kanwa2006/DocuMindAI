@@ -402,3 +402,121 @@ def evaluate_answer(
         "sources_used":   result.get("sources", []),
         "scores":         scores
     }
+
+
+# ── Share Chat ─────────────────────────────────────────────────────────────────
+# Uses signed JWT tokens — no DB schema changes needed.
+# POST /qa/sessions/{id}/share  → generate shareable link token
+# GET  /qa/shared/{token}       → public, read-only session view
+# POST /qa/shared/{token}/fork  → clone chat into current user's account
+
+from backend.auth.utils import create_access_token, decode_token
+from datetime import timedelta
+
+
+@router.post("/sessions/{session_id}/share")
+def share_session(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Generate a shareable link token for a chat session."""
+    session = db.query(ChatSession).filter(
+        ChatSession.id == session_id, ChatSession.user_id == current_user.id
+    ).first()
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    # Embed session info in JWT (30-day expiry)
+    token = create_access_token(
+        data={"share_session": session_id, "owner": current_user.id},
+        expires_delta=timedelta(days=30),
+    )
+    return {"token": token, "share_url": f"/shared/{token}"}
+
+
+@router.get("/shared/{token}")
+def get_shared_session(token: str, db: Session = Depends(get_db)):
+    """Public endpoint — returns chat history for a shared session."""
+    payload = decode_token(token)
+    if not payload or "share_session" not in payload:
+        raise HTTPException(403, "Invalid or expired share link")
+
+    session_id = payload["share_session"]
+    owner_id   = payload["owner"]
+
+    session = db.query(ChatSession).filter(
+        ChatSession.id == session_id, ChatSession.user_id == owner_id
+    ).first()
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    chats = db.query(ChatHistory).filter(
+        ChatHistory.session_id == session_id
+    ).order_by(ChatHistory.created_at).all()
+
+    return {
+        "session_id": session_id,
+        "title": session.title,
+        "owner": owner_id,
+        "messages": [
+            {
+                "question": c.question,
+                "answer":   c.answer,
+                "sources":  json.loads(c.sources) if c.sources else [],
+                "created_at": c.created_at.isoformat(),
+            }
+            for c in chats
+        ],
+    }
+
+
+@router.post("/shared/{token}/fork")
+def fork_shared_session(
+    token: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Clone a shared chat into the current user's account to continue it."""
+    payload = decode_token(token)
+    if not payload or "share_session" not in payload:
+        raise HTTPException(403, "Invalid or expired share link")
+
+    session_id = payload["share_session"]
+    owner_id   = payload["owner"]
+
+    original_session = db.query(ChatSession).filter(
+        ChatSession.id == session_id, ChatSession.user_id == owner_id
+    ).first()
+    if not original_session:
+        raise HTTPException(404, "Original session not found")
+
+    original_chats = db.query(ChatHistory).filter(
+        ChatHistory.session_id == session_id
+    ).order_by(ChatHistory.created_at).all()
+
+    # Create new session in current user's account
+    new_session = ChatSession(
+        user_id=current_user.id,
+        title=f"Forked: {original_session.title[:80]}",
+        doc_ids=original_session.doc_ids or "[]",
+    )
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+
+    # Copy all messages
+    for c in original_chats:
+        db.add(ChatHistory(
+            user_id=current_user.id,
+            session_id=new_session.id,
+            question=c.question,
+            answer=c.answer,
+            sources=c.sources,
+        ))
+    db.commit()
+
+    return {
+        "new_session_id": new_session.id,
+        "message": "Chat forked into your account. You can now continue it.",
+    }

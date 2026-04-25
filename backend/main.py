@@ -9,6 +9,7 @@ from backend.documents.routes import router as docs_router
 from backend.qa.routes import router as qa_router
 from backend.agents.routes import router as agents_router
 from backend.export.routes import router as export_router
+from backend.reconstruction.routes import router as recon_router
 from backend.config import STORAGE_BASE
 
 Base.metadata.create_all(bind=engine)
@@ -52,6 +53,7 @@ app.include_router(docs_router)
 app.include_router(qa_router)
 app.include_router(agents_router)
 app.include_router(export_router)
+app.include_router(recon_router)
 
 
 @app.get("/")

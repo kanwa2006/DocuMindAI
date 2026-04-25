@@ -1,4 +1,6 @@
 import os
+import unicodedata
+from urllib.parse import quote
 import uuid
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, BackgroundTasks, Query
 from fastapi.responses import FileResponse
@@ -98,8 +100,14 @@ def view_document(doc_id: int, token: str = Query(...), db: Session = Depends(ge
     if not doc: raise HTTPException(status_code=404, detail="Not found")
     fp = os.path.join(get_user_storage_dir(user.id), doc.filename)
     if not os.path.exists(fp): raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path=fp, media_type="application/pdf", filename=doc.original_name,
-                        headers={"Content-Disposition": f'inline; filename="{doc.original_name}"'})
+    # Sanitize filename for HTTP headers (latin-1 only allows ASCII subset)
+    # Use RFC 5987 encoding for full Unicode support alongside an ASCII fallback
+    safe_name = unicodedata.normalize("NFKD", doc.original_name)
+    safe_name = safe_name.encode("ascii", errors="replace").decode("ascii").replace("?", "_")
+    encoded_name = quote(doc.original_name, safe="")
+    content_disposition = f'inline; filename="{safe_name}"; filename*=UTF-8\'\'{encoded_name}'
+    return FileResponse(path=fp, media_type="application/pdf",
+                        headers={"Content-Disposition": content_disposition})
 
 
 @router.delete("/{doc_id}")

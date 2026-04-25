@@ -7,6 +7,7 @@ import Documents from "./pages/Documents";
 import DocumentViewer from "./pages/DocumentViewer";
 import Profile from "./pages/Profile";
 import Navbar from "./components/Navbar";
+import SharedChat from "./pages/SharedChat";
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("token"));
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="/documents"        element={token ? <Documents /> : <Navigate to="/login" />} />
           <Route path="/documents/:id"    element={token ? <DocumentViewer /> : <Navigate to="/login" />} />
           <Route path="/profile"  element={token ? <Profile onLogout={handleLogout} /> : <Navigate to="/login" />} />
+          <Route path="/shared/:token" element={<SharedChat />} />
           <Route path="/"         element={<Navigate to={token ? "/chat" : "/login"} />} />
         </Routes>
       </BrowserRouter>
