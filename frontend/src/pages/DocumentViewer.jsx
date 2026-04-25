@@ -154,16 +154,36 @@ function TableView({ table, dark }) {
     const rows = [table.headers, ...table.rows];
     navigator.clipboard.writeText(rows.map(r => r.join("\t")).join("\n"));
   };
+  const copyMarkdown = () => {
+    const h = `| ${table.headers.join(" | ")} |`;
+    const sep = `| ${table.headers.map(() => "---").join(" | ")} |`;
+    const rows = table.rows.map(r => `| ${r.join(" | ")} |`);
+    navigator.clipboard.writeText([h, sep, ...rows].join("\n"));
+  };
+  const copyPlain = () => {
+    const rows = [table.headers, ...table.rows];
+    navigator.clipboard.writeText(rows.map(r => r.join("  ")).join("\n"));
+  };
   const downloadCSV = () => {
     const rows = [table.headers, ...table.rows];
     const csv = rows.map(r => r.map(c => `"${c}"`).join(",")).join("\n");
     const a = document.createElement("a"); a.href = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`; a.download = "table.csv"; a.click();
   };
+  const downloadMarkdown = () => {
+    const h = `| ${table.headers.join(" | ")} |`;
+    const sep = `| ${table.headers.map(() => "---").join(" | ")} |`;
+    const rows = table.rows.map(r => `| ${r.join(" | ")} |`);
+    const md = [h, sep, ...rows].join("\n");
+    const a = document.createElement("a"); a.href = `data:text/markdown;charset=utf-8,${encodeURIComponent(md)}`; a.download = "table.md"; a.click();
+  };
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
         <CopyBtn label="📋 Copy Table" onClick={copyTable} color="#d29922" />
+        <CopyBtn label="⬇ Markdown" onClick={copyMarkdown} color="#8250df" />
+        <CopyBtn label="📄 Plain Text" onClick={copyPlain} color="#1f6feb" />
         <button onClick={downloadCSV} style={{ background: "transparent", border: `1px solid ${border}`, color: "#8b949e", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>⬇ CSV</button>
+        <button onClick={downloadMarkdown} style={{ background: "transparent", border: `1px solid ${border}`, color: "#8b949e", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>⬇ .md</button>
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -180,6 +200,7 @@ function TableView({ table, dark }) {
     </div>
   );
 }
+
 
 function ProgressBar({ current, total, stage, eta, dark }) {
   const pct = total > 0 ? Math.round((current / total) * 100) : 0;
