@@ -383,7 +383,57 @@ def notes_revision(doc_id: int, current_user: User = Depends(get_current_user), 
     return {"doc_id": doc_id, "filename": doc.original_name, "revision_sheet": call_gemini(prompt, GEMINI_MODEL)}
 
 
-# ── Student Mode ──────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# MULTI-DOC HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_multi_context(user_id: int, docs: list, query: str, top_k: int = 30) -> str:
+    """
+    Query FAISS using ALL source names from selected docs at once.
+    This avoids the per-doc empty-result bug and gives richer context.
+    """
+    # Collect all valid source filenames from selected docs
+    sources = [_clean_filename(doc.filename) for doc in docs if doc and doc.is_indexed == 1]
+    if not sources:
+        return ""
+    # If only 1 source, use source_filter; if multiple, pass all at once
+    source_filter = sources if len(sources) <= 10 else None  # beyond 10, query all
+    chunks = query_user_index(user_id, query, top_k=top_k, source_filter=source_filter)
+    if not chunks:
+        # Fallback: no source filter (search entire user index)
+        chunks = query_user_index(user_id, query, top_k=top_k, source_filter=None)
+    if not chunks:
+        return ""
+    return "\n\n---\n\n".join(
+        f"[Page {c.get('page','?')}]\n{c.get('chunk','')}" for c in chunks
+    )
+
+
+def _resolve_docs(doc_ids: list, user_id: int, db) -> list:
+    """Resolve doc IDs to indexed Document objects (handles alias docs too)."""
+    resolved = []
+    for doc_id in doc_ids:
+        doc = db.query(Document).filter(
+            Document.id == doc_id,
+            Document.user_id == user_id
+        ).first()
+        if not doc:
+            continue
+        # For alias docs, resolve to canonical for FAISS lookup
+        if doc.canonical_doc_id:
+            canonical = db.query(Document).filter(Document.id == doc.canonical_doc_id).first()
+            if canonical and canonical.is_indexed == 1:
+                resolved.append(canonical)
+            elif doc.is_indexed == 1:
+                resolved.append(doc)
+        elif doc.is_indexed == 1:
+            resolved.append(doc)
+    return resolved
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STUDENT MODE ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
 
 @router.post("/student/study-plan")
 def student_study_plan(body: dict, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -394,41 +444,37 @@ def student_study_plan(body: dict, current_user: User = Depends(get_current_user
     include_qna = body.get("include_qna", True)
 
     if not doc_ids:
-        raise HTTPException(status_code=400, detail="Provide at least one doc_id")
+        raise HTTPException(400, "Provide at least one doc_id")
 
-    combined_text = []
-    for doc_id in doc_ids:
-        doc = db.query(Document).filter(Document.id == doc_id, Document.user_id == current_user.id).first()
-        if not doc or doc.is_indexed != 1:
-            continue
-        source = _clean_filename(doc.filename)
-        ctx, _ = _get_context(current_user.id, source, "summarize all topics", 25)
-        if ctx:
-            combined_text.append(f"[Document: {doc.original_name}]\n{ctx}")
+    docs = _resolve_docs(doc_ids, current_user.id, db)
+    if not docs:
+        raise HTTPException(404, "No valid indexed documents found. Wait for processing to complete.")
 
-    if not combined_text:
-        raise HTTPException(status_code=404, detail="No valid indexed documents found")
+    ctx = _get_multi_context(current_user.id, docs, "all topics units concepts summary", top_k=35)
+    if not ctx:
+        raise HTTPException(422, "Could not retrieve content from documents.")
 
-    context = "\n\n".join(combined_text)[:12000]
     focus_str = f"\nSpecial focus: {focus}" if focus else ""
     qna_str = "\n5. LIKELY EXAM QUESTIONS (5 per unit with brief model answers)." if include_qna else ""
+    doc_names = ", ".join(set(d.original_name for d in docs))
 
     prompt = f"""You are an expert academic tutor. A student has {time_plan} to prepare.{focus_str}
+Documents: {doc_names}
 
-Based on these documents:
-{context}
+Based on this content:
+{ctx}
 
-Create a complete, actionable study plan for {time_plan} preparation:
+Create a complete, actionable study plan for {time_plan}:
 
-1. PRIORITY TOPICS (highest exam importance first)
-2. TIME SCHEDULE (break {time_plan} into slots — what to cover in each)
-3. KEY CONCEPTS (ultra-concise bullets per unit/topic)
-4. MUST-KNOW FORMULAS / DEFINITIONS (the non-negotiables){qna_str}
+1. PRIORITY TOPICS (highest exam importance first — be specific)
+2. TIME SCHEDULE (break {time_plan} into clear slots — what to cover in each slot)
+3. KEY CONCEPTS (ultra-concise bullets — one line per concept, group by unit/topic)
+4. MUST-KNOW FORMULAS / DEFINITIONS (non-negotiables — memorize these){qna_str}
 6. LAST-MINUTE TIPS (what to focus on in final 15 minutes)
 
-Be specific, actionable, prioritize ruthlessly."""
+Be specific. Use the actual document content. Prioritize ruthlessly."""
 
-    return {"study_plan": call_gemini(prompt, GEMINI_MODEL), "time_plan": time_plan, "doc_count": len(doc_ids)}
+    return {"study_plan": call_gemini(prompt, GEMINI_MODEL), "time_plan": time_plan, "doc_count": len(docs)}
 
 
 @router.post("/student/flashcards")
@@ -438,30 +484,32 @@ def student_flashcards(body: dict, current_user: User = Depends(get_current_user
     topic   = body.get("topic", "all topics")
     count   = min(body.get("count", 20), 50)
 
-    combined_text = []
-    for doc_id in doc_ids:
-        doc = db.query(Document).filter(Document.id == doc_id, Document.user_id == current_user.id).first()
-        if not doc or doc.is_indexed != 1:
-            continue
-        source = _clean_filename(doc.filename)
-        ctx, _ = _get_context(current_user.id, source, topic, 20)
-        if ctx:
-            combined_text.append(ctx)
+    if not doc_ids:
+        raise HTTPException(400, "Provide at least one doc_id")
 
-    if not combined_text:
-        raise HTTPException(status_code=404, detail="No valid indexed documents found")
+    docs = _resolve_docs(doc_ids, current_user.id, db)
+    if not docs:
+        raise HTTPException(404, "No valid indexed documents found.")
 
-    context = "\n\n".join(combined_text)[:10000]
-    prompt = f"""Generate {count} exam-style flashcards on '{topic}' from this content.
-Format each as:
-Q: [question]
-A: [concise answer]
+    ctx = _get_multi_context(current_user.id, docs, topic, top_k=25)
+    if not ctx:
+        raise HTTPException(422, "Could not retrieve content from documents.")
+
+    prompt = f"""Generate exactly {count} exam-style flashcards on '{topic}' from this content.
+Format EACH flashcard as:
+Q: [clear, specific question]
+A: [concise, accurate answer — 1-3 lines]
 ---
 
+Include a mix of: definitions, application questions, and recall questions.
 Content:
-{context}"""
-    return {"flashcards": call_gemini(prompt, GEMINI_MODEL), "topic": topic}
+{ctx}"""
+    return {"flashcards": call_gemini(prompt, GEMINI_MODEL), "topic": topic, "count": count}
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEACHER MULTI-DOC ENDPOINT
+# ─────────────────────────────────────────────────────────────────────────────
 
 @router.post("/teacher/question-paper-multi")
 def teacher_question_paper_multi(body: dict, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -474,55 +522,71 @@ def teacher_question_paper_multi(body: dict, current_user: User = Depends(get_cu
     exam_style  = body.get("exam_style", "university")
 
     if not doc_ids:
-        raise HTTPException(status_code=400, detail="Provide at least one doc_id")
+        raise HTTPException(400, "Provide at least one doc_id")
+    if not sections:
+        raise HTTPException(400, "Define at least one section (Part A, Part B, etc.)")
 
-    combined_text = []
-    for doc_id in doc_ids:
-        doc = db.query(Document).filter(Document.id == doc_id, Document.user_id == current_user.id).first()
-        if not doc or doc.is_indexed != 1:
-            continue
-        source = _clean_filename(doc.filename)
-        ctx, _ = _get_context(current_user.id, source, "all topics concepts definitions", 20)
-        if ctx:
-            combined_text.append(f"[{doc.original_name}]\n{ctx}")
+    docs = _resolve_docs(doc_ids, current_user.id, db)
+    if not docs:
+        raise HTTPException(404, "No valid indexed documents found. Ensure all PDFs are Ready (not Processing).")
 
-    if not combined_text:
-        raise HTTPException(status_code=404, detail="No valid indexed documents found")
+    ctx = _get_multi_context(current_user.id, docs, "all topics concepts definitions problems", top_k=40)
+    if not ctx:
+        raise HTTPException(422, "Could not retrieve content. Ensure documents are fully indexed.")
 
-    context = "\n\n".join(combined_text)[:12000]
-    desc_str = f"\nSpecial instructions: {description}" if description else ""
+    desc_str = f"\nSpecial instructions from teacher: {description}" if description else ""
+    doc_names = ", ".join(set(d.original_name for d in docs))
 
     section_blueprint = ""
     total_marks = 0
     for s in sections:
-        n = s.get("name", "Part")
+        n  = s.get("name", "Part")
         mq = s.get("marks_each", 5)
         nq = s.get("num_questions", 5)
-        sub = " (with sub-questions a, b, c)" if s.get("allow_sub") else ""
-        section_blueprint += f"\n- {n}: {nq} questions x {mq} marks each = {nq*mq} marks{sub}"
+        qt = s.get("question_type", "mixed")  # direct | sub-question | case-based | mixed
+        sub_note = ""
+        if qt == "sub-question":
+            sub_note = " (each question must have sub-parts: a, b, c)"
+        elif qt == "case-based":
+            sub_note = " (case-study/scenario based questions)"
+        elif qt == "direct":
+            sub_note = " (direct questions, no sub-parts)"
+        else:
+            allow_sub = s.get("allow_sub", False)
+            sub_note = " (with sub-questions a,b,c)" if allow_sub else ""
+        section_blueprint += f"\n- {n}: {nq} questions x {mq} marks each = {nq*mq} marks{sub_note}"
         total_marks += nq * mq
 
-    prompt = f"""You are an expert exam paper setter for {exam_style} level.
-Create a professional question paper with these exact sections:{section_blueprint}
-Total marks: {total_marks}
+    prompt = f"""You are a professional exam paper setter for {exam_style} level examinations.
+
+Source documents: {doc_names}
 Difficulty: {difficulty}{desc_str}
 
+Create a complete, professional question paper with EXACTLY these sections:
+{section_blueprint}
+
+TOTAL MARKS: {total_marks}
+
+STRICT FORMATTING RULES:
+1. Start with: Exam Title | Total Marks: {total_marks} | Time: __ Hours | Date: __
+2. Label each section clearly (PART A, PART B, PART C, etc.)
+3. Number questions within each section starting from 1
+4. Show marks in brackets [Xm] after each question
+5. For sub-questions: use (a), (b), (c) format
+6. For case-based: provide a scenario/case first, then questions based on it
+7. Include at least one table or comparison-style question where content allows
+8. Make questions that test understanding, not just memorization
+{"9. Add complete ANSWER KEY at the end with section-wise answers." if include_answers else ""}
+
+Use ONLY content from the provided documents. Do not invent topics not covered in the source.
+
 Source content:
-{context}
-
-Format exactly as a real exam paper:
-- Header: Exam Title, Total Marks: {total_marks}, Time: ___ Hours
-- Each section clearly labeled
-- Questions numbered correctly
-- Sub-questions labeled (a), (b), (c) where applicable
-- Marks shown in brackets [marks] after each question
-{"- Include complete Answer Key at the end." if include_answers else ""}
-
-Include at least one table/comparison question if content supports it."""
+{ctx}"""
 
     return {
         "question_paper": call_gemini(prompt, GEMINI_MODEL),
         "total_marks": total_marks,
         "sections": len(sections),
-        "doc_count": len(doc_ids)
+        "doc_count": len(docs),
+        "doc_names": doc_names
     }

@@ -136,6 +136,10 @@ function TeacherMode({ docs, dark, t }) {
 
   const totalMarks = sections.reduce((s,sec) => s + sec.marks_each * sec.num_questions, 0);
 
+  // Readiness gate: check if all selected docs are indexed
+  const processingDocs = docs.filter(d => docIds.includes(d.id) && d.status !== "Ready");
+  const allReady = processingDocs.length === 0;
+
   const updateSection = (i, field, val) =>
     setSections(s => s.map((sec, idx) => idx === i ? {...sec, [field]: val} : sec));
   const addSection = () => setSections(s => [...s, { name:`Part ${String.fromCharCode(65+s.length)}`, marks_each:5, num_questions:5, allow_sub:false }]);
@@ -180,7 +184,8 @@ function TeacherMode({ docs, dark, t }) {
 
   const stop = () => { abortRef.current?.abort(); setLoading(false); };
   const tabs = [["qpaper","📝 Question Paper"], ["answers","🔑 Answer Key"], ["syllabus","🗺 Syllabus Map"], ["bank",`📚 Bank (${bank.length})`]];
-  const canRun = docIds.length > 0 && !loading && tab !== "bank";
+  const canRun = docIds.length > 0 && !loading && tab !== "bank" && allReady;
+
 
 
   return (
@@ -213,23 +218,36 @@ function TeacherMode({ docs, dark, t }) {
             </div>
           </div>
           {/* Section Blueprint — Part A / B / C */}
-          <p style={{ fontSize:11, color:t.sub, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.5px", margin:"12px 0 8px" }}>
-            Paper Blueprint — Total: <span style={{ color:"#3fb950" }}>{totalMarks} marks</span>
-          </p>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", margin:"14px 0 6px" }}>
+            <span style={{ fontSize:11, color:t.sub, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.5px" }}>Paper Blueprint</span>
+            <span style={{ fontSize:13, fontWeight:700, color:"#3fb950" }}>Total: {totalMarks} marks</span>
+          </div>
+          {/* Column headers */}
+          <div style={{ display:"grid", gridTemplateColumns:"2fr 70px 70px 60px 2fr 28px", gap:6, marginBottom:4 }}>
+            {["Section Name","Questions","Marks/Q","Total","Question Type",""].map((h,i)=>(
+              <span key={i} style={{ fontSize:10, color:t.sub, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.4px", paddingLeft: i===0?0:2 }}>{h}</span>
+            ))}
+          </div>
           {sections.map((sec, i) => (
-            <div key={i} style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr auto", gap:6, marginBottom:8, alignItems:"center" }}>
-              <input value={sec.name} onChange={e=>updateSection(i,"name",e.target.value)} style={{ padding:"5px 8px", borderRadius:6, border:`1px solid ${t.border}`, background:dark?"#2f2f2f":"#fff", color:t.text, fontSize:12, fontFamily:"inherit" }} />
-              <div>
-                <input type="number" min={1} value={sec.num_questions} onChange={e=>updateSection(i,"num_questions",+e.target.value)} placeholder="Qs" style={{ width:"100%", padding:"5px 8px", borderRadius:6, border:`1px solid ${t.border}`, background:dark?"#2f2f2f":"#fff", color:t.text, fontSize:12, fontFamily:"inherit", boxSizing:"border-box" }} />
-              </div>
-              <div>
-                <input type="number" min={1} value={sec.marks_each} onChange={e=>updateSection(i,"marks_each",+e.target.value)} placeholder="Marks" style={{ width:"100%", padding:"5px 8px", borderRadius:6, border:`1px solid ${t.border}`, background:dark?"#2f2f2f":"#fff", color:t.text, fontSize:12, fontFamily:"inherit", boxSizing:"border-box" }} />
-              </div>
-              <div style={{ display:"flex", alignItems:"center", gap:4 }}>
-                <input type="checkbox" id={`sub${i}`} checked={sec.allow_sub} onChange={e=>updateSection(i,"allow_sub",e.target.checked)} />
-                <label htmlFor={`sub${i}`} style={{ fontSize:11, color:t.sub, whiteSpace:"nowrap" }}>Sub-Qs</label>
-              </div>
-              <button onClick={()=>removeSection(i)} style={{ background:"transparent", border:"1px solid rgba(248,81,73,0.4)", color:"#f85149", padding:"3px 8px", borderRadius:5, cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>×</button>
+            <div key={i} style={{ display:"grid", gridTemplateColumns:"2fr 70px 70px 60px 2fr 28px", gap:6, marginBottom:6, alignItems:"center" }}>
+              <input value={sec.name} onChange={e=>updateSection(i,"name",e.target.value)}
+                style={{ padding:"5px 8px", borderRadius:6, border:`1px solid ${t.border}`, background:dark?"#2f2f2f":"#fff", color:t.text, fontSize:12, fontFamily:"inherit" }} />
+              <input type="number" min={1} value={sec.num_questions} onChange={e=>updateSection(i,"num_questions",+e.target.value)}
+                title="Number of questions"
+                style={{ padding:"5px 8px", borderRadius:6, border:`1px solid ${t.border}`, background:dark?"#2f2f2f":"#fff", color:t.text, fontSize:12, fontFamily:"inherit", width:"100%", boxSizing:"border-box", textAlign:"center" }} />
+              <input type="number" min={1} value={sec.marks_each} onChange={e=>updateSection(i,"marks_each",+e.target.value)}
+                title="Marks per question"
+                style={{ padding:"5px 8px", borderRadius:6, border:`1px solid ${t.border}`, background:dark?"#2f2f2f":"#fff", color:t.text, fontSize:12, fontFamily:"inherit", width:"100%", boxSizing:"border-box", textAlign:"center" }} />
+              <span style={{ fontSize:12, fontWeight:700, color:"#3fb950", textAlign:"center" }}>{sec.num_questions * sec.marks_each}m</span>
+              <select value={sec.question_type||"mixed"} onChange={e=>updateSection(i,"question_type",e.target.value)}
+                style={{ padding:"5px 8px", borderRadius:6, border:`1px solid ${t.border}`, background:dark?"#2f2f2f":"#fff", color:t.text, fontSize:11, fontFamily:"inherit", width:"100%" }}>
+                <option value="direct">Direct (no sub-parts)</option>
+                <option value="sub-question">Sub-questions (a,b,c)</option>
+                <option value="case-based">Case-based scenario</option>
+                <option value="mixed">Mixed types</option>
+              </select>
+              <button onClick={()=>removeSection(i)}
+                style={{ background:"transparent", border:"1px solid rgba(248,81,73,0.4)", color:"#f85149", padding:"3px 6px", borderRadius:5, cursor:"pointer", fontSize:12, fontFamily:"inherit", lineHeight:1 }}>×</button>
             </div>
           ))}
           <button onClick={addSection} style={{ background:"transparent", border:`1px dashed ${t.border}`, color:t.sub, padding:"5px 14px", borderRadius:7, cursor:"pointer", fontSize:12, fontFamily:"inherit", marginBottom:10 }}>+ Add Section</button>
@@ -240,7 +258,7 @@ function TeacherMode({ docs, dark, t }) {
       {tab !== "bank" && (
         <div style={{ display:"flex", gap:8, marginTop:14 }}>
           <button onClick={run} disabled={!canRun} style={{ flex:1, padding:"10px", background:canRun?(dark?"#3f3f3f":"#171717"):(dark?"#2a2a2a":"#e0e0e0"), color:canRun?"#fff":t.sub, border:"none", borderRadius:9, cursor:canRun?"pointer":"not-allowed", fontSize:14, fontWeight:600, fontFamily:"inherit", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-            {loading ? <><Spinner /> Generating...</> : "Generate"}
+            {loading ? <><Spinner /> Generating...</> : !allReady && docIds.length > 0 ? `⏳ Waiting for ${processingDocs.length} doc(s) to finish processing...` : "Generate"}
           </button>
           {loading && <button onClick={stop} style={{ padding:"10px 16px", background:"rgba(248,81,73,0.15)", border:"1px solid #f85149", color:"#f85149", borderRadius:9, cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:"inherit" }}>⏹ Stop</button>}
         </div>
