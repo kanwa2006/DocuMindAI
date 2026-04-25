@@ -36,22 +36,27 @@ function CopyBtn({ label, onClick, color = "#1f6feb" }) {
   );
 }
 
-// ── Crop Tool ─────────────────────────────────────────────────────────────────
+// ── Enhanced Crop Tool — resize handles, move, zoom, save ────────────────────
 function CropTool({ imgSrc, pageNum, onClose }) {
   const containerRef = useRef(null);
   const nativeImg    = useRef(new Image());
-  const [isDragging, setIsDragging] = useState(false);
+  const [zoom, setZoom]         = useState(1);
+  const [isDragging, setIsDragging]   = useState(false);
+  const [isResizing, setIsResizing]   = useState(null); // "tl"|"tr"|"bl"|"br"
+  const [isMoving, setIsMoving]       = useState(false);
+  const [moveOffset, setMoveOffset]   = useState({ x: 0, y: 0 });
   const [start, setStart]   = useState({ x: 0, y: 0 });
   const [end, setEnd]       = useState({ x: 0, y: 0 });
   const [crop, setCrop]     = useState(null);
   const [copied, setCopied] = useState(false);
+  const [saved, setSaved]   = useState(false);
 
   useEffect(() => { nativeImg.current.src = imgSrc; }, [imgSrc]);
 
   const getPos = (e) => {
     const rect = containerRef.current.getBoundingClientRect();
     const src  = e.touches ? e.touches[0] : e;
-    return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+    return { x: (src.clientX - rect.left) / zoom, y: (src.clientY - rect.top) / zoom };
   };
 
   const norm = (a, b) => ({ x: Math.min(a.x,b.x), y: Math.min(a.y,b.y), w: Math.abs(b.x-a.x), h: Math.abs(b.y-a.y) });
@@ -81,44 +86,125 @@ function CropTool({ imgSrc, pageNum, onClose }) {
     const a = document.createElement("a"); a.href = c.toDataURL(); a.download = `crop_pg${pageNum}.png`; a.click();
   };
 
+  const doSave = () => {
+    const c = buildCanvas(); if (!c) return;
+    const dataUrl = c.toDataURL();
+    const existing = JSON.parse(localStorage.getItem("cropGallery") || "[]");
+    existing.unshift({ page: pageNum, dataUrl, ts: Date.now(), w: Math.round(crop.w), h: Math.round(crop.h) });
+    localStorage.setItem("cropGallery", JSON.stringify(existing.slice(0, 50))); // keep max 50
+    setSaved(true); setTimeout(() => setSaved(false), 1800);
+  };
+
+  // Resize handles: corner positions
+  const HANDLE_SIZE = 10;
+  const handles = crop ? [
+    { id: "tl", x: crop.x - HANDLE_SIZE/2, y: crop.y - HANDLE_SIZE/2 },
+    { id: "tr", x: crop.x + crop.w - HANDLE_SIZE/2, y: crop.y - HANDLE_SIZE/2 },
+    { id: "bl", x: crop.x - HANDLE_SIZE/2, y: crop.y + crop.h - HANDLE_SIZE/2 },
+    { id: "br", x: crop.x + crop.w - HANDLE_SIZE/2, y: crop.y + crop.h - HANDLE_SIZE/2 },
+  ] : [];
+
+  const onMouseDown = (e) => {
+    e.preventDefault();
+    const p = getPos(e);
+    // Check if clicking a resize handle
+    if (crop) {
+      for (const h of handles) {
+        if (p.x >= h.x && p.x <= h.x + HANDLE_SIZE && p.y >= h.y && p.y <= h.y + HANDLE_SIZE) {
+          setIsResizing(h.id);
+          return;
+        }
+      }
+      // Check if clicking inside existing crop (move mode)
+      if (p.x >= crop.x && p.x <= crop.x + crop.w && p.y >= crop.y && p.y <= crop.y + crop.h) {
+        setIsMoving(true);
+        setMoveOffset({ x: p.x - crop.x, y: p.y - crop.y });
+        return;
+      }
+    }
+    // New drag
+    setStart(p); setEnd(p); setCrop(null); setIsDragging(true);
+  };
+
+  const onMouseMove = (e) => {
+    const p = getPos(e);
+    if (isDragging) { setEnd(p); }
+    else if (isResizing && crop) {
+      setCrop(prev => {
+        let { x, y, w, h } = prev;
+        if (isResizing === "tl") { w = x + w - p.x; h = y + h - p.y; x = p.x; y = p.y; }
+        if (isResizing === "tr") { w = p.x - x; h = y + h - p.y; y = p.y; }
+        if (isResizing === "bl") { w = x + w - p.x; x = p.x; h = p.y - y; }
+        if (isResizing === "br") { w = p.x - x; h = p.y - y; }
+        return { x: Math.max(0,x), y: Math.max(0,y), w: Math.max(10,w), h: Math.max(10,h) };
+      });
+    } else if (isMoving && crop) {
+      setCrop(prev => ({ ...prev, x: p.x - moveOffset.x, y: p.y - moveOffset.y }));
+    }
+  };
+
+  const onMouseUp = (e) => {
+    if (isDragging) { const r = norm(start, getPos(e)); if (r.w > 5 && r.h > 5) setCrop(r); }
+    setIsDragging(false); setIsResizing(null); setIsMoving(false);
+  };
+
   const selRect = norm(start, end);
+  const cursorStyle = isResizing ? "nwse-resize" : isMoving ? "grabbing" : crop ? "default" : "crosshair";
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 2000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "Inter,sans-serif" }}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 2000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "Inter,sans-serif" }}>
       {/* Controls */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-        <span style={{ color: "#8b949e", fontSize: 12 }}>🖱 Drag to select area on image</span>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ color: "#8b949e", fontSize: 12 }}>🖱 Drag to select • Drag handles to resize • Drag inside to move</span>
         <button onClick={doCopy} disabled={!crop} style={{ background: crop ? (copied ? "#3fb950" : "#1f6feb") : "#30363d", color: "#fff", border: "none", padding: "6px 14px", borderRadius: 7, cursor: crop ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>
           {copied ? "✓ Copied!" : "📋 Copy Crop"}
         </button>
-        <button onClick={doDownload} disabled={!crop} style={{ background: crop ? "#8250df" : "#30363d", color: "#fff", border: "none", padding: "6px 14px", borderRadius: 7, cursor: crop ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>⬇ Download Crop</button>
-        <button onClick={onClose} style={{ background: "transparent", border: "1px solid #636c76", color: "#e6edf3", padding: "6px 14px", borderRadius: 7, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>✕ Exit Crop</button>
+        <button onClick={doDownload} disabled={!crop} style={{ background: crop ? "#8250df" : "#30363d", color: "#fff", border: "none", padding: "6px 14px", borderRadius: 7, cursor: crop ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>⬇ Download</button>
+        <button onClick={doSave} disabled={!crop} style={{ background: crop ? (saved ? "#3fb950" : "#d29922") : "#30363d", color: "#fff", border: "none", padding: "6px 14px", borderRadius: 7, cursor: crop ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>
+          {saved ? "✓ Saved!" : "💾 Save"}
+        </button>
+        <button onClick={() => setCrop(null)} disabled={!crop} style={{ background: "transparent", border: "1px solid #636c76", color: "#8b949e", padding: "6px 10px", borderRadius: 7, cursor: crop ? "pointer" : "not-allowed", fontSize: 12, fontFamily: "inherit" }}>✕ Clear</button>
+        <button onClick={onClose} style={{ background: "transparent", border: "1px solid #636c76", color: "#e6edf3", padding: "6px 14px", borderRadius: 7, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>Exit Crop</button>
       </div>
-      {crop && <div style={{ marginBottom: 8, fontSize: 11, color: "#3fb950" }}>✓ {Math.round(crop.w)} × {Math.round(crop.h)} px selected</div>}
+      {/* Zoom controls */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
+        <button onClick={() => setZoom(z => Math.max(0.3, z - 0.2))} style={{ background: "#21262d", border: "1px solid #30363d", color: "#e6edf3", padding: "3px 10px", borderRadius: 6, cursor: "pointer", fontSize: 14, fontFamily: "inherit" }}>−</button>
+        <span style={{ color: "#8b949e", fontSize: 11, minWidth: 40, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
+        <button onClick={() => setZoom(z => Math.min(4, z + 0.2))} style={{ background: "#21262d", border: "1px solid #30363d", color: "#e6edf3", padding: "3px 10px", borderRadius: 6, cursor: "pointer", fontSize: 14, fontFamily: "inherit" }}>+</button>
+        <button onClick={() => setZoom(1)} style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", padding: "3px 8px", borderRadius: 6, cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>Reset</button>
+      </div>
+      {crop && <div style={{ marginBottom: 6, fontSize: 11, color: "#3fb950" }}>✓ {Math.round(crop.w)} × {Math.round(crop.h)} px selected</div>}
       {/* Image area */}
-      <div ref={containerRef} style={{ position: "relative", cursor: "crosshair", userSelect: "none", maxWidth: "90vw", maxHeight: "78vh" }}
-        onMouseDown={e => { const p=getPos(e); setStart(p); setEnd(p); setCrop(null); setIsDragging(true); }}
-        onMouseMove={e => { if(isDragging) setEnd(getPos(e)); }}
-        onMouseUp={e   => { setIsDragging(false); const r=norm(start,getPos(e)); if(r.w>5&&r.h>5) setCrop(r); }}
-        onTouchStart={e=>{ const p=getPos(e); setStart(p); setEnd(p); setCrop(null); setIsDragging(true); }}
-        onTouchMove={e =>{ if(isDragging) setEnd(getPos(e)); }}
-        onTouchEnd={e  =>{ setIsDragging(false); const r=norm(start,end); if(r.w>5&&r.h>5) setCrop(r); }}
-      >
-        <img src={imgSrc} alt="crop" draggable={false} style={{ display: "block", maxWidth: "90vw", maxHeight: "78vh", borderRadius: 6 }} />
-        {/* Live drag rect */}
-        {isDragging && selRect.w > 2 && (
-          <div style={{ position: "absolute", left: selRect.x, top: selRect.y, width: selRect.w, height: selRect.h, border: "2px solid #1f6feb", background: "rgba(31,111,235,0.15)", pointerEvents: "none" }} />
-        )}
-        {/* Final selection */}
-        {crop && !isDragging && (
-          <div style={{ position: "absolute", left: crop.x, top: crop.y, width: crop.w, height: crop.h, border: "2px solid #3fb950", background: "rgba(63,185,80,0.1)", pointerEvents: "none" }}>
-            <div style={{ position: "absolute", inset: 0, outline: "1px dashed rgba(63,185,80,0.5)", outlineOffset: -3 }} />
-          </div>
-        )}
+      <div style={{ overflow: "auto", maxWidth: "92vw", maxHeight: "72vh" }}>
+        <div ref={containerRef}
+          style={{ position: "relative", cursor: cursorStyle, userSelect: "none", display: "inline-block", transform: `scale(${zoom})`, transformOrigin: "top left" }}
+          onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
+          onTouchStart={e => { const p=getPos(e); setStart(p); setEnd(p); setCrop(null); setIsDragging(true); }}
+          onTouchMove={e  => { if(isDragging) setEnd(getPos(e)); }}
+          onTouchEnd={e   => { setIsDragging(false); const r=norm(start,end); if(r.w>5&&r.h>5) setCrop(r); }}
+        >
+          <img src={imgSrc} alt="crop" draggable={false} style={{ display: "block", maxWidth: "88vw", maxHeight: "68vh", borderRadius: 6 }} />
+          {/* Live drag rect */}
+          {isDragging && selRect.w > 2 && (
+            <div style={{ position: "absolute", left: selRect.x, top: selRect.y, width: selRect.w, height: selRect.h, border: "2px solid #1f6feb", background: "rgba(31,111,235,0.15)", pointerEvents: "none" }} />
+          )}
+          {/* Final selection with resize handles */}
+          {crop && !isDragging && (
+            <div style={{ position: "absolute", left: crop.x, top: crop.y, width: crop.w, height: crop.h, border: "2px solid #3fb950", background: "rgba(63,185,80,0.08)", boxSizing: "border-box" }}>
+              <div style={{ position: "absolute", inset: 0, outline: "1px dashed rgba(63,185,80,0.5)", outlineOffset: -3 }} />
+              {/* Resize handles — 4 corners */}
+              {handles.map(h => (
+                <div key={h.id} style={{ position: "absolute", left: h.x - crop.x, top: h.y - crop.y, width: HANDLE_SIZE, height: HANDLE_SIZE, background: "#3fb950", border: "2px solid #fff", borderRadius: 2, cursor: "nwse-resize", zIndex: 10 }} />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
+
+
 
 function PageImage({ src, pageNum, dark }) {
   const [cropMode, setCropMode] = useState(false);

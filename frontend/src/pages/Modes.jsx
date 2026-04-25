@@ -41,10 +41,24 @@ function DocSelect({ docs, value, onChange, dark }) {
 
 function TeacherMode({ docs, dark, t }) {
   const [docId, setDocId] = useState("");
-  const [tab, setTab] = useState("qpaper"); // qpaper | answers | syllabus
+  const [tab, setTab] = useState("qpaper"); // qpaper | answers | syllabus | bank
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState("");
   const [cfg, setCfg] = useState({ difficulty:"mixed", total_marks:100, num_questions:20, include_answers:false, units:"all units" });
+  const [bank, setBank] = useState(() => JSON.parse(localStorage.getItem("questionBank") || "[]"));
+  const [bankTag, setBankTag] = useState("");
+
+  const saveToBank = () => {
+    if (!result.trim()) return;
+    const entry = { id: Date.now(), text: result, tag: bankTag || "General", doc: docs.find(d=>+d.id===+docId)?.original_name || "Unknown", ts: new Date().toLocaleString() };
+    const updated = [entry, ...bank].slice(0, 100);
+    setBank(updated); localStorage.setItem("questionBank", JSON.stringify(updated));
+    setBankTag("");
+  };
+  const deleteFromBank = (id) => {
+    const updated = bank.filter(e => e.id !== id);
+    setBank(updated); localStorage.setItem("questionBank", JSON.stringify(updated));
+  };
 
   const run = async () => {
     if (!docId) return;
@@ -65,7 +79,7 @@ function TeacherMode({ docs, dark, t }) {
     setLoading(false);
   };
 
-  const tabs = [["qpaper","📝 Question Paper"], ["answers","🔑 Answer Key"], ["syllabus","🗺 Syllabus Map"]];
+  const tabs = [["qpaper","📝 Question Paper"], ["answers","🔑 Answer Key"], ["syllabus","🗺 Syllabus Map"], ["bank",`📚 Bank (${bank.length})`]];
 
   return (
     <div>
@@ -102,10 +116,42 @@ function TeacherMode({ docs, dark, t }) {
           </div>
         </div>
       )}
-      <button onClick={run} disabled={!docId||loading} style={{ marginTop:14, width:"100%", padding:"10px", background: docId&&!loading ? (dark?"#3f3f3f":"#171717") : (dark?"#2a2a2a":"#e0e0e0"), color: docId&&!loading?"#fff":t.sub, border:"none", borderRadius:9, cursor: docId&&!loading?"pointer":"not-allowed", fontSize:14, fontWeight:600, fontFamily:"inherit", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-        {loading ? <><Spinner /> Generating...</> : "Generate"}
-      </button>
-      <ResultBox content={result} dark={dark} />
+      {tab !== "bank" && (
+        <button onClick={run} disabled={!docId||loading} style={{ marginTop:14, width:"100%", padding:"10px", background: docId&&!loading ? (dark?"#3f3f3f":"#171717") : (dark?"#2a2a2a":"#e0e0e0"), color: docId&&!loading?"#fff":t.sub, border:"none", borderRadius:9, cursor: docId&&!loading?"pointer":"not-allowed", fontSize:14, fontWeight:600, fontFamily:"inherit", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+          {loading ? <><Spinner /> Generating...</> : "Generate"}
+        </button>
+      )}
+      {tab !== "bank" && result && (
+        <div style={{ marginTop:12 }}>
+          <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:6 }}>
+            <input value={bankTag} onChange={e=>setBankTag(e.target.value)} placeholder="Tag (e.g. Unit 1, Hard)" style={{ flex:1, padding:"6px 10px", borderRadius:7, border:`1px solid ${dark?"#3f3f3f":"#e0e0e0"}`, background:dark?"#2f2f2f":"#fff", color:t.text, fontSize:12, fontFamily:"inherit" }} />
+            <button onClick={saveToBank} style={{ padding:"6px 14px", background:"#3fb950", color:"#fff", border:"none", borderRadius:7, cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:"inherit", whiteSpace:"nowrap" }}>💾 Save to Bank</button>
+          </div>
+          <ResultBox content={result} dark={dark} />
+        </div>
+      )}
+      {tab === "bank" && (
+        <div style={{ marginTop:12 }}>
+          {bank.length === 0 ? (
+            <p style={{ color:t.sub, fontSize:13, textAlign:"center", padding:"30px 0" }}>No saved questions yet. Generate questions and click "Save to Bank".</p>
+          ) : bank.map(e => (
+            <div key={e.id} style={{ background:dark?"#1a1a1a":"#f5f5f5", border:`1px solid ${dark?"#3f3f3f":"#e0e0e0"}`, borderRadius:10, padding:14, marginBottom:10 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8, flexWrap:"wrap", gap:4 }}>
+                <div style={{ display:"flex", gap:6 }}>
+                  <span style={{ background:dark?"#2f2f2f":"#efefef", padding:"2px 8px", borderRadius:10, fontSize:11, color:t.text, fontWeight:600 }}>{e.tag}</span>
+                  <span style={{ fontSize:11, color:t.sub }}>{e.doc}</span>
+                </div>
+                <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                  <span style={{ fontSize:10, color:t.sub }}>{e.ts}</span>
+                  <button onClick={()=>{navigator.clipboard.writeText(e.text)}} style={{ background:"transparent", border:`1px solid ${dark?"#3f3f3f":"#d0d0d0"}`, color:t.sub, padding:"2px 8px", borderRadius:5, cursor:"pointer", fontSize:10, fontFamily:"inherit" }}>Copy</button>
+                  <button onClick={()=>deleteFromBank(e.id)} style={{ background:"transparent", border:"1px solid rgba(248,81,73,0.4)", color:"#f85149", padding:"2px 8px", borderRadius:5, cursor:"pointer", fontSize:10, fontFamily:"inherit" }}>Delete</button>
+                </div>
+              </div>
+              <pre style={{ margin:0, fontSize:12, color:t.text, whiteSpace:"pre-wrap", maxHeight:180, overflowY:"auto", fontFamily:"Inter,monospace" }}>{e.text.slice(0,600)}{e.text.length>600?"…":""}</pre>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -113,6 +159,7 @@ function TeacherMode({ docs, dark, t }) {
 function HRMode({ docs, dark, t }) {
   const [tab, setTab] = useState("parse"); // parse | match | compare
   const [docId, setDocId] = useState("");
+  const [chartData, setChartData] = useState(null);
   const [docId2, setDocId2] = useState("");
   const [docId3, setDocId3] = useState("");
   const [jd, setJd] = useState("");
@@ -138,6 +185,7 @@ function HRMode({ docs, dark, t }) {
         if (ids.length < 2) { setResult("Select at least 2 resumes."); setLoading(false); return; }
         res = await api("/agents/hr/compare-resumes", { method:"POST", body: JSON.stringify({ doc_ids:ids, job_description:jd }) });
         d = await res.json();
+        setChartData(d.comparison || null);
         setResult(d.comparison ? JSON.stringify(d.comparison, null, 2) : d.raw || d.detail);
       }
     } catch(e) { setResult("Error: " + e.message); }
@@ -171,6 +219,24 @@ function HRMode({ docs, dark, t }) {
       <button onClick={run} disabled={!docId||loading} style={{ marginTop:12, width:"100%", padding:"10px", background:docId&&!loading?(dark?"#3f3f3f":"#171717"):(dark?"#2a2a2a":"#e0e0e0"), color:docId&&!loading?"#fff":t.sub, border:"none", borderRadius:9, cursor:docId&&!loading?"pointer":"not-allowed", fontSize:14, fontWeight:600, fontFamily:"inherit", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
         {loading ? <><Spinner /> Processing...</> : "Run Analysis"}
       </button>
+      {/* Visual Score Dashboard — shown after compare */}
+      {tab === "compare" && chartData && Array.isArray(chartData) && (
+        <div style={{ marginTop:16, background:dark?"#1a1a1a":"#f8f8f8", border:`1px solid ${dark?"#3f3f3f":"#e0e0e0"}`, borderRadius:12, padding:16 }}>
+          <p style={{ margin:"0 0 14px", fontSize:12, fontWeight:700, color:t.sub, textTransform:"uppercase", letterSpacing:"0.5px" }}>📊 Candidate Score Dashboard</p>
+          {chartData.map((c, i) => (
+            <div key={i} style={{ marginBottom:14 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                <span style={{ fontSize:13, fontWeight:600, color:t.text }}>{c.candidate || `Candidate ${i+1}`}</span>
+                <span style={{ fontSize:13, fontWeight:700, color: c.score>=70?"#3fb950":c.score>=50?"#d29922":"#f85149" }}>{c.score ?? "?"}/100</span>
+              </div>
+              <div style={{ height:10, background:dark?"#2f2f2f":"#e8e8e8", borderRadius:6, overflow:"hidden" }}>
+                <div style={{ height:"100%", width:`${c.score||0}%`, background: c.score>=70?"#3fb950":c.score>=50?"#d29922":"#f85149", borderRadius:6, transition:"width 0.6s ease" }} />
+              </div>
+              <div style={{ fontSize:11, color:t.sub, marginTop:3 }}>{c.verdict || c.recommendation || ""}</div>
+            </div>
+          ))}
+        </div>
+      )}
       <ResultBox content={result} dark={dark} />
     </div>
   );
@@ -243,12 +309,100 @@ function NotesMode({ docs, dark, t }) {
   );
 }
 
+// ── Phase 9: Workflow Mode ─────────────────────────────────────────────────
+const WORKFLOW_STEPS = [
+  { id:"summarize", label:"📋 Summarize", endpoint: id=>`/agents/summarize/${id}`, key:"summary" },
+  { id:"concepts",  label:"💡 Key Concepts", endpoint: id=>`/agents/key-concepts/${id}`, key:"key_concepts" },
+  { id:"tables",    label:"📊 Export Tables", endpoint: id=>`/agents/export-table/${id}`, key:"markdown_tables" },
+  { id:"qpaper",   label:"📝 Question Paper", endpoint: null, key:"question_paper" },
+  { id:"resume",   label:"👤 Parse Resume", endpoint: id=>`/agents/hr/parse-resume/${id}`, key:"parsed_resume" },
+  { id:"finance",  label:"💰 Finance Extract", endpoint: id=>`/agents/finance/extract/${id}`, key:"financial_data" },
+];
+
+function WorkflowMode({ docs, dark, t }) {
+  const [docId, setDocId] = useState("");
+  const [selected, setSelected] = useState(["summarize", "concepts"]);
+  const [running, setRunning] = useState(false);
+  const [results, setResults] = useState({});
+  const [progress, setProgress] = useState([]);
+
+  const toggle = (id) => setSelected(s => s.includes(id) ? s.filter(x=>x!==id) : [...s, id]);
+
+  const runWorkflow = async () => {
+    if (!docId || selected.length === 0) return;
+    setRunning(true); setResults({}); setProgress([]);
+    for (const stepId of selected) {
+      const step = WORKFLOW_STEPS.find(s=>s.id===stepId);
+      if (!step || !step.endpoint) { setProgress(p=>[...p, `⚠ ${step?.label} skipped (needs config)`]); continue; }
+      setProgress(p=>[...p, `⏳ Running ${step.label}...`]);
+      try {
+        const res = await api(step.endpoint(docId), { method:"POST" });
+        const d = await res.json();
+        const val = d[step.key];
+        const out = typeof val === "object" ? JSON.stringify(val, null, 2) : (val || d.raw || d.detail || "No output");
+        setResults(r=>({...r, [stepId]: out}));
+        setProgress(p=>[...p.slice(0,-1), `✅ ${step.label} done`]);
+      } catch(e) {
+        setProgress(p=>[...p.slice(0,-1), `❌ ${step.label} failed: ${e.message}`]);
+      }
+    }
+    setRunning(false);
+  };
+
+  const exportAll = () => {
+    const text = Object.entries(results).map(([k,v])=>{
+      const label = WORKFLOW_STEPS.find(s=>s.id===k)?.label || k;
+      return `${'='.repeat(50)}\n${label}\n${'='.repeat(50)}\n${v}`;
+    }).join("\n\n");
+    const a = document.createElement("a"); a.href = `data:text/plain;charset=utf-8,${encodeURIComponent(text)}`; a.download = "workflow_result.txt"; a.click();
+  };
+
+  return (
+    <div>
+      <p style={{ fontSize:13, color:t.sub, marginBottom:16 }}>Select a document and chain multiple AI operations in one click. Results are shown step by step.</p>
+      <DocSelect docs={docs} value={docId} onChange={setDocId} dark={dark} />
+      <p style={{ fontSize:11, color:t.sub, margin:"14px 0 8px", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.5px" }}>Select Steps to Run</p>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:16 }}>
+        {WORKFLOW_STEPS.map(s=>(
+          <button key={s.id} onClick={()=>toggle(s.id)}
+            style={{ padding:"6px 14px", borderRadius:8, border:`1px solid ${selected.includes(s.id)?(dark?"#3fb950":"#171717"):t.border}`, background:selected.includes(s.id)?(dark?"rgba(63,185,80,0.12)":"#171717"):"transparent", color:selected.includes(s.id)?(dark?"#3fb950":"#fff"):t.sub, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:selected.includes(s.id)?600:400 }}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+      <button onClick={runWorkflow} disabled={!docId||running||selected.length===0}
+        style={{ width:"100%", padding:"10px", background:docId&&!running&&selected.length>0?(dark?"#3f3f3f":"#171717"):(dark?"#2a2a2a":"#e0e0e0"), color:docId&&!running&&selected.length>0?"#fff":t.sub, border:"none", borderRadius:9, cursor:docId&&!running&&selected.length>0?"pointer":"not-allowed", fontSize:14, fontWeight:600, fontFamily:"inherit", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+        {running ? <><Spinner /> Running workflow...</> : `▶ Run ${selected.length} Step${selected.length!==1?"s":""}`}
+      </button>
+      {progress.length > 0 && (
+        <div style={{ marginTop:12, background:dark?"#1a1a1a":"#f5f5f5", border:`1px solid ${dark?"#3f3f3f":"#e0e0e0"}`, borderRadius:9, padding:12 }}>
+          {progress.map((p,i)=><div key={i} style={{ fontSize:12, color:t.text, padding:"2px 0" }}>{p}</div>)}
+        </div>
+      )}
+      {Object.keys(results).length > 0 && (
+        <div style={{ marginTop:8 }}>
+          <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8 }}>
+            <button onClick={exportAll} style={{ background:dark?"#3f3f3f":"#171717", color:"#fff", border:"none", padding:"6px 14px", borderRadius:7, cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:"inherit" }}>⬇ Export All Results</button>
+          </div>
+          {Object.entries(results).map(([k,v])=>(
+            <div key={k} style={{ marginBottom:12 }}>
+              <p style={{ margin:"0 0 4px", fontSize:11, fontWeight:700, color:t.sub, textTransform:"uppercase" }}>{WORKFLOW_STEPS.find(s=>s.id===k)?.label}</p>
+              <ResultBox content={typeof v==="string"?v:JSON.stringify(v,null,2)} dark={dark} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Modes page ────────────────────────────────────────────────────────
 const MODES = [
-  { key:"teacher",  icon:"🎓", label:"Teacher Mode",   desc:"Question papers, answer keys, syllabus maps" },
-  { key:"hr",       icon:"💼", label:"HR Mode",         desc:"Resume parsing, job matching, candidate compare" },
+  { key:"teacher",  icon:"🎓", label:"Teacher Mode",   desc:"Question papers, answer keys, syllabus maps, question bank" },
+  { key:"hr",       icon:"💼", label:"HR Mode",         desc:"Resume parsing, job match, compare with score chart" },
   { key:"finance",  icon:"📊", label:"Finance Mode",    desc:"Invoice & statement extraction, anomaly detect" },
   { key:"notes",    icon:"✏️", label:"Notes Mode",       desc:"Handwritten notes summary & revision sheets" },
+  { key:"workflow", icon:"⚙️", label:"Workflow",         desc:"Chain multiple AI steps in one click, export all" },
 ];
 
 export default function Modes() {
@@ -307,10 +461,11 @@ export default function Modes() {
                   ⚠ No indexed documents found. Upload and index a PDF first from the Documents page.
                 </div>
               )}
-              {activeMode === "teacher"  && <TeacherMode docs={docs} dark={dark} t={t} />}
-              {activeMode === "hr"       && <HRMode      docs={docs} dark={dark} t={t} />}
-              {activeMode === "finance"  && <FinanceMode docs={docs} dark={dark} t={t} />}
-              {activeMode === "notes"    && <NotesMode   docs={docs} dark={dark} t={t} />}
+              {activeMode === "teacher"  && <TeacherMode  docs={docs} dark={dark} t={t} />}
+              {activeMode === "hr"       && <HRMode       docs={docs} dark={dark} t={t} />}
+              {activeMode === "finance"  && <FinanceMode  docs={docs} dark={dark} t={t} />}
+              {activeMode === "notes"    && <NotesMode    docs={docs} dark={dark} t={t} />}
+              {activeMode === "workflow" && <WorkflowMode docs={docs} dark={dark} t={t} />}
             </div>
           </div>
         )}
