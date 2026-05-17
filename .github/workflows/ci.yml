@@ -1,0 +1,98 @@
+name: DocuMindAI Enterprise CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  backend-validation:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: ankane/pgvector:v0.5.1
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: documind_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        
+    - name: Install dependencies
+      working-directory: ./backend
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio httpx pip-audit
+        
+    - name: Dependency Vulnerability Scanning
+      working-directory: ./backend
+      run: |
+        echo "Running PyPA pip-audit..."
+        pip-audit -r requirements.txt || echo "Warning: Vulnerabilities found, please review."
+        
+    - name: Database Startup Readiness Check
+      working-directory: ./backend
+      run: |
+        chmod +x scripts/prestart.sh
+        ./scripts/prestart.sh
+        
+    - name: Run Alembic Migrations
+      working-directory: ./backend
+      env:
+        DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/documind_test
+      run: |
+        alembic upgrade head
+        
+    - name: Execute API Contracts & Regression Tests
+      working-directory: ./backend
+      env:
+        DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/documind_test
+        REDIS_URL: redis://localhost:6379/0
+      run: |
+        pytest tests/ -v
+
+  frontend-validation:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: "18"
+        
+    - name: Install Dependencies
+      working-directory: ./frontend
+      run: npm install
+      
+    - name: TypeScript Syntax Validation
+      working-directory: ./frontend
+      run: npm run lint
+      
+    - name: Next.js Production Build Validation
+      working-directory: ./frontend
+      run: npm run build

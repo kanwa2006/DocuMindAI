@@ -1,0 +1,30 @@
+# PHASE 11: DEPLOYMENT HARDENING
+# Multi-stage Docker build to keep production image size down, especially given ML payload
+
+# Stage 1: Builder
+FROM python:3.11-slim as builder
+WORKDIR /app
+COPY ../backend/requirements.txt .
+RUN apt-get update && apt-get install -y build-essential libpq-dev && rm -rf /var/lib/apt/lists/*
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
+
+# Stage 2: Production Engine
+FROM python:3.11-slim
+WORKDIR /app
+
+# Install runtime dependencies (OpenCV requires libgl1)
+RUN apt-get update && \
+    apt-get install -y libpq-dev libgl1 libglib2.0-0 tesseract-ocr poppler-utils && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy compiled wheels and install
+COPY --from=builder /app/wheels /wheels
+RUN pip install --no-cache /wheels/*
+
+# Copy Application Code
+COPY ../backend /app
+
+# Ensure Python runs unbuffered
+ENV PYTHONUNBUFFERED=1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
