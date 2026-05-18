@@ -1,10 +1,11 @@
 import uuid
+from datetime import datetime
 from typing import List, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-from sqlalchemy import or_
+from sqlalchemy import or_, desc, case
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
@@ -24,8 +25,19 @@ class ChatSessionResponse(BaseModel):
     workspace_type: str
     is_pinned: bool
     is_archived: bool
+    created_at: Optional[datetime] = None
+    workspace_id: Optional[UUID4] = None
     class Config:
         orm_mode = True
+
+class RenameRequest(BaseModel):
+    title: str
+
+class ChatSessionUpdate(BaseModel):
+    title: Optional[str] = None
+    is_pinned: Optional[bool] = None
+    is_archived: Optional[bool] = None
+    workspace_type: Optional[str] = None
 
 class ChatMessageCreate(BaseModel):
     role: str
@@ -71,7 +83,6 @@ async def list_chat_sessions(
     )
     
     if search:
-        # Search title or message content
         stmt = stmt.outerjoin(ChatMessage).where(
             or_(
                 ChatSession.title.ilike(f"%{search}%"),
@@ -79,15 +90,19 @@ async def list_chat_sessions(
             )
         ).distinct()
 
-    stmt = stmt.order_by(ChatSession.updated_at.desc()).limit(limit).offset(offset)
+    # Pinned-first, then created_at DESC
+    stmt = stmt.order_by(
+        desc(ChatSession.is_pinned),
+        desc(ChatSession.created_at)
+    ).limit(limit).offset(offset)
     
     result = await db.execute(stmt)
     return result.scalars().all()
 
-@router.patch("/{session_id}", response_model=ChatSessionResponse)
-async def update_chat_session(
+
+@router.patch("/{session_id}/pin", response_model=ChatSessionResponse)
+async def toggle_pin_session(
     session_id: str,
-    update_data: dict,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -97,14 +112,55 @@ async def update_chat_session(
     )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
-    
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-        
-    for key, value in update_data.items():
+    session.is_pinned = not session.is_pinned
+    await db.commit()
+    await db.refresh(session)
+    return session
+
+
+@router.patch("/{session_id}/rename", response_model=ChatSessionResponse)
+async def rename_session(
+    session_id: str,
+    request: RenameRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(ChatSession).where(
+        ChatSession.id == uuid.UUID(session_id),
+        ChatSession.workspace_id == uuid.UUID(current_user["workspace_id"])
+    )
+    result = await db.execute(stmt)
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session.title = request.title
+    await db.commit()
+    await db.refresh(session)
+    return session
+
+@router.patch("/{session_id}", response_model=ChatSessionResponse)
+async def update_chat_session(
+    session_id: str,
+    update_data: ChatSessionUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(ChatSession).where(
+        ChatSession.id == uuid.UUID(session_id),
+        ChatSession.workspace_id == uuid.UUID(current_user["workspace_id"])
+    )
+    result = await db.execute(stmt)
+    session = result.scalar_one_or_none()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    for key, value in update_data.model_dump(exclude_none=True).items():
         if hasattr(session, key):
             setattr(session, key, value)
-            
+
     await db.commit()
     await db.refresh(session)
     return session

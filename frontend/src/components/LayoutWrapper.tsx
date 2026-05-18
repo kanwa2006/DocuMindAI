@@ -1,79 +1,287 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import Sidebar from "./Sidebar";
+import WorkspaceDropdown from "./WorkspaceDropdown";
+import { useTheme } from "@/hooks/useTheme";
+import { logout } from "@/lib/api";
 
-export default function LayoutWrapper({ children }: { children: React.ReactNode }) {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const pathname = usePathname();
+// ─── Profile Dropdown ─────────────────────────────────────────────────────────
+
+function ProfileDropdown({ user, onClose }: { user: { name: string; email: string; initials: string; workspace: string }; onClose: () => void }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Check system preference or localStorage
-    const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    setIsDarkMode(isDark);
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-    }
-    
-    // Restore last workspace if landing on root without chat
-    if (pathname === '/' && !searchParams.get('chat')) {
-      const lastWorkspace = localStorage.getItem("lastActiveWorkspace");
-      if (lastWorkspace && lastWorkspace !== '/') {
-        router.replace(lastWorkspace);
-      }
-    }
-  }, []);
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    const escHandler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("keydown", escHandler);
+    return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("keydown", escHandler); };
+  }, [onClose]);
 
-  const toggleTheme = () => {
-    setIsDarkMode(!isDarkMode);
-    document.documentElement.classList.toggle('dark');
+  const handleLogout = async () => {
+    try { await logout(); } catch {}
+    router.push("/login");
+    onClose();
   };
 
-  const isAuthPage = pathname === '/login' || pathname === '/register' || pathname === '/forgot-password';
-
-  if (isAuthPage) {
-    return <div className={`${isDarkMode ? 'dark' : ''} h-[100dvh] bg-white dark:bg-[#0C0C0E]`}>{children}</div>;
-  }
+  const itemStyle: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: "8px",
+    padding: "8px 12px", borderRadius: "var(--radius-md)",
+    fontFamily: "var(--font-body)", fontSize: "var(--text-sm)",
+    color: "var(--text-secondary)", cursor: "pointer", height: "36px",
+    background: "none", border: "none", width: "100%", textAlign: "left",
+    transition: "background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard)",
+  };
 
   return (
-    <div className={`flex h-[100dvh] overflow-hidden ${isDarkMode ? 'dark' : ''} bg-white dark:bg-black text-black dark:text-white font-sans transition-colors`}>
-      <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
-      
-      <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden relative">
-        {/* Top Bar */}
-        <header className="h-14 border-b border-black/5 dark:border-white/5 flex items-center justify-between px-6 z-10 bg-white/80 dark:bg-black/80 backdrop-blur-md">
-          <div className="flex items-center gap-4">
-            {!isSidebarOpen && (
-              <button onClick={() => setIsSidebarOpen(true)} className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded-md">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
-              </button>
-            )}
-            <h1 className="font-semibold text-sm tracking-wide">Workspaces ▾</h1>
-          </div>
-          
-          <div className="flex items-center gap-4">
-            <button className="flex items-center gap-2 text-sm font-medium hover:text-black/70 dark:hover:text-white/70 transition-colors">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-              Share
-            </button>
-            <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
-              {isDarkMode ? (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-              ) : (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
-              )}
-            </button>
-          </div>
-        </header>
-
-        <div className="flex-1 overflow-auto">
-          {children}
+    <div
+      ref={ref}
+      className="dropdown-enter"
+      style={{
+        position: "absolute", top: "calc(100% + 6px)", right: 0,
+        background: "var(--surface-overlay)", border: "1px solid var(--border-default)",
+        borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-xl)",
+        minWidth: "220px", padding: "8px", zIndex: 200,
+      }}
+    >
+      {/* User info section */}
+      <div style={{ padding: "12px 8px", pointerEvents: "none" }}>
+        <div style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-sm)", fontWeight: "var(--weight-semibold)", color: "var(--text-primary)" }}>{user.name}</div>
+        <div style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-xs)", color: "var(--text-secondary)", marginTop: "2px" }}>{user.email}</div>
+        <div style={{ marginTop: "6px" }}>
+          <span style={{ background: "var(--brand-ghost)", color: "var(--text-brand)", border: "1px solid var(--brand-glow)", borderRadius: "var(--radius-full)", fontSize: "var(--text-2xs)", fontWeight: "var(--weight-medium)", padding: "2px 8px", fontFamily: "var(--font-body)" }}>
+            {user.workspace}
+          </span>
         </div>
-      </main>
+      </div>
+      <div style={{ height: "1px", background: "var(--border-subtle)", margin: "4px 0" }} />
+      {[
+        { icon: "⚙️", label: "Settings", href: "/settings" },
+        { icon: "📊", label: "Usage Dashboard", href: "/dashboard" },
+        { icon: "💳", label: "Billing", href: "/billing" },
+      ].map(({ icon, label, href }) => (
+        <button key={href} onClick={() => { router.push(href); onClose(); }} style={itemStyle}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--surface-hover)"; (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "none"; (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; }}>
+          <span>{icon}</span>{label}
+        </button>
+      ))}
+      <div style={{ height: "1px", background: "var(--border-subtle)", margin: "4px 0" }} />
+      <button onClick={handleLogout} style={{ ...itemStyle, color: "#ef4444" }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--error-bg)"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "none"; }}>
+        <span>🚪</span> Log Out
+      </button>
     </div>
   );
 }
+
+// ─── Theme icon ───────────────────────────────────────────────────────────────
+
+function ThemeIcon({ theme }: { theme: string }) {
+  if (theme === "dark") return <span style={{ fontSize: "16px" }}>☀️</span>;
+  if (theme === "light") return <span style={{ fontSize: "16px" }}>🌙</span>;
+  return <span style={{ fontSize: "16px" }}>💻</span>;
+}
+
+// ─── LayoutWrapper ────────────────────────────────────────────────────────────
+
+export default function LayoutWrapper({ children }: { children: React.ReactNode }) {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [showProfile, setShowProfile] = useState(false);
+  const [currentWorkspace, setCurrentWorkspace] = useState("general");
+  const profileRef = useRef<HTMLDivElement>(null);
+
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { theme, setTheme } = useTheme();
+
+  // Restore sidebar state from localStorage on mount
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = localStorage.getItem("sidebar_open");
+    if (saved !== null) setIsSidebarOpen(saved === "true");
+
+    // Restore last workspace if landing on root without chat
+    if (pathname === "/" && !searchParams.get("chat")) {
+      const lastWorkspace = localStorage.getItem("lastActiveWorkspace");
+      if (lastWorkspace && lastWorkspace !== "/") router.replace(lastWorkspace);
+    }
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark");
+  }, [theme, setTheme]);
+
+  // Cmd+D keyboard shortcut for theme toggle (Phase 2 spec)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "d") {
+        e.preventDefault();
+        toggleTheme();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [toggleTheme]);
+
+  const handleShare = () => {
+    navigator.clipboard.writeText(window.location.href).then(() => {
+      // fire toast via react-hot-toast global if available
+      try { (window as any).__toastSuccess?.("Link copied!"); } catch {}
+    });
+  };
+
+  const handleWorkspaceChange = (wsId: string) => {
+    setCurrentWorkspace(wsId);
+    document.documentElement.style.setProperty("--brand-hue", WORKSPACE_HUES[wsId] || "220");
+    localStorage.setItem("lastActiveWorkspace", `/${wsId === "general" ? "" : wsId}`);
+  };
+
+  const isAuthPage = ["/login", "/register", "/forgot-password"].includes(pathname);
+
+  if (isAuthPage) {
+    return <div className="h-screen bg-[var(--surface-base)]">{children}</div>;
+  }
+
+  // Mock user — replace with real auth context when available
+  const user = { name: "DocuMind User", email: "user@documind.ai", initials: "DU", workspace: currentWorkspace };
+
+  return (
+    <div style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--surface-base)", color: "var(--text-primary)" }}>
+      {/* Sidebar */}
+      <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
+
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+        {/* ── NAVBAR ── */}
+        <header
+          className="navbar"
+          style={{ position: "sticky", top: 0 }}
+        >
+          {/* LEFT ZONE */}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {/* Logo */}
+            <Link
+              href="/"
+              id="navbar-logo"
+              style={{ display: "flex", alignItems: "center", gap: "8px", textDecoration: "none", opacity: 1, transition: "opacity var(--dur-fast) var(--ease-standard)" }}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.8")}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+              aria-label="DocuMindAI home"
+            >
+              {/* LogoMark */}
+              <svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <rect x="4" y="4" width="14" height="24" rx="3" fill="none" stroke="currentColor" strokeWidth="2" />
+                <path d="M4 4 C4 4 14 4 18 10 C22 16 18 28 18 28 L4 28 Z" fill="hsl(220 90% 60% / 0.15)" />
+                <circle cx="24" cy="8" r="4" fill="hsl(220, 90%, 60%)" />
+              </svg>
+              {/* Logo text */}
+              <span style={{ display: "inline-flex", alignItems: "baseline", gap: 0, userSelect: "none" }} aria-label="DocuMindAI">
+                <span style={{ fontFamily: "var(--font-display, Georgia, serif)", fontStyle: "italic", color: "var(--text-primary)", letterSpacing: "-0.01em", lineHeight: 1, fontSize: "1.125rem" }}>Docu</span>
+                <span style={{ fontFamily: "var(--font-body, sans-serif)", fontWeight: 600, color: "var(--brand)", letterSpacing: "0.025em", lineHeight: 1, fontSize: "1.125rem" }}>Mind</span>
+                <span style={{ fontFamily: "var(--font-body, sans-serif)", fontWeight: 500, color: "var(--text-tertiary)", fontSize: "0.6em", verticalAlign: "super", lineHeight: 1, letterSpacing: "0.1em" }}>AI</span>
+              </span>
+            </Link>
+
+            {/* Sidebar toggle */}
+            <button
+              id="sidebar-toggle"
+              onClick={() => setIsSidebarOpen((o) => !o)}
+              className="btn-icon btn-ghost interactive"
+              title={`Toggle sidebar (${navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+B)`}
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px" }}
+            >
+              {isSidebarOpen ? (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              )}
+            </button>
+          </div>
+
+          {/* CENTER ZONE */}
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <WorkspaceDropdown onWorkspaceChange={handleWorkspaceChange} />
+          </div>
+
+          {/* RIGHT ZONE */}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {/* Share button */}
+            <button
+              id="navbar-share"
+              onClick={handleShare}
+              className="btn-icon btn-ghost interactive"
+              title="Share current session"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8" /><polyline points="16 6 12 2 8 6" /><line x1="12" y1="2" x2="12" y2="15" />
+              </svg>
+            </button>
+
+            {/* Dark/Light toggle */}
+            <button
+              id="navbar-theme-toggle"
+              onClick={toggleTheme}
+              className="btn-icon btn-ghost interactive"
+              title={theme === "dark" ? "Switch to light mode" : theme === "light" ? "Switch to system" : "Switch to dark mode"}
+            >
+              <ThemeIcon theme={theme} />
+            </button>
+
+            {/* Profile avatar */}
+            <div ref={profileRef} style={{ position: "relative" }}>
+              <button
+                id="navbar-profile"
+                onClick={() => setShowProfile((p) => !p)}
+                style={{
+                  width: "32px", height: "32px", borderRadius: "50%",
+                  background: "hsl(220, 90%, 60%)", color: "#fff",
+                  border: "none", cursor: "pointer", fontFamily: "var(--font-body)",
+                  fontSize: "var(--text-xs)", fontWeight: "var(--weight-semibold)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "filter var(--dur-fast) var(--ease-standard)",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(1.1)")}
+                onMouseLeave={(e) => (e.currentTarget.style.filter = "")}
+                title="Profile"
+                aria-haspopup="true"
+                aria-expanded={showProfile}
+              >
+                {user.initials}
+              </button>
+
+              {showProfile && (
+                <ProfileDropdown user={user} onClose={() => setShowProfile(false)} />
+              )}
+            </div>
+          </div>
+        </header>
+
+        {/* PAGE CONTENT */}
+        <div style={{ flex: 1, overflow: "auto" }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Workspace hue map (shared with sidebar context)
+const WORKSPACE_HUES: Record<string, string> = {
+  general:  "220",
+  exam:     "262",
+  hr:       "198",
+  study:    "160",
+  research: "0",
+  legal:    "221",
+  finance:  "174",
+};

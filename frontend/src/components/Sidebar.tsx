@@ -1,249 +1,578 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import LogoutButton from "./LogoutButton";
 import { getChats, createChat, updateChat, deleteChat, ChatSession } from "@/lib/api";
 
-export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean, setIsOpen: (val: boolean) => void }) {
-  const [chats, setChats] = useState<ChatSession[]>([]);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const parentRef = useRef<HTMLDivElement>(null);
-  
-  const pathname = usePathname();
-  const router = useRouter();
-  
-  const workspaceType = pathname === "/" || pathname === "/dashboard" ? "general" 
-    : pathname.replace("/", "");
+// ─── Date grouping ────────────────────────────────────────────────────────────
 
-  const loadChats = async (reset: boolean = false, overrideSearch: string | null = null) => {
-    try {
-      const currentOffset = reset ? 0 : offset;
-      const currentSearch = overrideSearch !== null ? overrideSearch : searchQuery;
-      const fetchedChats = await getChats(workspaceType, 50, currentOffset, currentSearch);
-      
-      if (reset) {
-        setChats(fetchedChats.sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned)));
-        setOffset(50);
-      } else {
-        setChats(prev => [...prev, ...fetchedChats].sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned)));
-        setOffset(currentOffset + 50);
-      }
-      
-      setHasMore(fetchedChats.length === 50);
-    } catch (err) {
-      console.error("Failed to load chats", err);
-    } finally {
-      setIsLoadingMore(false);
+type DateGroup = "TODAY" | "YESTERDAY" | "LAST 7 DAYS" | string;
+
+function groupChatsByDate(chats: ChatSession[]): { label: DateGroup; chats: ChatSession[] }[] {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday.getTime() - 86400000);
+  const startOfLast7 = new Date(startOfToday.getTime() - 6 * 86400000);
+
+  const groups: Record<string, ChatSession[]> = {};
+  const order: string[] = [];
+
+  for (const chat of chats) {
+    const date = new Date(chat.created_at || 0);
+    let label: string;
+    if (date >= startOfToday) label = "TODAY";
+    else if (date >= startOfYesterday) label = "YESTERDAY";
+    else if (date >= startOfLast7) label = "LAST 7 DAYS";
+    else {
+      label = date.toLocaleString("default", { month: "long", year: "numeric" }).toUpperCase();
     }
-  };
+    if (!groups[label]) { groups[label] = []; order.push(label); }
+    groups[label].push(chat);
+  }
+
+  return order.map((label) => ({ label, chats: groups[label] }));
+}
+
+// ─── Workspace icon map ───────────────────────────────────────────────────────
+
+const WORKSPACE_ICONS: Record<string, string> = {
+  general:  "💬",
+  exam:     "📋",
+  hr:       "👥",
+  study:    "📚",
+  research: "🔬",
+  legal:    "⚖️",
+  finance:  "📊",
+};
+
+// ─── Context Menu ─────────────────────────────────────────────────────────────
+
+interface ContextMenuProps {
+  x: number;
+  y: number;
+  chat: ChatSession;
+  onClose: () => void;
+  onRename: (chat: ChatSession) => void;
+  onPin: (chat: ChatSession) => void;
+  onShare: (chat: ChatSession) => void;
+  onDelete: (chat: ChatSession) => void;
+}
+
+function ContextMenu({ x, y, chat, onClose, onRename, onPin, onShare, onDelete }: ContextMenuProps) {
+  const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      loadChats(true, searchQuery);
-    }, 300);
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    const escHandler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("keydown", escHandler);
+    return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("keydown", escHandler); };
+  }, [onClose]);
+
+  // Adjust position to stay within viewport
+  const menuStyle: React.CSSProperties = {
+    position: "fixed",
+    top: y,
+    left: x,
+    background: "var(--surface-overlay)",
+    border: "1px solid var(--border-default)",
+    borderRadius: "var(--radius-lg)",
+    boxShadow: "var(--shadow-xl)",
+    minWidth: "160px",
+    padding: "4px",
+    zIndex: 300,
+  };
+
+  const itemStyle: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "8px 12px",
+    borderRadius: "var(--radius-md)",
+    fontSize: "var(--text-sm)",
+    fontFamily: "var(--font-body)",
+    color: "var(--text-secondary)",
+    cursor: "pointer",
+    height: "32px",
+    transition: "background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard)",
+  };
+
+  const hoverStyle = (isDelete = false) => ({
+    ...itemStyle,
+    "&:hover": { background: "var(--surface-hover)", color: isDelete ? "var(--error-text)" : "var(--text-primary)" },
+  });
+
+  return (
+    <div ref={ref} style={menuStyle} className="dropdown-enter">
+      {[
+        { icon: "✏️", label: "Rename", action: () => { onRename(chat); onClose(); } },
+        { icon: chat.is_pinned ? "⭐" : "☆", label: chat.is_pinned ? "Unpin" : "Pin", action: () => { onPin(chat); onClose(); } },
+        { icon: "🔗", label: "Share", action: () => { onShare(chat); onClose(); } },
+      ].map(({ icon, label, action }) => (
+        <button
+          key={label}
+          onClick={action}
+          style={itemStyle}
+          className="sidebar-item"
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--surface-hover)"; (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = ""; (e.currentTarget as HTMLElement).style.color = ""; }}
+        >
+          <span>{icon}</span> {label}
+        </button>
+      ))}
+      <div style={{ height: "1px", background: "var(--border-subtle)", margin: "4px 0" }} />
+      <button
+        onClick={() => { onDelete(chat); onClose(); }}
+        style={{ ...itemStyle, color: "var(--error-text)" }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--error-bg)"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = ""; }}
+      >
+        <span>🗑</span> Delete
+      </button>
+    </div>
+  );
+}
+
+// ─── Delete confirmation modal ────────────────────────────────────────────────
+
+function DeleteConfirmModal({ chatTitle, onConfirm, onCancel }: { chatTitle: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, background: "rgb(0 0 0 / 0.5)", zIndex: 400,
+        display: "flex", alignItems: "center", justifyContent: "center", padding: "16px",
+      }}
+      className="modal-backdrop-enter"
+    >
+      <div
+        style={{
+          background: "var(--surface-overlay)", border: "1px solid var(--border-default)",
+          borderRadius: "var(--radius-2xl)", boxShadow: "var(--shadow-2xl)", width: "100%", maxWidth: "360px",
+          padding: "24px",
+        }}
+        className="modal-content-enter"
+      >
+        <h2 style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-base)", fontWeight: "var(--weight-semibold)", color: "var(--text-primary)", margin: "0 0 8px" }}>
+          Delete Chat?
+        </h2>
+        <p style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 20px" }}>
+          &ldquo;{chatTitle}&rdquo; will be permanently deleted.
+        </p>
+        <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+          <button onClick={onCancel} className="btn btn-secondary btn-sm">Cancel</button>
+          <button onClick={onConfirm} className="btn btn-sm" style={{ background: "var(--error-text)", color: "#fff" }}>Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Sidebar ──────────────────────────────────────────────────────────────────
+
+export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsOpen: (val: boolean) => void }) {
+  const [chats, setChats] = useState<ChatSession[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; chat: ChatSession } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
+
+  const parentRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const isOpenRef = useRef(isOpen);
+  const pathname = usePathname();
+  const router = useRouter();
+
+  // Keep isOpenRef in sync with prop
+  useEffect(() => { isOpenRef.current = isOpen; }, [isOpen]);
+
+  // Current workspace type from pathname
+  const workspaceType = pathname === "/" || pathname === "/dashboard" ? "general" : pathname.replace("/", "").split("/")[0] || "general";
+
+  // ─── Mobile detection ───────────────────────────────────────────────────────
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth <= 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  // ─── Persist sidebar state ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = localStorage.getItem("sidebar_open");
+    if (saved !== null) setIsOpen(saved === "true");
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") localStorage.setItem("sidebar_open", String(isOpen));
+  }, [isOpen]);
+
+  // ─── Load chats ─────────────────────────────────────────────────────────────
+  const loadChats = useCallback(async (overrideSearch?: string) => {
+    try {
+      const q = overrideSearch !== undefined ? overrideSearch : searchQuery;
+      const fetched = await getChats(workspaceType, 100, 0, q);
+      // Sort: pinned first, then by created_at DESC
+      const sorted = [...fetched].sort((a, b) => {
+        if (a.is_pinned !== b.is_pinned) return Number(b.is_pinned) - Number(a.is_pinned);
+        return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+      });
+      setChats(sorted);
+    } catch (err) {
+      console.error("Failed to load chats", err);
+    }
+  }, [workspaceType, searchQuery]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => loadChats(searchQuery), 300);
     return () => clearTimeout(timer);
   }, [searchQuery, workspaceType]);
 
+  // ─── Event bus ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    const handleChatsUpdated = () => loadChats(true);
-    const handleChatTitleUpdated = (e: any) => {
-      setChats(prev => prev.map(c => c.id === e.detail.id ? { ...c, title: e.detail.title } : c));
+    const refresh = () => loadChats();
+    const titleUpdated = (e: any) => {
+      setChats((prev) => prev.map((c) => (c.id === e.detail.id ? { ...c, title: e.detail.title } : c)));
     };
-    window.addEventListener("chats-updated", handleChatsUpdated);
-    window.addEventListener("chat-title-updated", handleChatTitleUpdated);
-    return () => {
-      window.removeEventListener("chats-updated", handleChatsUpdated);
-      window.removeEventListener("chat-title-updated", handleChatTitleUpdated);
+    window.addEventListener("chats-updated", refresh);
+    window.addEventListener("chat-title-updated", titleUpdated);
+    return () => { window.removeEventListener("chats-updated", refresh); window.removeEventListener("chat-title-updated", titleUpdated); };
+  }, [loadChats]);
+
+  // ─── Keyboard shortcuts ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "b") { e.preventDefault(); setIsOpen(!isOpenRef.current); }
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); searchRef.current?.focus(); }
     };
-  }, [workspaceType]);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [setIsOpen]);
+
+  // ─── Filtered & grouped chats ────────────────────────────────────────────────
+  const filtered = searchQuery
+    ? chats.filter((c) => c.title.toLowerCase().includes(searchQuery.toLowerCase()))
+    : chats;
+
+  const grouped = groupChatsByDate(filtered);
+
+  // Flat list for virtualizer
+  type FlatItem = { type: "group"; label: string } | { type: "chat"; chat: ChatSession };
+  const flatItems: FlatItem[] = [];
+  for (const g of grouped) {
+    flatItems.push({ type: "group", label: g.label });
+    for (const c of g.chats) flatItems.push({ type: "chat", chat: c });
+  }
 
   const rowVirtualizer = useVirtualizer({
-    count: chats.length,
+    count: flatItems.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 36, // 36px height per chat item
-    overscan: 5,
+    estimateSize: (i) => (flatItems[i]?.type === "group" ? 32 : 40),
+    overscan: 8,
   });
 
+  // ─── Handlers ────────────────────────────────────────────────────────────────
   const handleNewChat = async () => {
     try {
-      const chat = await createChat("New " + workspaceType + " Chat", workspaceType);
-      setChats([chat, ...chats].sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned)));
+      const chat = await createChat("New Chat", workspaceType);
+      setChats((prev) => [chat, ...prev].sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned)));
       router.push(`${pathname}?chat=${chat.id}`);
-    } catch (err) {
-      console.error("Failed to create chat", err);
-    }
+      if (isMobile) setIsOpen(false);
+    } catch (err) { console.error(err); }
   };
 
-  const handleRename = async (e: React.MouseEvent, chat: ChatSession) => {
-    e.stopPropagation();
-    const newTitle = prompt("Enter new chat name:", chat.title);
-    if (!newTitle || newTitle === chat.title) return;
-    try {
-      const updated = await updateChat(chat.id, { title: newTitle });
-      setChats(chats.map(c => c.id === chat.id ? updated : c));
-    } catch (err) {
-      console.error("Failed to rename", err);
-    }
-  };
-
-  const handleTogglePin = async (e: React.MouseEvent, chat: ChatSession) => {
-    e.stopPropagation();
+  const handlePin = async (chat: ChatSession) => {
     try {
       const updated = await updateChat(chat.id, { is_pinned: !chat.is_pinned });
-      setChats(chats.map(c => c.id === chat.id ? updated : c).sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned)));
-    } catch (err) {
-      console.error("Failed to pin/unpin", err);
-    }
+      setChats((prev) =>
+        prev.map((c) => (c.id === chat.id ? updated : c)).sort((a, b) => {
+          if (a.is_pinned !== b.is_pinned) return Number(b.is_pinned) - Number(a.is_pinned);
+          return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+        })
+      );
+    } catch (err) { console.error(err); }
   };
 
-  const handleToggleArchive = async (e: React.MouseEvent, chat: ChatSession) => {
-    e.stopPropagation();
+  const handleRename = (chat: ChatSession) => {
+    setRenamingId(chat.id);
+    setRenameValue(chat.title);
+  };
+
+  const commitRename = async (chatId: string) => {
+    if (!renameValue.trim()) { setRenamingId(null); return; }
     try {
-      const updated = await updateChat(chat.id, { is_archived: !chat.is_archived });
-      // Remove from sidebar if archived, or keep with visual indicator depending on logic.
-      // Usually archived chats don't show in Recents.
-      if (updated.is_archived) {
-        setChats(chats.filter(c => c.id !== chat.id));
-      } else {
-        setChats(chats.map(c => c.id === chat.id ? updated : c));
-      }
-    } catch (err) {
-      console.error("Failed to archive", err);
-    }
+      const updated = await updateChat(chatId, { title: renameValue.trim() });
+      setChats((prev) => prev.map((c) => (c.id === chatId ? updated : c)));
+    } catch (err) { console.error(err); }
+    setRenamingId(null);
   };
 
-  const handleDelete = async (e: React.MouseEvent, chatId: string) => {
-    e.stopPropagation();
-    if (!confirm("Are you sure you want to delete this chat?")) return;
+  const handleShare = (chat: ChatSession) => {
+    const url = `${window.location.origin}${pathname}?chat=${chat.id}`;
+    navigator.clipboard.writeText(url).then(() => {
+      // Use react-hot-toast if available
+      if (typeof window !== "undefined" && (window as any).__toastSuccess) {
+        (window as any).__toastSuccess("Link copied!");
+      }
+    });
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
     try {
-      await deleteChat(chatId);
-      setChats(chats.filter(c => c.id !== chatId));
-      // if active chat deleted, push to root
-      if (typeof window !== 'undefined' && window.location.search.includes(`chat=${chatId}`)) {
-        router.push(pathname);
-      }
-    } catch (err) {
-      console.error("Failed to delete", err);
-    }
+      await deleteChat(deleteTarget.id);
+      setChats((prev) => prev.filter((c) => c.id !== deleteTarget.id));
+      if (window.location.search.includes(`chat=${deleteTarget.id}`)) router.push(pathname);
+    } catch (err) { console.error(err); }
+    setDeleteTarget(null);
   };
 
+  const openContextMenu = (e: React.MouseEvent, chat: ChatSession) => {
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, chat });
+  };
+
+  const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const activeChatId = searchParams?.get("chat");
+
+  // ─── Overlay backdrop (mobile) ───────────────────────────────────────────────
+  const showOverlay = isMobile && isOpen;
+
+  // ─── Render ──────────────────────────────────────────────────────────────────
   return (
-    <nav className={`flex-shrink-0 border-r border-black/10 dark:border-white/10 flex flex-col h-screen bg-white dark:bg-black text-black dark:text-white transition-all duration-300 ease-in-out shadow-[4px_0_24px_rgba(0,0,0,0.02)] dark:shadow-[4px_0_24px_rgba(255,255,255,0.02)] z-50 overflow-hidden ${isOpen ? 'w-64 absolute md:relative translate-x-0' : 'w-0 md:w-16 -translate-x-full md:translate-x-0'}`}>
-      
-      {/* Collapsed State (Desktop Only) */}
-      {!isOpen && (
-        <div className="w-16 hidden md:flex flex-col items-center py-4 h-full">
-          <button onClick={() => setIsOpen(true)} className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded-md transition-colors">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
-          </button>
-        </div>
+    <>
+      {/* Mobile backdrop */}
+      {showOverlay && (
+        <div
+          onClick={() => setIsOpen(false)}
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
+            zIndex: 59, pointerEvents: "auto",
+          }}
+        />
       )}
 
-      {/* Expanded State */}
-      <div className={`flex flex-col h-full w-64 ${!isOpen ? 'opacity-0 pointer-events-none hidden' : 'opacity-100'}`}>
-        <div className="p-4 flex items-center justify-between border-b border-black/5 dark:border-white/5 flex-shrink-0">
-          <Link href="/" className="font-bold text-lg tracking-tight flex items-center gap-2">
-            <div className="w-6 h-6 rounded-sm bg-black dark:bg-white flex items-center justify-center text-white dark:text-black text-xs font-serif font-bold">D</div>
-            DocuMindAI
-          </Link>
-          <button onClick={() => setIsOpen(false)} className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded-md transition-colors">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+      <nav
+        className={`sidebar ${isOpen ? "" : "collapsed"}`}
+        style={{
+          position: isMobile ? "fixed" : "sticky",
+          top: isMobile ? 0 : "52px",
+          left: 0,
+          zIndex: isMobile ? 60 : undefined,
+          height: "100vh",
+          transform: isMobile && !isOpen ? "translateX(-100%)" : "translateX(0)",
+          transition: isMobile
+            ? "transform 300ms var(--ease-decel)"
+            : "width var(--dur-slow) var(--ease-standard)",
+          width: "260px",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        {/* ── TOP SECTION ── */}
+        <div style={{ padding: "12px", flexShrink: 0 }}>
+          {/* New Chat button */}
+          <button
+            id="sidebar-new-chat"
+            onClick={handleNewChat}
+            className="btn btn-primary"
+            style={{ width: "100%", height: "44px", borderRadius: "10px", marginBottom: "8px", gap: "8px" }}
+          >
+            <span style={{ fontSize: "14px" }}>✏️</span>
+            <span style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-sm)", fontWeight: "var(--weight-semibold)" }}>New Chat</span>
           </button>
-        </div>
 
-      <div className="p-4 flex-1 overflow-hidden flex flex-col gap-4">
-        <button onClick={handleNewChat} className="w-full flex-shrink-0 flex items-center gap-2 px-3 py-2 border border-black/10 dark:border-white/10 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors font-medium text-sm">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-          NEW CHAT
-        </button>
-
-        <div className="relative flex-shrink-0">
-          <svg className="w-4 h-4 absolute left-3 top-2.5 text-black/40 dark:text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-          <input 
-            type="text" 
-            placeholder="Search CHATS" 
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-transparent border border-black/10 dark:border-white/10 rounded-md text-sm focus:outline-none focus:border-black/30 dark:focus:border-white/30 transition-colors" 
-          />
-        </div>
-
-        <div className="flex-1 min-h-0 flex flex-col">
-          <div className="text-xs font-semibold text-black/50 dark:text-white/50 tracking-wider mb-2 px-1 flex-shrink-0">Recents</div>
-          <div className="flex-1 overflow-y-auto pr-1" ref={parentRef}>
-            {chats.length === 0 && (
-              <div className="px-3 py-6 flex flex-col items-center justify-center text-center opacity-50 space-y-2 mt-4">
-                <svg className="w-8 h-8 text-black/20 dark:text-white/20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
-                <div className="text-xs font-medium">{searchQuery ? "No results found." : "No chats yet."}</div>
-                {searchQuery && <div className="text-[10px]">Try a different search term.</div>}
-              </div>
+          {/* Search */}
+          <div style={{ position: "relative" }}>
+            <span style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", fontSize: "12px", color: "var(--text-tertiary)" }}>🔍</span>
+            <input
+              ref={searchRef}
+              id="sidebar-search"
+              type="text"
+              placeholder="Search chats..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{
+                width: "100%",
+                height: "36px",
+                background: "var(--surface-sunken)",
+                border: "1px solid var(--border-default)",
+                borderRadius: "var(--radius-md)",
+                paddingLeft: "32px",
+                paddingRight: searchQuery ? "32px" : "12px",
+                fontFamily: "var(--font-body)",
+                fontSize: "var(--text-sm)",
+                color: "var(--text-primary)",
+                outline: "none",
+                transition: "border-color var(--dur-fast) var(--ease-standard), box-shadow var(--dur-fast) var(--ease-standard)",
+                boxSizing: "border-box",
+              }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = "var(--brand)"; e.currentTarget.style.boxShadow = "var(--shadow-brand)"; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border-default)"; e.currentTarget.style.boxShadow = "none"; }}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-tertiary)", fontSize: "14px", padding: "2px", lineHeight: 1 }}
+              >✕</button>
             )}
-            
-            <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
-              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                const chat = chats[virtualRow.index];
+          </div>
+        </div>
+
+        {/* ── MIDDLE SECTION (sessions list) ── */}
+        <div ref={parentRef} style={{ flex: 1, overflowY: "auto", padding: "0 8px", minHeight: 0 }}>
+          {flatItems.length === 0 && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "48px 16px", opacity: 0.5, textAlign: "center", gap: "8px" }}>
+              <span style={{ fontSize: "24px" }}>💬</span>
+              <div style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-xs)", fontWeight: "var(--weight-medium)", color: "var(--text-secondary)" }}>
+                {searchQuery ? "No results found." : "No chats yet."}
+              </div>
+            </div>
+          )}
+
+          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, width: "100%", position: "relative" }}>
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const item = flatItems[virtualRow.index];
+              if (!item) return null;
+
+              if (item.type === "group") {
                 return (
-                  <div 
-                    key={chat.id} 
-                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
-                    className="px-0 py-0.5"
+                  <div
+                    key={`group-${item.label}`}
+                    style={{ position: "absolute", top: 0, left: 0, width: "100%", height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
                   >
-                    <div onClick={() => router.push(`${pathname}?chat=${chat.id}`)} className="group h-full flex items-center justify-between px-3 rounded-md hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-sm">
-                      <div className="flex items-center gap-2 truncate">
-                        <svg className="w-3.5 h-3.5 text-black/40 dark:text-white/40 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-                        <span className="truncate">{chat.title}</span>
-                      </div>
-                      <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-opacity bg-white dark:bg-black pl-2">
-                        <button onClick={(e) => handleRename(e, chat)} className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded" title="Rename"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
-                        <button onClick={(e) => handleTogglePin(e, chat)} className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded" title={chat.is_pinned ? "Unpin" : "Pin"}><svg className={`w-3 h-3 ${chat.is_pinned ? 'fill-current' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" /></svg></button>
-                        <button onClick={(e) => handleToggleArchive(e, chat)} className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded" title="Archive"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg></button>
-                        <button onClick={(e) => handleDelete(e, chat.id)} className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded" title="Delete"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
-                      </div>
+                    <div
+                      style={{
+                        fontFamily: "var(--font-body)",
+                        fontSize: "10px",
+                        fontWeight: "var(--weight-medium)",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.1em",
+                        color: "var(--text-tertiary)",
+                        padding: "12px 4px 4px",
+                      }}
+                    >
+                      {item.label}
                     </div>
                   </div>
                 );
-              })}
-            </div>
+              }
 
-            {hasMore && (
-              <button 
-                onClick={() => { setIsLoadingMore(true); loadChats(false); }}
-                disabled={isLoadingMore}
-                className="mt-2 w-full text-xs py-1.5 rounded bg-black/5 dark:bg-white/5 text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white transition-colors flex-shrink-0"
-              >
-                {isLoadingMore ? "Loading..." : "Load More"}
-              </button>
-            )}
+              // Chat item
+              const chat = item.chat;
+              const isActive = chat.id === activeChatId;
+              const isRenaming = renamingId === chat.id;
+
+              return (
+                <div
+                  key={chat.id}
+                  style={{ position: "absolute", top: 0, left: 0, width: "100%", height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)`, padding: "2px 0" }}
+                >
+                  <div
+                    className={`sidebar-item ${isActive ? "active" : ""}`}
+                    style={{ height: "36px", minHeight: "36px", display: "flex", alignItems: "center", gap: "8px", position: "relative", cursor: "pointer" }}
+                    onClick={() => { if (!isRenaming) { router.push(`${pathname}?chat=${chat.id}`); if (isMobile) setIsOpen(false); } }}
+                  >
+                    {/* Workspace icon */}
+                    <span style={{ fontSize: "14px", flexShrink: 0, lineHeight: 1 }}>
+                      {WORKSPACE_ICONS[chat.workspace_type || "general"] || "💬"}
+                    </span>
+
+                    {/* Title / rename input */}
+                    {isRenaming ? (
+                      <input
+                        autoFocus
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitRename(chat.id);
+                          if (e.key === "Escape") setRenamingId(null);
+                        }}
+                        onBlur={() => setRenamingId(null)}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ flex: 1, background: "var(--surface-sunken)", border: "1px solid var(--brand)", borderRadius: "4px", padding: "2px 6px", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--text-primary)", outline: "none" }}
+                      />
+                    ) : (
+                      <span style={{ flex: 1, fontFamily: "var(--font-body)", fontSize: "13px", color: isActive ? "var(--text-brand)" : "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {chat.title}
+                        {chat.is_pinned && <span style={{ marginLeft: "4px", fontSize: "10px" }}>📌</span>}
+                      </span>
+                    )}
+
+                    {/* Context menu trigger — shows on hover via group */}
+                    {!isRenaming && (
+                      <button
+                        id={`chat-menu-${chat.id}`}
+                        onClick={(e) => { e.stopPropagation(); openContextMenu(e, chat); }}
+                        style={{ flexShrink: 0, width: "28px", height: "28px", display: "flex", alignItems: "center", justifyContent: "center", background: "none", border: "none", borderRadius: "var(--radius-md)", cursor: "pointer", color: "var(--text-tertiary)", opacity: 0, transition: "opacity var(--dur-fast) var(--ease-standard)", }}
+                        className="chat-menu-btn"
+                        title="More options"
+                        onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.background = "var(--surface-hover)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.opacity = "0"; e.currentTarget.style.background = "none"; }}
+                      >
+                        ⋯
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        <div className="flex-shrink-0 pt-4 border-t border-black/5 dark:border-white/5">
-          <div className="text-xs font-semibold text-black/50 dark:text-white/50 tracking-wider mb-2 mt-4 px-1">Workspaces</div>
-          <div className="space-y-1">
-            <Link href="/" className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-sm">General Workspace</Link>
-            <Link href="/exam" className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-sm">Teacher Workspace</Link>
-            <Link href="/hr" className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-sm">HR Workspace</Link>
-            <Link href="/study" className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-sm">Student Workspace</Link>
-            <Link href="/research" className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-sm">Research Workspace</Link>
-            <Link href="/legal" className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-sm">Legal Workspace</Link>
-            <Link href="/finance" className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-sm">CA Workspace</Link>
+        {/* ── BOTTOM SECTION ── */}
+        <div style={{ flexShrink: 0, borderTop: "1px solid var(--border-subtle)", padding: "8px" }}>
+          {[
+            { icon: "📋", label: "All Sessions", href: "/sessions" },
+            { icon: "⚙️", label: "Settings", href: "/settings" },
+            { icon: "👤", label: "Account", href: "/account" },
+          ].map(({ icon, label, href }) => (
+            <Link
+              key={href}
+              href={href}
+              className="sidebar-item"
+              style={{ height: "36px", display: "flex", alignItems: "center", gap: "8px", textDecoration: "none", fontFamily: "var(--font-body)", fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}
+            >
+              <span style={{ fontSize: "14px" }}>{icon}</span>
+              {label}
+            </Link>
+          ))}
+          <div style={{ marginTop: "4px" }}>
+            <LogoutButton />
           </div>
         </div>
-      </div>
+      </nav>
 
-      <div className="p-4 border-t border-black/5 dark:border-white/5">
-        <button className="w-full flex items-center justify-between px-3 py-2 rounded-md hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-sm mb-2 font-medium">
-          ALL CHATS
-        </button>
-        <LogoutButton />
-        </div>
-      </div>
-    </nav>
+      {/* Context menu */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          chat={contextMenu.chat}
+          onClose={() => setContextMenu(null)}
+          onRename={handleRename}
+          onPin={handlePin}
+          onShare={handleShare}
+          onDelete={(chat) => { setDeleteTarget(chat); }}
+        />
+      )}
+
+      {/* Delete confirmation modal */}
+      {deleteTarget && (
+        <DeleteConfirmModal
+          chatTitle={deleteTarget.title}
+          onConfirm={handleDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+    </>
   );
 }

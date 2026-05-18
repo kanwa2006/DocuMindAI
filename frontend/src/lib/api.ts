@@ -597,6 +597,8 @@ export interface ChatSession {
   workspace_type: string;
   is_pinned: boolean;
   is_archived: boolean;
+  created_at?: string;
+  workspace_id?: string;
 }
 
 export interface ChatMessage {
