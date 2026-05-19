@@ -42,6 +42,17 @@ class Flashcard(Base):
     next_review_date = Column(DateTime(timezone=True), server_default=func.now())
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+class StudyQuiz(Base):
+    """Stores generated quizzes with correct answers server-side (anti-cheat)."""
+    __tablename__ = "study_quizzes"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    workspace_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    topic = Column(String, nullable=False)
+    difficulty = Column(String, default="medium")
+    doc_ids = Column(JSON, default=[])
+    questions = Column(JSON, nullable=False)  # Full questions WITH correct_index
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 class QuizAttempt(Base):
     __tablename__ = "study_quiz_attempts"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)

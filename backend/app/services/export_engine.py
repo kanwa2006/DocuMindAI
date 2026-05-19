@@ -1,9 +1,12 @@
 import os
 import io
 import logging
+from datetime import datetime
 from docx import Document
-from docx.shared import Pt, RGBColor
+from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 logger = logging.getLogger(__name__)
 
@@ -109,5 +112,203 @@ class ExportEngine:
         document.save(f)
         f.seek(0)
         return f
+
+    # ─── Task 6-T3: Academic Exam Paper DOCX ─────────────────────────────────
+
+    @staticmethod
+    def generate_exam_docx(exam_data: dict) -> io.BytesIO:
+        """
+        Generate an academically formatted DOCX for an exam paper.
+        exam_data keys: title, content (ExamPaperContent dict), status, watermark,
+                        subject, board, duration_minutes, total_marks, metadata.
+        Returns BytesIO ready for streaming.
+        """
+        doc = Document()
+
+        # A4 page size (21cm × 29.7cm) with 2.5cm margins
+        section = doc.sections[0]
+        section.page_width = Cm(21)
+        section.page_height = Cm(29.7)
+        for attr in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+            setattr(section, attr, Cm(2.5))
+
+        meta = exam_data.get("metadata", {})
+        title = exam_data.get("title", "Examination Paper")
+        subject = meta.get("subject", exam_data.get("subject", ""))
+        board = meta.get("board", exam_data.get("board", ""))
+        total_marks = meta.get("total_marks", exam_data.get("total_marks", ""))
+        duration = meta.get("duration_minutes", exam_data.get("duration_minutes", ""))
+        watermark = exam_data.get("watermark", "DRAFT")
+        date_str = datetime.now().strftime("%d %B %Y")
+
+        # Header block
+        hdr = doc.add_paragraph()
+        hdr.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = hdr.add_run("[School Name Placeholder]")
+        run.bold = True
+        run.font.size = Pt(14)
+
+        sub_hdr = doc.add_paragraph()
+        sub_hdr.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        sub_hdr.add_run(f"Subject: {subject}  |  Board: {board}  |  Date: {date_str}").bold = False
+
+        meta_hdr = doc.add_paragraph()
+        meta_hdr.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        meta_hdr.add_run(f"Max Marks: {total_marks}  |  Duration: {duration} minutes").bold = False
+
+        # Watermark paragraph (styled as a faint line)
+        wm_para = doc.add_paragraph()
+        wm_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        wm_run = wm_para.add_run(f"— {watermark} —")
+        wm_run.font.color.rgb = RGBColor(0xCC, 0xCC, 0xCC)
+        wm_run.font.size = Pt(10)
+
+        doc.add_paragraph()  # spacer
+
+        content = exam_data.get("content", {})
+        sections_data = content.get("sections", [])
+
+        # Fallback: use paper.sections if content is the raw generation result
+        if not sections_data:
+            paper = exam_data.get("paper", {})
+            sections_data = paper.get("sections", [])
+
+        answer_key = exam_data.get("answer_key", [])
+
+        q_global = 0
+        for sec in sections_data:
+            label = sec.get("label", sec.get("title", ""))
+            q_type = sec.get("question_type", sec.get("question_type", "")).upper()
+            display_type = {
+                "MCQ": "Multiple Choice Questions",
+                "SHORT": "Short Answer Questions",
+                "LONG": "Long Answer Questions",
+                "CASE_STUDY": "Case Study",
+            }.get(q_type, q_type or "Questions")
+
+            sec_heading = doc.add_paragraph()
+            sec_heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            run = sec_heading.add_run(f"SECTION {label} — {display_type}")
+            run.bold = True
+            run.underline = True
+            run.font.size = Pt(12)
+
+            instructions = sec.get("instructions", "")
+            if instructions:
+                instr = doc.add_paragraph(instructions)
+                instr.runs[0].italic = True
+                instr.runs[0].font.size = Pt(11)
+
+            questions = sec.get("questions", [])
+            for idx, q in enumerate(questions, 1):
+                q_global += 1
+                marks = q.get("marks", 0)
+                text = q.get("text", q.get("stem", ""))
+                q_para = doc.add_paragraph()
+                q_run = q_para.add_run(f"{q_global}. {text}")
+                q_run.font.size = Pt(11)
+                # Marks right-aligned via tab stop approximation
+                marks_run = q_para.add_run(f"  [{marks}]")
+                marks_run.bold = True
+                marks_run.font.size = Pt(11)
+
+                # Sub-questions
+                for sub_idx, sq in enumerate(q.get("sub_questions", []), 1):
+                    sub_para = doc.add_paragraph(style="List Bullet")
+                    sub_para.add_run(f"({chr(96 + sub_idx)}) {sq.get('text', '')}  [{sq.get('marks', '')}]")
+                    sub_para.paragraph_format.left_indent = Cm(1)
+
+                # MCQ options
+                for opt_idx, opt in enumerate(q.get("options", []), 0):
+                    label_letter = chr(65 + opt_idx)
+                    opt_para = doc.add_paragraph()
+                    opt_para.paragraph_format.left_indent = Cm(1)
+                    opt_para.add_run(f"{label_letter}. {opt}").font.size = Pt(10)
+
+        # Answer key on new page
+        if answer_key:
+            doc.add_page_break()
+            ak_title = doc.add_paragraph()
+            ak_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            ak_run = ak_title.add_run("ANSWER KEY")
+            ak_run.bold = True
+            ak_run.font.size = Pt(14)
+
+            sep = doc.add_paragraph("─" * 60)
+            sep.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+            for entry in answer_key:
+                q_num = entry.get("question_number", "")
+                correct = entry.get("correct_answer", "")
+                scheme = entry.get("marking_scheme", "")
+                bloom = entry.get("bloom_level", "")
+                diff = entry.get("difficulty", "")
+
+                ak_para = doc.add_paragraph()
+                ak_para.add_run(f"Q{q_num}: ").bold = True
+                ak_para.add_run(f"{correct}")
+                detail = doc.add_paragraph()
+                detail.paragraph_format.left_indent = Cm(0.5)
+                detail.add_run(f"Marking: {scheme}  |  Bloom's: {bloom}  |  Level: {diff}").font.size = Pt(9)
+
+        # Footer
+        footer = section.footer
+        footer_para = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        footer_para.add_run("Generated by DocuMindAI").font.size = Pt(9)
+
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        return buf
+
+    @staticmethod
+    def generate_table_docx(title: str, headers: list, rows: list) -> io.BytesIO:
+        """
+        Export an arbitrary table (from teacher workspace chat) as DOCX.
+        headers: list of str column names
+        rows: list of list of str cell values
+        """
+        doc = Document()
+        section = doc.sections[0]
+        section.page_width = Cm(21)
+        section.page_height = Cm(29.7)
+        for attr in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+            setattr(section, attr, Cm(2.5))
+
+        heading = doc.add_paragraph()
+        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = heading.add_run(title)
+        run.bold = True
+        run.font.size = Pt(14)
+
+        doc.add_paragraph(datetime.now().strftime("Exported: %d %B %Y %H:%M")).runs[0].font.size = Pt(9)
+        doc.add_paragraph()
+
+        if headers or rows:
+            col_count = max(len(headers), max((len(r) for r in rows), default=0))
+            table = doc.add_table(rows=1 + len(rows), cols=col_count)
+            table.style = "Table Grid"
+
+            for ci, h in enumerate(headers[:col_count]):
+                cell = table.rows[0].cells[ci]
+                cell.text = str(h)
+                for run in cell.paragraphs[0].runs:
+                    run.bold = True
+
+            for ri, row in enumerate(rows, 1):
+                for ci, val in enumerate(row[:col_count]):
+                    table.rows[ri].cells[ci].text = str(val)
+
+        footer = section.footer
+        fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+        fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        fp.add_run("Generated by DocuMindAI").font.size = Pt(9)
+
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        return buf
+
 
 export_engine = ExportEngine()
