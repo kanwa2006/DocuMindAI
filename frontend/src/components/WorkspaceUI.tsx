@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, memo } from "react";
+import { useState, useEffect, useRef, useCallback, memo, useMemo } from "react";
 import { Toaster, toast } from "react-hot-toast";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import ReactMarkdown from "react-markdown";
@@ -9,8 +9,11 @@ import React from "react";
 import {
   uploadDocument, askQuestionStream, listDocuments, getDocument,
   Document, QueryResponse, getChats, createChat, getChatMessages,
-  createChatMessage, ChatMessage, updateChat,
+  createChatMessage, ChatMessage, updateChat, API_BASE,
 } from "../lib/api";
+import PaperConfigPanel from "./PaperConfigPanel";
+import PomodoroTimer from "./PomodoroTimer";
+import CandidateRankingsPanel from "./CandidateRankingsPanel";
 
 // ─── Workspace configuration (Phase 5) ───────────────────────────────────────
 
@@ -168,43 +171,108 @@ function CodeBlock({ node, inline, className, children, ...props }: any) {
   );
 }
 
-// ─── ReactMarkdown: table with Copy+CSV export (Additional req) ───────────────
+// ─── ReactMarkdown: table with Copy+CSV+DOCX export ───────────────────────────
 
-function TableWithExport({ children }: { children: React.ReactNode }) {
+function TableWithExport({ children, workspaceType }: { children: React.ReactNode; workspaceType?: string }) {
   const tableRef = useRef<HTMLTableElement>(null);
   const [htmlCopied, setHtmlCopied] = useState(false);
-  const chipStyle: React.CSSProperties = { height: "26px", padding: "0 10px", fontSize: "11px", background: "var(--surface-raised)", border: "1px solid var(--border-default)", borderRadius: "6px", cursor: "pointer", color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: "4px", fontFamily: "var(--font-body)", transition: "border-color 100ms" };
-  const copyHTML = () => {
-    if (tableRef.current) { navigator.clipboard.writeText(tableRef.current.outerHTML); setHtmlCopied(true); setTimeout(() => setHtmlCopied(false), 2000); }
+  const [docxLoading, setDocxLoading] = useState(false);
+  const isTeacher = workspaceType === "exam";
+
+  const chipStyle: React.CSSProperties = {
+    height: "26px", padding: "0 10px", fontSize: "11px",
+    background: "var(--surface-raised)", border: "1px solid var(--border-default)",
+    borderRadius: "6px", cursor: "pointer", color: "var(--text-secondary)",
+    display: "inline-flex", alignItems: "center", gap: "4px",
+    fontFamily: "var(--font-body)", transition: "border-color 100ms",
   };
+  const hoverIn = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; };
+  const hoverOut = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; };
+
+  const copyHTML = () => {
+    if (tableRef.current) {
+      navigator.clipboard.writeText(tableRef.current.outerHTML);
+      setHtmlCopied(true); setTimeout(() => setHtmlCopied(false), 2000);
+    }
+  };
+
   const downloadCSV = () => {
     if (!tableRef.current) return;
     const rows = Array.from(tableRef.current.querySelectorAll("tr"));
-    const csv = rows.map((r) => Array.from(r.querySelectorAll("th,td")).map((c) => `"${(c.textContent || "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const csv = rows.map((r) =>
+      Array.from(r.querySelectorAll("th,td"))
+        .map((c) => `"${(c.textContent || "").replace(/"/g, '""')}"`)
+        .join(",")
+    ).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `documindai_table_${Date.now()}.csv`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    const a = document.createElement("a");
+    a.href = url; a.download = `table_${Date.now()}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
+
+  const downloadDOCX = async () => {
+    if (!tableRef.current || docxLoading) return;
+    setDocxLoading(true);
+    try {
+      const rows = Array.from(tableRef.current.querySelectorAll("tr"));
+      const headers = Array.from(rows[0]?.querySelectorAll("th,td") ?? []).map((c) => c.textContent || "");
+      const dataRows = rows.slice(1).map((r) =>
+        Array.from(r.querySelectorAll("td")).map((c) => c.textContent || "")
+      );
+      const res = await fetch(`${API_BASE}/api/v1/exams/export/table-docx`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Table Export", headers, rows: dataRows }),
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `table_${Date.now()}.docx`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      toast.error("DOCX export failed");
+    } finally {
+      setDocxLoading(false);
+    }
+  };
+
   return (
     <div style={{ marginBottom: "8px" }}>
       <div style={{ overflowX: "auto" }}>
         <table ref={tableRef} style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>{children}</table>
       </div>
-      <div style={{ display: "flex", gap: "8px", marginTop: "6px" }}>
-        <button onClick={copyHTML} style={chipStyle} onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; }}>{htmlCopied ? "✓" : "📋"} Copy Table</button>
-        <button onClick={downloadCSV} style={chipStyle} onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; }}>📊 CSV</button>
+      <div style={{ display: "flex", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
+        <button onClick={copyHTML} style={chipStyle} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+          {htmlCopied ? "✓" : "📋"} Copy as HTML
+        </button>
+        <button onClick={downloadCSV} style={chipStyle} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+          📊 Export CSV
+        </button>
+        {isTeacher && (
+          <button onClick={downloadDOCX} disabled={docxLoading} style={chipStyle} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+            📄 {docxLoading ? "Exporting…" : "Export DOCX"}
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-const MARKDOWN_COMPONENTS = {
-  code: CodeBlock,
-  table: ({ children }: any) => <TableWithExport>{children}</TableWithExport>,
-  th: ({ children }: any) => <th style={{ padding: "8px 12px", background: "var(--surface-sunken)", borderBottom: "2px solid var(--border-default)", textAlign: "left", fontWeight: 600, fontSize: "13px" }}>{children}</th>,
-  td: ({ children }: any) => <td style={{ padding: "8px 12px", borderBottom: "1px solid var(--border-subtle)", fontSize: "13px" }}>{children}</td>,
-};
+function buildMarkdownComponents(workspaceType: string) {
+  return {
+    code: CodeBlock,
+    table: ({ children }: any) => <TableWithExport workspaceType={workspaceType}>{children}</TableWithExport>,
+    th: ({ children }: any) => <th style={{ padding: "8px 12px", background: "var(--surface-sunken)", borderBottom: "2px solid var(--border-default)", textAlign: "left", fontWeight: 600, fontSize: "13px" }}>{children}</th>,
+    td: ({ children }: any) => <td style={{ padding: "8px 12px", borderBottom: "1px solid var(--border-subtle)", fontSize: "13px" }}>{children}</td>,
+  };
+}
+
+// Kept for back-compat if anything references it directly
+const MARKDOWN_COMPONENTS = buildMarkdownComponents("general");
 
 // ─── Workspace welcome state (Task 5.1) ───────────────────────────────────────
 
@@ -259,6 +327,8 @@ const MemoizedMessage = memo(({
   const [hovered, setHovered] = useState(false);
   const [copyDone, setCopyDone] = useState(false);
 
+  const mdComponents = useMemo(() => buildMarkdownComponents(workspaceType), [workspaceType]);
+
   let parsedRes: any = null;
   let textContent = msg.content;
   if (msg.role === "assistant") {
@@ -294,7 +364,7 @@ const MemoizedMessage = memo(({
 
       {/* Content */}
       <div className="text-response" style={{ fontSize: "15px", lineHeight: "var(--leading-loose)", fontFamily: "var(--font-body)", color: "var(--text-primary)" }}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS as any}>{mainText}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents as any}>{mainText}</ReactMarkdown>
       </div>
 
       {/* Citations + confidence */}
@@ -352,6 +422,125 @@ MemoizedMessage.displayName = "MemoizedMessage";
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+// ─── Flashcard Mode overlay for Student workspace ─────────────────────────────
+
+function FlashcardMode({
+  decks, onClose, onReview,
+}: {
+  decks: any[];
+  onClose: () => void;
+  onReview: (cardId: string, quality: number) => Promise<void>;
+}) {
+  const allCards = decks.flatMap((d) => d.cards || []);
+  const [idx, setIdx] = useState(0);
+  const [flipped, setFlipped] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const card = allCards[idx];
+
+  const handleReview = async (quality: number) => {
+    if (!card || reviewing) return;
+    setReviewing(true);
+    await onReview(card.id, quality);
+    setFlipped(false);
+    setIdx((prev) => Math.min(prev + 1, allCards.length - 1));
+    setReviewing(false);
+  };
+
+  if (allCards.length === 0) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: "16px" }}>
+        <div style={{ fontSize: "48px" }}>🃏</div>
+        <div style={{ fontFamily: "var(--font-body)", color: "var(--text-secondary)", fontSize: "14px" }}>No flashcards yet. Generate some via the chat first.</div>
+        <button onClick={onClose} className="btn btn-secondary">← Back to chat</button>
+      </div>
+    );
+  }
+
+  const correct = 0;
+  const remaining = allCards.length - idx;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", padding: "24px", gap: "20px" }}>
+      {/* Progress */}
+      <div style={{ fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--text-secondary)" }}>
+        Card {idx + 1} of {allCards.length} · {remaining} remaining today
+      </div>
+
+      {/* Flip card */}
+      <div
+        onClick={() => setFlipped((f) => !f)}
+        style={{
+          width: "min(480px, 100%)", height: "260px", cursor: "pointer",
+          perspective: "1000px",
+        }}
+      >
+        <div style={{
+          width: "100%", height: "100%", position: "relative",
+          transformStyle: "preserve-3d",
+          transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)",
+          transition: "transform 300ms ease",
+        }}>
+          {/* Front */}
+          <div style={{
+            position: "absolute", inset: 0, backfaceVisibility: "hidden",
+            background: "var(--surface-raised)", border: "1px solid var(--border-default)",
+            borderRadius: "16px", padding: "32px", display: "flex",
+            alignItems: "center", justifyContent: "center", textAlign: "center",
+          }}>
+            <div>
+              <div style={{ fontSize: "11px", color: "var(--text-tertiary)", marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.07em" }}>Question</div>
+              <div style={{ fontFamily: "var(--font-body)", fontSize: "16px", color: "var(--text-primary)", lineHeight: 1.5 }}>{card?.front}</div>
+              <div style={{ marginTop: "20px", fontSize: "12px", color: "var(--text-tertiary)" }}>Tap to reveal answer</div>
+            </div>
+          </div>
+          {/* Back */}
+          <div style={{
+            position: "absolute", inset: 0, backfaceVisibility: "hidden",
+            transform: "rotateY(180deg)",
+            background: "var(--brand-ghost, var(--surface-raised))", border: "1px solid var(--brand)",
+            borderRadius: "16px", padding: "32px", display: "flex",
+            alignItems: "center", justifyContent: "center", textAlign: "center",
+          }}>
+            <div>
+              <div style={{ fontSize: "11px", color: "var(--brand)", marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.07em" }}>Answer</div>
+              <div style={{ fontFamily: "var(--font-body)", fontSize: "15px", color: "var(--text-primary)", lineHeight: 1.6 }}>{card?.back}</div>
+              {card?.citation && (
+                <div style={{ marginTop: "12px", fontSize: "11px", color: "var(--text-tertiary)", fontStyle: "italic" }}>{card.citation}</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Quality rating buttons — only after flip */}
+      {flipped && (
+        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", justifyContent: "center" }}>
+          {[
+            { label: "😵 Forgot", quality: 0 },
+            { label: "😕 Hard", quality: 2 },
+            { label: "😊 OK", quality: 4 },
+            { label: "🎯 Easy", quality: 5 },
+          ].map(({ label, quality }) => (
+            <button
+              key={quality}
+              onClick={() => handleReview(quality)}
+              disabled={reviewing}
+              className="btn btn-secondary"
+              style={{ height: "40px", fontSize: "13px", gap: "4px" }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <button onClick={onClose} className="btn btn-ghost btn-sm" style={{ marginTop: "8px" }}>← Back to chat</button>
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
+
 export default function WorkspaceUI({ workspaceType = "general" }: { workspaceType?: string }) {
   const [docs, setDocs] = useState<Document[]>([]);
   const [activeDoc, setActiveDoc] = useState<Document | null>(null);
@@ -361,12 +550,28 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [showThinkingLabel, setShowThinkingLabel] = useState(false);
 
+  // ── Workspace-specific state ──────────────────────────────────────────────
+  const [showPaperConfig, setShowPaperConfig] = useState(false);
+  const [generatedPaper, setGeneratedPaper] = useState<any | null>(null);
+  const [showAnswerKey, setShowAnswerKey] = useState(false);
+  const [showPomodoro, setShowPomodoro] = useState(false);
+  const [flashcardMode, setFlashcardMode] = useState(false);
+  const [flashcardDecks, setFlashcardDecks] = useState<any[]>([]);
+
+  // ── HR workspace state ────────────────────────────────────────────────────
+  const [showRankings, setShowRankings] = useState(false);
+  // Per-file progress: { [filename]: { progress: 0-100, status: "uploading"|"done"|"error" } }
+  const [batchProgress, setBatchProgress] = useState<Record<string, { progress: number; status: string }>>({});
+  const batchFileInputRef = useRef<HTMLInputElement>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pollingIntervalsRef = useRef<NodeJS.Timeout[]>([]);
   const thinkingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const mdComponents = useMemo(() => buildMarkdownComponents(workspaceType), [workspaceType]);
 
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -593,12 +798,161 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   // Derive last AI message index for regenerate button
   const lastAiMsgIdx = history.map((m) => m.role).lastIndexOf("assistant");
 
+  // ── Handle workspace action button clicks ─────────────────────────────────
+  const handleWorkspaceAction = useCallback(async (label: string) => {
+    if (workspaceType === "exam") {
+      if (label === "Generate Paper") { setShowPaperConfig(true); return; }
+      if (label === "Answer Key") { setShowAnswerKey((v) => !v); return; }
+    }
+    if (workspaceType === "hr") {
+      if (label === "View Rankings") { setShowRankings(true); return; }
+      if (label === "Batch Upload") { batchFileInputRef.current?.click(); return; }
+    }
+    if (workspaceType === "study") {
+      if (label === "Pomodoro Timer") { setShowPomodoro((v) => !v); return; }
+      if (label === "Flashcard Mode") {
+        if (!flashcardMode) {
+          // Load decks from API
+          try {
+            const res = await fetch(`${API_BASE}/api/v1/study/decks`, { credentials: "include" });
+            if (res.ok) {
+              const deckList = await res.json();
+              // Load cards per deck
+              const decksWithCards = await Promise.all(
+                deckList.map(async (d: any) => {
+                  const cr = await fetch(`${API_BASE}/api/v1/study/decks/${d.id}/flashcards`, { credentials: "include" });
+                  const cards = cr.ok ? await cr.json() : [];
+                  return { ...d, cards };
+                })
+              );
+              setFlashcardDecks(decksWithCards);
+            }
+          } catch { toast.error("Failed to load flashcards"); }
+        }
+        setFlashcardMode((v) => !v);
+        return;
+      }
+    }
+  }, [workspaceType, flashcardMode]);
+
+  const handleFlashcardReview = useCallback(async (cardId: string, quality: number) => {
+    try {
+      await fetch(`${API_BASE}/api/v1/study/flashcards/${cardId}/review`, {
+        method: "PATCH", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quality }),
+      });
+    } catch { /* non-fatal */ }
+  }, []);
+
+  // ── HR: Batch upload with per-file progress ───────────────────────────────
+  const handleBatchFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const initial: Record<string, { progress: number; status: string }> = {};
+    files.forEach((f) => { initial[f.name] = { progress: 0, status: "uploading" }; });
+    setBatchProgress(initial);
+
+    await Promise.all(
+      files.map(async (file) => {
+        try {
+          // Simulate progress during upload
+          setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 30, status: "uploading" } }));
+          const uploadedDoc = await uploadDocument(file);
+          setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 60, status: "uploading" } }));
+
+          const wsDocs = JSON.parse(localStorage.getItem(`docs_${workspaceType}`) || "[]");
+          wsDocs.push(uploadedDoc.id);
+          localStorage.setItem(`docs_${workspaceType}`, JSON.stringify(wsDocs));
+          setDocs((prev) => [uploadedDoc, ...prev]);
+          setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 100, status: "done" } }));
+        } catch {
+          setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 0, status: "error" } }));
+        }
+      })
+    );
+
+    if (batchFileInputRef.current) batchFileInputRef.current.value = "";
+    setTimeout(() => setBatchProgress({}), 3000);
+  }, [workspaceType]);
+
+  const handlePaperGenerated = useCallback((data: any) => {
+    setGeneratedPaper(data);
+    // Display paper as an AI message in chat
+    const paperText = formatPaperAsMarkdown(data);
+    setHistory((prev) => [...prev, {
+      id: Date.now().toString(), role: "assistant",
+      content: JSON.stringify({ answer: paperText, confidence_score: 1, evidence: [] }),
+    }]);
+  }, []);
+
+  function formatPaperAsMarkdown(data: any): string {
+    const meta = data.metadata || {};
+    let md = `## ${meta.subject || "Exam"} Paper — ${meta.board || ""}\n`;
+    md += `**Total Marks:** ${meta.total_marks}  |  **Duration:** ${meta.duration_minutes} min  |  `;
+    md += `**Generated:** ${new Date(data.generated_at).toLocaleString()}\n\n`;
+
+    const sections = data.paper?.sections || [];
+    for (const sec of sections) {
+      md += `### SECTION ${sec.label}`;
+      if (sec.question_type) md += ` — ${sec.question_type.toUpperCase()}`;
+      md += "\n\n";
+      for (const q of sec.questions || []) {
+        md += `**${q.num}.** ${q.text}  **[${q.marks}]**\n`;
+        if (q.options?.length) {
+          q.options.forEach((opt: string, i: number) => {
+            md += `   ${String.fromCharCode(65 + i)}. ${opt}\n`;
+          });
+        }
+        md += "\n";
+      }
+    }
+    return md;
+  }
+
   return (
-    <div className="h-full flex flex-col px-4 md:px-8 py-6 pb-0 w-full max-w-6xl mx-auto">
+    <div className="h-full flex flex-col px-4 md:px-8 py-6 pb-0 w-full max-w-6xl mx-auto" style={{ position: "relative" }}>
       <Toaster position="top-center" toastOptions={{ className: "dark:bg-black dark:text-white border dark:border-white/10 shadow-lg rounded-md text-sm" }} />
 
+      {/* ── Paper Config Panel (Teacher workspace) ── */}
+      {showPaperConfig && (
+        <PaperConfigPanel
+          onClose={() => setShowPaperConfig(false)}
+          onGenerated={handlePaperGenerated}
+        />
+      )}
+
+      {/* ── Candidate Rankings Panel (HR workspace) ── */}
+      {workspaceType === "hr" && showRankings && (
+        <CandidateRankingsPanel onClose={() => setShowRankings(false)} />
+      )}
+
+      {/* ── Batch file input (HR workspace, multiple files) ── */}
+      {workspaceType === "hr" && (
+        <input
+          type="file"
+          multiple
+          accept=".pdf,.docx"
+          ref={batchFileInputRef}
+          className="hidden"
+          onChange={handleBatchFileChange}
+        />
+      )}
+
+      {/* ── Flashcard Mode overlay (Student workspace) ── */}
+      {flashcardMode ? (
+        <div className="flex-1 overflow-hidden" style={{ display: "flex", flexDirection: "column" }}>
+          <FlashcardMode
+            decks={flashcardDecks}
+            onClose={() => setFlashcardMode(false)}
+            onReview={handleFlashcardReview}
+          />
+        </div>
+      ) : null}
+
       {/* ── Chat area ── */}
-      <div className="flex-1 overflow-y-auto mb-4 pr-2" style={{ scrollBehavior: "smooth" }}>
+      <div className="flex-1 overflow-y-auto mb-4 pr-2" style={{ scrollBehavior: "smooth", display: flashcardMode ? "none" : undefined }}>
 
         {/* Welcome state (Task 5.1) */}
         {!response && !loading && history.length === 0 && (
@@ -658,7 +1012,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                     const { main } = splitDisclaimer(response.answer || "");
                     return (
                       <>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS as any}>{main || "Thinking..."}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents as any}>{main || "Thinking..."}</ReactMarkdown>
                         {loading && (
                           <span className="streaming-cursor" style={{ display: "inline-block", width: "2px", height: "1em", background: "var(--brand)", marginLeft: "2px", verticalAlign: "text-bottom", animation: "blink 1s step-end infinite" }}>▍</span>
                         )}
@@ -768,13 +1122,73 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           </div>
         </form>
 
+        {/* ── HR Batch upload per-file progress ── */}
+        {workspaceType === "hr" && Object.keys(batchProgress).length > 0 && (
+          <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "4px" }}>
+            {Object.entries(batchProgress).map(([filename, state]) => (
+              <div key={filename} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-secondary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={filename}>
+                  {state.status === "done" ? "✓" : state.status === "error" ? "✗" : "⟳"} {filename}
+                </span>
+                <div style={{ width: "80px", height: "4px", background: "var(--border-subtle)", borderRadius: "2px", flexShrink: 0 }}>
+                  <div style={{
+                    width: `${state.progress}%`, height: "100%", borderRadius: "2px", transition: "width 300ms",
+                    background: state.status === "error" ? "var(--error-text, #dc2626)" : state.status === "done" ? "var(--success-text, #16a34a)" : "var(--brand)",
+                  }} />
+                </div>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "var(--text-tertiary)", width: "32px", textAlign: "right" }}>
+                  {state.status === "done" ? "Done" : state.status === "error" ? "Err" : `${state.progress}%`}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Workspace-specific action buttons */}
         {WORKSPACE_ACTIONS[workspaceType] && (
-          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px" }}>
-            {WORKSPACE_ACTIONS[workspaceType].map((action) => (
-              <button key={action.label} className="btn btn-secondary btn-sm" style={{ height: "32px", fontSize: "12px", gap: "4px" }}>
-                <span>{action.icon}</span>{action.label}
-              </button>
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px", alignItems: "center" }}>
+            {WORKSPACE_ACTIONS[workspaceType].map((action) => {
+              const isActive =
+                (action.label === "Generate Paper" && showPaperConfig) ||
+                (action.label === "Answer Key" && showAnswerKey) ||
+                (action.label === "Flashcard Mode" && flashcardMode) ||
+                (action.label === "Pomodoro Timer" && showPomodoro) ||
+                (action.label === "View Rankings" && showRankings);
+              return (
+                <button
+                  key={action.label}
+                  onClick={() => handleWorkspaceAction(action.label)}
+                  className="btn btn-secondary btn-sm"
+                  style={{
+                    height: "32px", fontSize: "12px", gap: "4px",
+                    borderColor: isActive ? "var(--brand)" : undefined,
+                    color: isActive ? "var(--brand)" : undefined,
+                  }}
+                >
+                  <span>{action.icon}</span>{action.label}
+                </button>
+              );
+            })}
+
+            {/* Pomodoro Timer inline (Study workspace) */}
+            {workspaceType === "study" && showPomodoro && (
+              <PomodoroTimer />
+            )}
+          </div>
+        )}
+
+        {/* Answer Key panel (Teacher workspace) */}
+        {workspaceType === "exam" && showAnswerKey && generatedPaper?.answer_key && (
+          <div style={{ marginTop: "8px", background: "var(--surface-raised)", border: "1px solid var(--border-default)", borderRadius: "10px", padding: "12px", maxHeight: "240px", overflowY: "auto" }}>
+            <div style={{ fontFamily: "var(--font-body)", fontSize: "13px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "8px" }}>Answer Key</div>
+            {generatedPaper.answer_key.map((entry: any) => (
+              <div key={entry.question_number} style={{ padding: "6px 0", borderBottom: "1px solid var(--border-subtle)", fontFamily: "var(--font-body)", fontSize: "12px" }}>
+                <span style={{ fontWeight: 600 }}>Q{entry.question_number}:</span>{" "}
+                {entry.correct_answer}
+                <span style={{ color: "var(--text-tertiary)", marginLeft: "8px" }}>
+                  [{entry.bloom_level} · {entry.difficulty}]
+                </span>
+              </div>
             ))}
           </div>
         )}

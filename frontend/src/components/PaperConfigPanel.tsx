@@ -1,0 +1,299 @@
+"use client";
+
+import { useState } from "react";
+import { toast } from "react-hot-toast";
+import { API_BASE } from "../lib/api";
+
+export interface ExamSectionConfig {
+  label: string;
+  question_type: string;
+  total_marks: number;
+  count: number;
+}
+
+export interface PaperConfig {
+  subject: string;
+  board: string;
+  total_marks: number;
+  duration_minutes: number;
+  difficulty: string;
+  bloom_distribution: Record<string, number>;
+  sections: ExamSectionConfig[];
+  instructions: string;
+}
+
+interface Props {
+  onClose: () => void;
+  onGenerated: (result: any) => void;
+}
+
+const BOARDS = ["CBSE", "ICSE", "State Board", "University", "JEE/NEET Style"];
+const QUESTION_TYPES = ["mcq", "short", "long", "case_study"];
+const SECTION_LABELS = ["A", "B", "C", "D", "E"];
+
+function BloomSlider({ value, onChange }: {
+  value: [number, number, number];
+  onChange: (v: [number, number, number]) => void;
+}) {
+  const [l1, l3, l5] = value;
+  const total = l1 + l3 + l5;
+  const isValid = total === 100;
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: "6px", alignItems: "center", marginBottom: "4px" }}>
+        {[["L1-L2", l1, 0], ["L3-L4", l3, 1], ["L5-L6", l5, 2]].map(([label, val, idx]) => (
+          <div key={label as string} style={{ flex: 1 }}>
+            <label style={{ fontSize: "10px", color: "var(--text-tertiary)", display: "block", marginBottom: "2px" }}>{label as string}</label>
+            <input
+              type="number" min={0} max={100}
+              value={val as number}
+              onChange={(e) => {
+                const nv = parseInt(e.target.value) || 0;
+                const next: [number, number, number] = [...value] as [number, number, number];
+                next[idx as number] = nv;
+                onChange(next);
+              }}
+              style={{ width: "100%", height: "32px", border: "1px solid var(--border-default)", borderRadius: "6px", padding: "0 8px", fontSize: "13px", background: "var(--surface-base)", color: "var(--text-primary)", outline: "none" }}
+            />
+          </div>
+        ))}
+      </div>
+      {/* Visual bar */}
+      <div style={{ height: "6px", borderRadius: "3px", overflow: "hidden", background: "var(--border-subtle)", display: "flex" }}>
+        <div style={{ width: `${l1}%`, background: "var(--brand)", opacity: 0.6, transition: "width 200ms" }} />
+        <div style={{ width: `${l3}%`, background: "var(--brand)", opacity: 0.85, transition: "width 200ms" }} />
+        <div style={{ width: `${l5}%`, background: "var(--brand)", transition: "width 200ms" }} />
+      </div>
+      <div style={{ fontSize: "11px", marginTop: "4px", color: isValid ? "var(--success-text, #22c55e)" : "var(--error-text, #ef4444)" }}>
+        Total: {total}/100 {isValid ? "✓" : "⚠ Must equal 100"}
+      </div>
+    </div>
+  );
+}
+
+export default function PaperConfigPanel({ onClose, onGenerated }: Props) {
+  const [subject, setSubject] = useState("");
+  const [board, setBoard] = useState("CBSE");
+  const [totalMarks, setTotalMarks] = useState(100);
+  const [duration, setDuration] = useState(180);
+  const [difficulty, setDifficulty] = useState<"easy" | "mixed" | "hard">("mixed");
+  const [bloom, setBloom] = useState<[number, number, number]>([30, 40, 30]);
+  const [instructions, setInstructions] = useState("");
+  const [sections, setSections] = useState<ExamSectionConfig[]>([
+    { label: "A", question_type: "mcq", total_marks: 40, count: 20 },
+    { label: "B", question_type: "short", total_marks: 30, count: 6 },
+    { label: "C", question_type: "long", total_marks: 30, count: 3 },
+  ]);
+  const [generating, setGenerating] = useState(false);
+
+  const sectionTotal = sections.reduce((acc, s) => acc + s.total_marks, 0);
+  const bloomTotal = bloom[0] + bloom[1] + bloom[2];
+  const marksOk = sectionTotal === totalMarks;
+  const bloomOk = bloomTotal === 100;
+  const canGenerate = subject.trim().length > 0 && marksOk && bloomOk && sections.length > 0;
+
+  const addSection = () => {
+    const nextLabel = SECTION_LABELS[sections.length] || String.fromCharCode(65 + sections.length);
+    setSections((prev) => [...prev, { label: nextLabel, question_type: "mcq", total_marks: 0, count: 1 }]);
+  };
+
+  const removeSection = (idx: number) =>
+    setSections((prev) => prev.filter((_, i) => i !== idx));
+
+  const updateSection = (idx: number, field: keyof ExamSectionConfig, val: any) =>
+    setSections((prev) => prev.map((s, i) => i === idx ? { ...s, [field]: val } : s));
+
+  const handleGenerate = async () => {
+    if (!canGenerate) return;
+    setGenerating(true);
+    const toastId = toast.loading("Generating exam paper…");
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/exams/generate/paper`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject,
+          board,
+          total_marks: totalMarks,
+          duration_minutes: duration,
+          difficulty,
+          instructions,
+          bloom_distribution: {
+            "L1-L2": bloom[0],
+            "L3-L4": bloom[1],
+            "L5-L6": bloom[2],
+          },
+          sections,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        const msgs: string[] = err?.detail?.validation_errors || [err?.detail || "Generation failed"];
+        toast.error(msgs[0], { id: toastId });
+        return;
+      }
+      const data = await res.json();
+      toast.success("Paper generated!", { id: toastId });
+      onGenerated(data);
+      onClose();
+    } catch (e: any) {
+      toast.error(e.message || "Generation failed", { id: toastId });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%", height: "40px", border: "1px solid var(--border-default)",
+    borderRadius: "8px", padding: "0 12px", fontSize: "13px",
+    background: "var(--surface-base)", color: "var(--text-primary)",
+    fontFamily: "var(--font-body)", outline: "none",
+  };
+  const labelStyle: React.CSSProperties = {
+    fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-secondary)",
+    fontWeight: 500, marginBottom: "4px", display: "block",
+  };
+
+  return (
+    <div style={{
+      position: "fixed", top: 0, right: 0, bottom: 0, width: "320px",
+      background: "var(--surface-raised)", borderLeft: "1px solid var(--border-subtle)",
+      zIndex: 50, display: "flex", flexDirection: "column", overflow: "hidden",
+      boxShadow: "-4px 0 24px rgba(0,0,0,0.12)",
+    }}>
+      {/* Header */}
+      <div style={{ padding: "16px", borderBottom: "1px solid var(--border-subtle)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+        <span style={{ fontFamily: "var(--font-display)", fontSize: "16px", fontWeight: 600, color: "var(--text-primary)" }}>Paper Configuration</span>
+        <button onClick={onClose} style={{ width: "28px", height: "28px", border: "none", background: "none", cursor: "pointer", fontSize: "18px", color: "var(--text-tertiary)", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+      </div>
+
+      {/* Scrollable body */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: "14px" }}>
+
+        {/* Subject */}
+        <div>
+          <label style={labelStyle}>Subject</label>
+          <input value={subject} onChange={(e) => setSubject(e.target.value)}
+            placeholder="Mathematics / Physics / Chemistry…" style={inputStyle} />
+        </div>
+
+        {/* Board */}
+        <div>
+          <label style={labelStyle}>Board</label>
+          <select value={board} onChange={(e) => setBoard(e.target.value)} style={{ ...inputStyle, appearance: "none" }}>
+            {BOARDS.map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+        </div>
+
+        {/* Total Marks + Duration */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+          <div>
+            <label style={labelStyle}>Total Marks</label>
+            <input type="number" value={totalMarks} min={1}
+              onChange={(e) => setTotalMarks(parseInt(e.target.value) || 0)} style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Duration (min)</label>
+            <input type="number" value={duration} min={1}
+              onChange={(e) => setDuration(parseInt(e.target.value) || 0)} style={inputStyle} />
+          </div>
+        </div>
+
+        {/* Difficulty */}
+        <div>
+          <label style={labelStyle}>Difficulty</label>
+          <div style={{ display: "flex", border: "1px solid var(--border-default)", borderRadius: "8px", overflow: "hidden" }}>
+            {(["easy", "mixed", "hard"] as const).map((d) => (
+              <button key={d} onClick={() => setDifficulty(d)} style={{
+                flex: 1, height: "36px", border: "none", cursor: "pointer", fontSize: "12px",
+                fontFamily: "var(--font-body)", fontWeight: difficulty === d ? 600 : 400,
+                background: difficulty === d ? "var(--brand)" : "transparent",
+                color: difficulty === d ? "#fff" : "var(--text-secondary)",
+                textTransform: "capitalize", transition: "background 150ms, color 150ms",
+              }}>{d}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Bloom's Distribution */}
+        <div>
+          <label style={labelStyle}>Bloom's Distribution (%)</label>
+          <BloomSlider value={bloom} onChange={setBloom} />
+        </div>
+
+        {/* Instructions */}
+        <div>
+          <label style={labelStyle}>Instructions (optional)</label>
+          <textarea value={instructions} onChange={(e) => setInstructions(e.target.value)}
+            placeholder="All questions are compulsory…"
+            rows={2}
+            style={{ ...inputStyle, height: "auto", padding: "8px 12px", resize: "none" }} />
+        </div>
+
+        {/* Section Builder */}
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+            <label style={labelStyle}>Sections</label>
+            <button onClick={addSection} className="btn btn-secondary btn-sm" style={{ height: "28px", fontSize: "12px" }}>+ Add Section</button>
+          </div>
+
+          {sections.map((sec, idx) => (
+            <div key={idx} style={{ border: "1px solid var(--border-default)", borderRadius: "8px", padding: "10px", marginBottom: "8px", background: "var(--surface-base)" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "40px 1fr", gap: "6px", marginBottom: "6px", alignItems: "center" }}>
+                <input value={sec.label} maxLength={2}
+                  onChange={(e) => updateSection(idx, "label", e.target.value.toUpperCase())}
+                  style={{ ...inputStyle, textAlign: "center", fontWeight: 600 }} />
+                <select value={sec.question_type} onChange={(e) => updateSection(idx, "question_type", e.target.value)}
+                  style={{ ...inputStyle, appearance: "none" }}>
+                  {QUESTION_TYPES.map((t) => <option key={t} value={t}>{t.replace("_", " ").toUpperCase()}</option>)}
+                </select>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: "6px", alignItems: "center" }}>
+                <input type="number" min={0} value={sec.total_marks} placeholder="Marks"
+                  onChange={(e) => updateSection(idx, "total_marks", parseInt(e.target.value) || 0)}
+                  style={{ ...inputStyle, fontSize: "12px" }} />
+                <input type="number" min={1} value={sec.count} placeholder="Count"
+                  onChange={(e) => updateSection(idx, "count", parseInt(e.target.value) || 1)}
+                  style={{ ...inputStyle, fontSize: "12px" }} />
+                <button onClick={() => removeSection(idx)} style={{ width: "28px", height: "28px", border: "none", background: "none", cursor: "pointer", fontSize: "16px", color: "var(--error-text, #ef4444)" }}>×</button>
+              </div>
+              {sec.total_marks > 0 && sec.count > 0 && (
+                <div style={{ fontSize: "11px", color: "var(--text-tertiary)", marginTop: "4px" }}>
+                  {sec.total_marks % sec.count === 0
+                    ? `${sec.total_marks / sec.count} marks/question ✓`
+                    : `⚠ ${sec.total_marks} not divisible by ${sec.count}`}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* Live marks validation */}
+          <div style={{
+            padding: "8px 12px", borderRadius: "8px",
+            background: marksOk ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+            border: `1px solid ${marksOk ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`,
+            fontSize: "12px", color: marksOk ? "var(--success-text, #16a34a)" : "var(--error-text, #dc2626)",
+          }}>
+            Section marks: {sectionTotal}/{totalMarks} {marksOk ? "✓" : "⚠ Exceeds or doesn't match total!"}
+          </div>
+        </div>
+      </div>
+
+      {/* Generate button */}
+      <div style={{ padding: "16px", borderTop: "1px solid var(--border-subtle)", flexShrink: 0 }}>
+        {!canGenerate && subject.trim() === "" && (
+          <div style={{ fontSize: "12px", color: "var(--error-text, #dc2626)", marginBottom: "8px" }}>Enter a subject to generate the paper.</div>
+        )}
+        {!marksOk && (
+          <div style={{ fontSize: "12px", color: "var(--error-text, #dc2626)", marginBottom: "8px" }}>Section marks must add up to {totalMarks}.</div>
+        )}
+        <button onClick={handleGenerate} disabled={!canGenerate || generating}
+          className="btn btn-primary" style={{ width: "100%", height: "40px", fontSize: "14px", fontWeight: 600 }}>
+          {generating ? "Generating…" : "Generate Paper →"}
+        </button>
+      </div>
+    </div>
+  );
+}
