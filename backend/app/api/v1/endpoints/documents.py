@@ -1,11 +1,13 @@
 import uuid
 import re
+import hmac
 import hashlib
 import logging
 import os
+import time
 from typing import Optional, List, Any
 from pathlib import Path
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -323,6 +325,173 @@ async def head_document(
         status_code=200,
         headers={"X-Document-Status": str(doc.status.value if hasattr(doc.status, 'value') else doc.status)}
     )
+
+
+# ── 9-C6: Signed document access URL ─────────────────────────────────────────
+
+def _generate_signed_token(doc_id: str, user_id: str, expires_at: int) -> str:
+    """HMAC-SHA256 signed URL token. Expires in 15 minutes."""
+    message = f"{doc_id}:{user_id}:{expires_at}".encode()
+    secret = settings.AUTH_SECRET_KEY.encode()
+    return hmac.new(secret, message, hashlib.sha256).hexdigest()
+
+
+@router.get("/{document_id}/signed-url")
+async def get_signed_url(
+    document_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Return a 15-minute HMAC-signed URL for direct document access."""
+    try:
+        doc_uuid = uuid.UUID(document_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid Document ID format.")
+
+    effective_workspace = current_user.get("workspace_id", "general")
+    try:
+        ws_uuid = uuid.UUID(effective_workspace)
+    except (ValueError, AttributeError):
+        ws_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, effective_workspace)
+
+    stmt = select(Document).where(
+        Document.id == doc_uuid,
+        Document.owner_id == uuid.UUID(current_user["id"]),
+        Document.workspace_id == ws_uuid,
+    )
+    result = await db.execute(stmt)
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found or access denied.")
+
+    expires_at = int(time.time()) + 900  # 15 minutes
+    token = _generate_signed_token(document_id, current_user["id"], expires_at)
+    signed_url = f"/files/{document_id}?token={token}&expires={expires_at}"
+    return {"signed_url": signed_url, "expires_at": expires_at}
+
+
+@router.delete("/{document_id}")
+async def delete_document(
+    document_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Secure deletion: removes DB record, storage file, Qdrant vectors, Redis cache,
+    and referenced eval benchmark rows. Returns granular status for each step.
+    NEVER silently ignores vector deletion failures.
+    """
+    try:
+        doc_uuid = uuid.UUID(document_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid Document ID format.")
+
+    effective_workspace = current_user.get("workspace_id", "general")
+    try:
+        ws_uuid = uuid.UUID(effective_workspace)
+    except (ValueError, AttributeError):
+        ws_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, effective_workspace)
+
+    stmt = select(Document).where(
+        Document.id == doc_uuid,
+        Document.owner_id == uuid.UUID(current_user["id"]),
+        Document.workspace_id == ws_uuid,
+    )
+    result = await db.execute(stmt)
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found or access denied.")
+
+    storage_path = doc.storage_path
+    vectors_purged = False
+    cache_cleared = False
+    partial_failure: Optional[str] = None
+
+    # 1. Delete from DB
+    await db.delete(doc)
+
+    # 2. Delete referenced EvalBenchmarkQuery rows
+    try:
+        from app.models.eval_benchmark import EvalBenchmarkQuery
+        from sqlalchemy import delete as sa_delete
+        await db.execute(
+            sa_delete(EvalBenchmarkQuery).where(
+                EvalBenchmarkQuery.expected_doc_id == doc_uuid
+            )
+        )
+    except Exception as exc:
+        logger.warning("[delete_document] Failed to remove EvalBenchmarkQuery rows: %s", exc)
+
+    await db.commit()
+
+    # 3. Delete storage file
+    try:
+        local_file = Path(storage_path)
+        if local_file.exists():
+            local_file.unlink()
+    except Exception as exc:
+        logger.warning("[delete_document] Storage file deletion failed: %s", exc)
+
+    # 4. Delete Qdrant vectors (must not be silently ignored)
+    try:
+        from app.core.config import settings as _s
+        if _s.VECTOR_BACKEND == "qdrant":
+            from qdrant_client import QdrantClient
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            user_id_str = current_user["id"]
+            isolation_mode = getattr(_s, "VECTOR_ISOLATION_MODE", "user")
+            if isolation_mode == "organization":
+                org_id = current_user.get("organization_id", user_id_str)
+                collection = f"docuMind_org_{org_id}"
+            else:
+                collection = f"docuMind_{user_id_str}"
+            qclient = QdrantClient(host=_s.QDRANT_HOST, port=_s.QDRANT_PORT)
+            qclient.delete(
+                collection_name=collection,
+                points_selector=Filter(
+                    must=[FieldCondition(key="doc_id", match=MatchValue(value=str(doc_uuid)))]
+                ),
+            )
+        vectors_purged = True
+    except Exception as exc:
+        partial_failure = f"Vector deletion failed: {exc}"
+        logger.error("[delete_document] %s", partial_failure)
+
+    # 5. Purge Redis cache entries
+    try:
+        import aioredis
+        redis = await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+        uid = current_user["id"]
+        keys = await redis.keys(f"retrieval:uid_{uid}:*")
+        if keys:
+            await redis.delete(*keys)
+        await redis.close()
+        cache_cleared = True
+    except Exception as exc:
+        logger.warning("[delete_document] Redis cache purge failed: %s", exc)
+
+    # 6. Audit log
+    logger.info(
+        "[AUDIT] event=document_deleted doc_id=%s user_id=%s vectors_purged=%s ts=%s",
+        str(doc_uuid),
+        current_user["id"],
+        vectors_purged,
+        __import__("datetime").datetime.utcnow().isoformat(),
+    )
+
+    if partial_failure:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=207,
+            content={
+                "deleted": True,
+                "vectors_purged": False,
+                "cache_cleared": cache_cleared,
+                "warning": partial_failure,
+            },
+        )
+
+    return {"deleted": True, "vectors_purged": vectors_purged, "cache_cleared": cache_cleared}
 
 
 # TASK 4 — HEAD /documents/{id}/status (same headers as GET status, no body)

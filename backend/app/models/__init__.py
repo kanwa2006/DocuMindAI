@@ -13,3 +13,11 @@ from app.models.research import ResearchProject, ResearchPaper, ResearchFinding,
 from app.models.org import Organization, User, OrganizationUser
 from app.models.chat import ChatSession, ChatMessage
 from app.models.legal_analysis import LegalAnalysis, LegalAuditLog, ExtractionAudit
+# Addendum phase models
+from app.models.eval_benchmark import EvalBenchmarkQuery, EvalResult
+from app.models.correction import Correction, CorrectionNote
+# Phase 9-E: Workflow retention
+from app.models.saved_query_template import SavedQueryTemplate, Notification
+from app.models.workspace_template import ScheduledReport
+# Phase 9-F: Distribution + sharing
+from app.models.report_share import ReportShare, MessageNote

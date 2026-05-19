@@ -62,6 +62,29 @@ class Settings(BaseSettings):
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
 
+    # 9-C3: Tenant vector namespace isolation
+    # "user" — each user gets docuMind_{user_id}
+    # "organization" — each org gets docuMind_org_{org_id}
+    VECTOR_ISOLATION_MODE: str = "user"
+    ENABLE_ORG_ISOLATION: bool = False
+
+    # 9-B: Cost guard — per-workspace daily token budgets
+    TOKEN_LIMIT_GENERAL: int = 50000
+    TOKEN_LIMIT_LEGAL: int = 80000
+    TOKEN_LIMIT_FINANCE: int = 80000
+    TOKEN_LIMIT_HR: int = 60000
+    TOKEN_LIMIT_TEACHER: int = 40000
+    TOKEN_LIMIT_STUDENT: int = 40000
+    TOKEN_LIMIT_RESEARCH: int = 60000
+    SLOW_QUERY_THRESHOLD_MS: int = 8000
+    MAX_CHUNKS_PER_QUERY: int = 12
+    LARGE_DOC_PAGE_THRESHOLD: int = 200
+    TOKEN_COST_PER_MTK: float = 3.0  # estimated cost per 1M tokens (display only)
+
+    # 9-F: Report generation
+    DEPLOY_EVAL_SECRET: Optional[str] = None
+    EVAL_SLACK_WEBHOOK_URL: Optional[str] = None
+
     # Email / SMTP
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587

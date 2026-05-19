@@ -10,7 +10,7 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.telemetry import setup_telemetry
-from app.core.middleware import CSRFMiddleware
+from app.core.middleware import CSRFMiddleware, TenantContextMiddleware
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(CSRFMiddleware)
+app.add_middleware(TenantContextMiddleware)
 
 # Initialize OpenTelemetry and Prometheus Metrics
 setup_telemetry(app, is_worker=False)

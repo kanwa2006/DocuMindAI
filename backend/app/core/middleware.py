@@ -3,6 +3,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 import logging
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
 
 # FIX 0.5: Paths that must never be blocked by CSRF check.
@@ -56,3 +58,38 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
         return response
+
+
+class TenantContextMiddleware(BaseHTTPMiddleware):
+    """
+    9-C3: Attaches tenant_collection_name to request.state before each request.
+    The collection name is derived from VECTOR_ISOLATION_MODE + JWT claims.
+    This value CANNOT be overridden by user input.
+    Query endpoints MUST read request.state.collection_name for all vector calls.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        user_id = "anonymous"
+        org_id: str | None = None
+
+        token = request.cookies.get("token")
+        if token:
+            try:
+                import jwt as _jwt
+                claims = _jwt.decode(
+                    token,
+                    settings.AUTH_SECRET_KEY,
+                    algorithms=["HS256", "RS256"],
+                    options={"verify_signature": True},
+                )
+                user_id = claims.get("sub", "anonymous")
+                org_id = claims.get("organization_id")
+            except Exception:
+                pass
+
+        if settings.VECTOR_ISOLATION_MODE == "organization" and org_id:
+            request.state.collection_name = f"docuMind_org_{org_id}"
+        else:
+            request.state.collection_name = f"docuMind_{user_id}"
+
+        return await call_next(request)
