@@ -1,7 +1,11 @@
 import time
+import hashlib
+import json as json_module
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from typing import Any
 import json
 import asyncio
@@ -11,14 +15,60 @@ from app.schemas.query import QueryRequest, QueryResponse, EvidenceChunk, Tracin
 from app.services.grounding_service import GroundingService
 from app.services.llm_service import llm_service
 from app.services.retrieval_service import RetrievalService
+from app.models.chat import ChatMessage
 from app.core.auth import get_current_user
+from app.core.config import settings
 import uuid
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Task 4.7 — mandatory workspace disclaimers (backend appends as final SSE chunk)
+WORKSPACE_DISCLAIMERS = {
+    "legal": (
+        "\n\n---\n"
+        "⚠️ **Legal Disclaimer**: This analysis is AI-generated for "
+        "informational purposes only. It does not constitute legal advice. "
+        "Always consult a qualified legal professional before acting on "
+        "any information above."
+    ),
+    "finance": (
+        "\n\n---\n"
+        "⚠️ **Financial Disclaimer**: All figures are AI-extracted. "
+        "Verify all numbers against original source documents before "
+        "any financial, tax, or legal use."
+    ),
+}
+
+
+# ── Redis helpers (Task 4.9) — failures are silently ignored, never break request ──
+
+async def _get_cached_retrieval(cache_key: str) -> Any:
+    try:
+        import aioredis
+        redis = await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+        cached = await redis.get(cache_key)
+        await redis.close()
+        if cached:
+            return json_module.loads(cached)
+    except Exception:
+        pass
+    return None
+
+
+async def _set_cached_retrieval(cache_key: str, payload: Any, ttl: int = 300) -> None:
+    try:
+        import aioredis
+        redis = await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+        await redis.setex(cache_key, ttl, json_module.dumps(payload, default=str))
+        await redis.close()
+    except Exception:
+        pass
+
 
 @router.post("/search", response_model=QueryResponse)
 async def semantic_search(
-    request: QueryRequest, 
+    request: QueryRequest,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
@@ -30,15 +80,15 @@ async def semantic_search(
         top_k=request.top_k,
         similarity_threshold=request.similarity_threshold
     )
-    
+
     evidence = [EvidenceChunk(**c) for c in payload["results"]]
-    
+
     diagnostics = TracingDiagnostics(
         embedding_time_sec=payload["tracing"]["embedding_time_sec"],
         database_time_sec=payload["tracing"]["database_time_sec"],
         total_time_sec=payload["tracing"]["total_time_sec"]
     )
-    
+
     return QueryResponse(
         query=request.query,
         answer="[Search Only - Generation Bypassed]",
@@ -47,9 +97,10 @@ async def semantic_search(
         diagnostics=diagnostics
     )
 
+
 @router.post("/ask", response_model=QueryResponse)
 async def ask_question(
-    request: QueryRequest, 
+    request: QueryRequest,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
@@ -61,16 +112,16 @@ async def ask_question(
         final_top_k=request.top_k,
         similarity_threshold=request.similarity_threshold
     )
-    
+
     generation_payload = await llm_service.generate_answer(
         query=request.query,
         grounded_context=grounding_payload["grounded_context_str"]
     )
-    
+
     evidence = [EvidenceChunk(**c) for c in grounding_payload["evidence_metadata"]]
     tracing = grounding_payload["tracing"]
     total_time = tracing["total_grounding_time_sec"] + generation_payload["generation_time_sec"]
-    
+
     diagnostics = TracingDiagnostics(
         embedding_time_sec=tracing["retrieval_tracing"]["embedding_time_sec"],
         database_time_sec=tracing["retrieval_tracing"]["database_time_sec"],
@@ -81,7 +132,7 @@ async def ask_question(
         evidence_accepted=tracing["evidence_accepted"],
         estimated_tokens=tracing["estimated_tokens"]
     )
-    
+
     return QueryResponse(
         query=request.query,
         answer=generation_payload["answer"],
@@ -90,26 +141,78 @@ async def ask_question(
         diagnostics=diagnostics
     )
 
+
 @router.post("/stream")
 async def ask_question_stream(
-    request: QueryRequest, 
+    request: QueryRequest,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """SSE endpoint for live incremental token streaming and progress events."""
+
     async def event_generator():
         try:
-            # 1. Retrieval Phase Event
-            yield f"event: status\ndata: {json.dumps({'message': 'Retrieving semantic chunks...'})}\n\n"
-            
-            grounding_payload = await GroundingService.prepare_grounded_context(
-                db=db,
-                query=request.query,
-                workspace_id=uuid.UUID(current_user["workspace_id"]),
-                final_top_k=request.top_k,
-                similarity_threshold=request.similarity_threshold
+            workspace_type = (request.workspace_type or "general").lower().strip()
+
+            # Task 4.8 — workspace-specific retrieval config
+            ws_config = settings.WORKSPACE_RETRIEVAL_CONFIG.get(
+                workspace_type, settings.WORKSPACE_RETRIEVAL_CONFIG["general"]
             )
-            
+            effective_top_k = request.top_k if request.top_k != 5 else ws_config["top_k"]
+
+            # Task 4.3 — fetch last 8 messages for conversation history
+            conversation_history = []
+            if request.session_id:
+                try:
+                    sess_uuid = uuid.UUID(request.session_id)
+                    stmt = (
+                        select(ChatMessage)
+                        .where(ChatMessage.session_id == sess_uuid)
+                        .order_by(ChatMessage.created_at.desc())
+                        .limit(8)
+                    )
+                    result = await db.execute(stmt)
+                    recent_messages = list(reversed(result.scalars().all()))
+                    conversation_history = [
+                        {"role": msg.role, "content": msg.content}
+                        for msg in recent_messages
+                        if msg.role in ("user", "assistant")
+                    ]
+                    logger.info(
+                        f"[query/stream] Loaded {len(conversation_history)} history messages "
+                        f"for session {request.session_id}"
+                    )
+                except Exception as exc:
+                    logger.warning(f"[query/stream] Failed to load history: {exc}")
+
+            history_text = "\n".join([
+                f"{m['role'].upper()}: {m['content'][:300]}"
+                for m in conversation_history[-6:]
+            ])
+
+            # Task 4.9 — Redis retrieval cache key
+            doc_ids_str = str(current_user.get("workspace_id", ""))
+            query_hash = hashlib.sha256(
+                f"{workspace_type}:{request.query}:{doc_ids_str}".encode()
+            ).hexdigest()[:16]
+            cache_key = f"retrieval:{workspace_type}:{query_hash}"
+
+            # 1. Retrieval phase
+            yield f"event: status\ndata: {json.dumps({'message': 'Retrieving semantic chunks...'})}\n\n"
+
+            grounding_payload = await _get_cached_retrieval(cache_key)
+            if grounding_payload:
+                logger.info(f"[query/stream] Cache hit: {cache_key}")
+            else:
+                grounding_payload = await GroundingService.prepare_grounded_context(
+                    db=db,
+                    query=request.query,
+                    workspace_id=uuid.UUID(current_user["workspace_id"]),
+                    final_top_k=effective_top_k,
+                    similarity_threshold=request.similarity_threshold
+                )
+                await _set_cached_retrieval(cache_key, grounding_payload)
+
             # Send metadata immediately so frontend renders citations before generation finishes
             metadata = {
                 "confidence_score": grounding_payload["confidence_score"],
@@ -117,33 +220,46 @@ async def ask_question_stream(
                 "tracing": grounding_payload["tracing"]
             }
             yield f"event: metadata\ndata: {json.dumps(metadata)}\n\n"
-            
+
             grounded_context = grounding_payload["grounded_context_str"]
             if not grounded_context.strip():
                 yield f"event: token\ndata: {json.dumps({'token': 'I do not have sufficient evidence in your documents to answer this question.'})}\n\n"
             else:
                 yield f"event: status\ndata: {json.dumps({'message': 'Generating grounded response...'})}\n\n"
                 system_prompt = llm_service._build_system_prompt(grounded_context)
-                user_prompt = f"Question: {request.query}"
-                
+
+                # Task 4.3 — prepend conversation history to user prompt
+                if history_text:
+                    user_prompt = (
+                        f"Previous conversation:\n{history_text}\n\n---\n\n"
+                        f"Question: {request.query}"
+                    )
+                else:
+                    user_prompt = f"Question: {request.query}"
+
                 async for token in llm_service.provider.generate_stream(system_prompt, user_prompt):
                     yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"
                     # Micro-sleep allows ASGI to check for client disconnects
                     await asyncio.sleep(0.005)
-                    
+
+                # Task 4.7 — append workspace disclaimer as final chunk before done
+                disclaimer = WORKSPACE_DISCLAIMERS.get(workspace_type, "")
+                if disclaimer:
+                    yield f"event: token\ndata: {json.dumps({'token': disclaimer})}\n\n"
+
             yield f"event: done\ndata: {{}}\n\n"
-            
+
         except asyncio.CancelledError:
-            # Graceful cancellation if client drops
             raise
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+
 @router.post("/debug", response_model=QueryResponse)
 async def debug_retrieval(
-    request: QueryRequest, 
+    request: QueryRequest,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:

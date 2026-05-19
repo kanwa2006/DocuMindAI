@@ -207,14 +207,22 @@ export const askQuestionStream = async (
   onToken: (token: string) => void,
   onError: (err: string) => void,
   onDone: () => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  sessionId?: string,
+  workspaceType?: string
 ) => {
   try {
     const res = await apiFetch(`/query/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal,
-      body: JSON.stringify({ query, top_k: topK, similarity_threshold: 0.1 })
+      body: JSON.stringify({
+        query,
+        top_k: topK,
+        similarity_threshold: 0.1,
+        session_id: sessionId || null,
+        workspace_type: workspaceType || "general",
+      })
     });
 
     if (!res.ok) {
@@ -648,10 +656,130 @@ export const getChatMessages = async (sessionId: string, limit: number = 50, off
 
 export const createChatMessage = async (sessionId: string, role: string, content: string): Promise<ChatMessage> => {
   const res = await apiFetch(`/chats/${sessionId}/messages`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ role, content })
   });
-  if (!res.ok) throw new Error("Failed to send message");
+  if (!res.ok) throw new Error('Failed to send message');
   return res.json();
+};
+
+// ── TASK 3.2 — XHR Upload with Real Progress ──────────────────────────────────
+
+export interface UploadResult {
+  document_id: string;
+  filename: string;
+  storage_path?: string;
+  object_key?: string;
+  mime_type?: string;
+  size_bytes?: number;
+  file_hash?: string;
+}
+
+export const uploadDocumentWithProgress = (
+  file: File,
+  workspaceId: string,
+  onProgress: (pct: number) => void
+): Promise<UploadResult> => {
+  return new Promise(async (resolve, reject) => {
+    try {
+      // 1. Get presigned URL / local upload info
+      const preRes = await apiFetch(
+        `/documents/upload/presigned?filename=${encodeURIComponent(file.name)}&content_type=${encodeURIComponent(file.type || 'application/pdf')}&file_size=${file.size}&workspace_id=${encodeURIComponent(workspaceId)}`
+      );
+      if (!preRes.ok) { reject(new Error('Failed to get upload URL')); return; }
+      const presigned = await preRes.json();
+
+      if (presigned.provider === 'local') {
+        // Local multipart POST via XHR for real progress
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('workspace_id', presigned.workspace_id || workspaceId);
+
+        const xhr = new XMLHttpRequest();
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              const meta = JSON.parse(xhr.responseText);
+              resolve({ document_id: presigned.document_id, filename: file.name, ...meta });
+            } catch { reject(new Error('Invalid upload response')); }
+          } else {
+            try {
+              const err = JSON.parse(xhr.responseText);
+              reject(new Error(err.detail || `Upload failed: ${xhr.status}`));
+            } catch { reject(new Error(`Upload failed: ${xhr.status}`)); }
+          }
+        };
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.open('POST', `${API_BASE}/documents/upload/local`);
+        xhr.setRequestHeader('X-CSRF-Token', getCsrfToken());
+        xhr.withCredentials = true;
+        xhr.send(formData);
+      } else {
+        // S3 PUT via XHR
+        const xhr = new XMLHttpRequest();
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve({ document_id: presigned.document_id, filename: file.name, object_key: presigned.object_key });
+          } else {
+            reject(new Error(`S3 upload failed: ${xhr.status}`));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Network error during S3 upload'));
+        xhr.open('PUT', presigned.upload_url);
+        xhr.setRequestHeader('Content-Type', file.type || 'application/pdf');
+        xhr.send(file);
+      }
+    } catch (err: any) {
+      reject(err);
+    }
+  });
+};
+
+// ── TASK 3.3 — Document Status Polling ───────────────────────────────────────
+
+export const pollDocumentStatus = (
+  docId: string,
+  onStatusChange: (status: string) => void,
+  timeoutMs: number = 300000
+): (() => void) => {
+  let stopped = false;
+  let intervalId: ReturnType<typeof setInterval> | null = null;
+
+  const timeoutId = setTimeout(() => {
+    stopped = true;
+    if (intervalId) clearInterval(intervalId);
+    onStatusChange('timeout');
+  }, timeoutMs);
+
+  intervalId = setInterval(async () => {
+    if (stopped) return;
+    try {
+      const res = await apiFetch(`/documents/${docId}`, {});
+      if (!res.ok) return;
+      const doc = await res.json();
+      const status: string = typeof doc.status === 'string' ? doc.status : String(doc.status);
+      onStatusChange(status);
+      if (status === 'READY' || status === 'FAILED') {
+        stopped = true;
+        clearTimeout(timeoutId);
+        if (intervalId) clearInterval(intervalId);
+      }
+    } catch {
+      // transient network error — keep polling
+    }
+  }, 2000);
+
+  // Cleanup function
+  return () => {
+    stopped = true;
+    clearTimeout(timeoutId);
+    if (intervalId) clearInterval(intervalId);
+  };
 };

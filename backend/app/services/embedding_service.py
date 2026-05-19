@@ -20,10 +20,9 @@ class LocalEmbeddingProvider(BaseEmbeddingProvider):
 
     def __init__(self, model_name: str = None):
         model_name = model_name or self.MODEL_NAME
-        logger.info(f"[embedding] Loading model: {model_name}")
+        logger.info(f"[embedding] Using model: {model_name}")
         self.model = SentenceTransformer(model_name)
-        dims = self.model.get_sentence_embedding_dimension()
-        logger.info(f"[embedding] Model ready — {model_name} | dims={dims}")
+        logger.info(f"[embedding] Dimension: {self.model.get_sentence_embedding_dimension()}")
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         logger.info(f"[embedding] Embedding {len(texts)} chunks via {self.MODEL_NAME}")

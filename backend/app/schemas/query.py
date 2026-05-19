@@ -5,6 +5,8 @@ from uuid import UUID
 class QueryRequest(BaseModel):
     query: str
     workspace_id: Optional[UUID] = None
+    session_id: Optional[str] = None       # for conversation history lookup
+    workspace_type: Optional[str] = "general"  # for retrieval config + disclaimers
     top_k: int = 5
     similarity_threshold: float = 0.0
 

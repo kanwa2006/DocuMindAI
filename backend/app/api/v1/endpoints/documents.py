@@ -5,17 +5,18 @@ import logging
 import os
 from typing import Optional, List, Any
 from pathlib import Path
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.db.session import get_db
 from app.schemas.document import DocumentResponse
 from app.services.document_service import DocumentService
-from app.models.document import Document
+from app.models.document import Document, DocumentStatus
 from app.core.auth import get_current_user
 from app.core.config import settings
 from app.workers.tasks.document_tasks import process_document
+from app.services.extraction_router import route_extraction
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,10 @@ try:
 except Exception:
     _s3_client = None
 
-ALLOWED_MIMES = ["application/pdf"]
+ALLOWED_MIMES = [
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
+]
 
 
 class VerifyUploadRequest(BaseModel):
@@ -93,8 +97,29 @@ async def verify_upload(
     await db.commit()
     await db.refresh(new_doc)
 
-    # Trigger async OCR/extraction pipeline
-    process_document.delay(str(new_doc.id))
+    # TASK 3.7: Route via extraction_router before OCR queue
+    # Only attempt extraction for local files (S3 paths start with "workspaces/")
+    if not storage_path.startswith("workspaces/") and mime_type == "application/pdf":
+        try:
+            extraction = await route_extraction(storage_path)
+            if not extraction["needs_ocr"]:
+                # Native PDF — text extracted; skip OCR, set INDEXING status
+                new_doc.status = DocumentStatus.INDEXING
+                await db.commit()
+                await db.refresh(new_doc)
+                logger.info(
+                    f"[verify_upload] pymupdf4llm extraction OK for {request.filename} "
+                    f"({len(extraction.get('text', '') or '')} chars) — OCR skipped"
+                )
+            else:
+                # Scanned PDF — dispatch to Celery OCR task
+                process_document.delay(str(new_doc.id))
+        except Exception as exc:
+            logger.warning(f"[verify_upload] extraction_router error: {exc} — falling back to OCR")
+            process_document.delay(str(new_doc.id))
+    else:
+        # S3 path or non-PDF — dispatch OCR as before
+        process_document.delay(str(new_doc.id))
 
     return new_doc
 
@@ -262,3 +287,75 @@ async def get_document(
         raise HTTPException(status_code=404, detail="Document not found or access denied.")
 
     return doc
+
+
+# TASK 3.8 — HEAD /documents/{id} lightweight polling endpoint
+@router.head("/{document_id}")
+async def head_document(
+    document_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Lightweight polling endpoint. Returns status in X-Document-Status header."""
+    try:
+        doc_uuid = uuid.UUID(document_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid Document ID format.")
+
+    effective_workspace = current_user.get("workspace_id", "general")
+    try:
+        ws_uuid = uuid.UUID(effective_workspace)
+    except (ValueError, AttributeError):
+        ws_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, effective_workspace)
+
+    stmt = select(Document).where(
+        Document.id == doc_uuid,
+        Document.owner_id == uuid.UUID(current_user["id"]),
+        Document.workspace_id == ws_uuid
+    )
+    result = await db.execute(stmt)
+    doc = result.scalar_one_or_none()
+
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found or access denied.")
+
+    return Response(
+        status_code=200,
+        headers={"X-Document-Status": str(doc.status.value if hasattr(doc.status, 'value') else doc.status)}
+    )
+
+
+# TASK 4 — HEAD /documents/{id}/status (same headers as GET status, no body)
+@router.head("/{document_id}/status")
+async def head_document_status(
+    document_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Lightweight status poll. Returns X-Document-Status header with no body."""
+    try:
+        doc_uuid = uuid.UUID(document_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid Document ID format.")
+
+    effective_workspace = current_user.get("workspace_id", "general")
+    try:
+        ws_uuid = uuid.UUID(effective_workspace)
+    except (ValueError, AttributeError):
+        ws_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, effective_workspace)
+
+    stmt = select(Document).where(
+        Document.id == doc_uuid,
+        Document.owner_id == uuid.UUID(current_user["id"]),
+        Document.workspace_id == ws_uuid
+    )
+    result = await db.execute(stmt)
+    doc = result.scalar_one_or_none()
+
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found or access denied.")
+
+    return Response(
+        status_code=200,
+        headers={"X-Document-Status": str(doc.status.value if hasattr(doc.status, 'value') else doc.status)}
+    )

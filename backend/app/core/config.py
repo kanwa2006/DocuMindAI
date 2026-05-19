@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, model_validator
-from typing import Optional, List
+from typing import ClassVar, Optional, List, Dict, Any
 import os
 
 class Settings(BaseSettings):
@@ -73,6 +73,20 @@ class Settings(BaseSettings):
     OTEL_ENABLED: bool = True
     PROMETHEUS_ENABLED: bool = True
     LOG_LEVEL: str = "INFO"
+
+    # Reranker
+    RERANKER_PROVIDER: str = "local"
+
+    # Workspace-specific retrieval config (Task 4.8)
+    WORKSPACE_RETRIEVAL_CONFIG: ClassVar[Dict[str, Any]] = {
+        "exam":     {"top_k": 8,  "rerank_n": 5,  "chunk_pref": "medium"},
+        "hr":       {"top_k": 15, "rerank_n": 10, "chunk_pref": "small"},
+        "legal":    {"top_k": 6,  "rerank_n": 4,  "chunk_pref": "large"},
+        "finance":  {"top_k": 10, "rerank_n": 6,  "chunk_pref": "small"},
+        "research": {"top_k": 12, "rerank_n": 8,  "chunk_pref": "large"},
+        "study":    {"top_k": 8,  "rerank_n": 5,  "chunk_pref": "medium"},
+        "general":  {"top_k": 8,  "rerank_n": 5,  "chunk_pref": "medium"},
+    }
 
     @property
     def async_database_url(self) -> str:

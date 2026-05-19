@@ -6,6 +6,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import LogoutButton from "./LogoutButton";
 import { getChats, createChat, updateChat, deleteChat, ChatSession } from "@/lib/api";
+import { useOnboarding } from "@/hooks/useOnboarding";
+import OnboardingProgress from "./OnboardingProgress";
 
 // ─── Date grouping ────────────────────────────────────────────────────────────
 
@@ -182,6 +184,9 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; chat: ChatSession } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null);
   const [isMobile, setIsMobile] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [is401, setIs401] = useState(false);
+  const { isComplete, dismiss } = useOnboarding();
 
   const parentRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -216,17 +221,30 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
 
   // ─── Load chats ─────────────────────────────────────────────────────────────
   const loadChats = useCallback(async (overrideSearch?: string) => {
+    setLoadError(null);
+    setIs401(false);
     try {
       const q = overrideSearch !== undefined ? overrideSearch : searchQuery;
       const fetched = await getChats(workspaceType, 100, 0, q);
-      // Sort: pinned first, then by created_at DESC
       const sorted = [...fetched].sort((a, b) => {
         if (a.is_pinned !== b.is_pinned) return Number(b.is_pinned) - Number(a.is_pinned);
         return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
       });
       setChats(sorted);
-    } catch (err) {
-      console.error("Failed to load chats", err);
+    } catch (err: any) {
+      const status = err?.status ?? err?.response?.status ?? 0;
+      if (!navigator.onLine) {
+        setLoadError("No connection. Check your internet.");
+      } else if (status === 401 || err?.message?.includes("Session expired")) {
+        setIs401(true);
+        setLoadError("Session expired. Please sign in.");
+      } else if (status >= 500) {
+        setLoadError("Server error. Please try again.");
+      } else if (err?.name === "TimeoutError" || err?.code === "ECONNABORTED") {
+        setLoadError("Taking too long. Try refreshing.");
+      } else {
+        setLoadError("Couldn't load your chats.");
+      }
     }
   }, [workspaceType, searchQuery]);
 
@@ -390,6 +408,15 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
             <span style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-sm)", fontWeight: "var(--weight-semibold)" }}>New Chat</span>
           </button>
 
+          {/* Onboarding progress checklist */}
+          {!isComplete && (
+            <OnboardingProgress
+              documentsCount={0}
+              messagesCount={chats.length > 0 ? 1 : 0}
+              onDismiss={dismiss}
+            />
+          )}
+
           {/* Search */}
           <div style={{ position: "relative" }}>
             <span style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", fontSize: "12px", color: "var(--text-tertiary)" }}>🔍</span>
@@ -429,13 +456,47 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
 
         {/* ── MIDDLE SECTION (sessions list) ── */}
         <div ref={parentRef} style={{ flex: 1, overflowY: "auto", padding: "0 8px", minHeight: 0 }}>
-          {flatItems.length === 0 && (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "48px 16px", opacity: 0.5, textAlign: "center", gap: "8px" }}>
-              <span style={{ fontSize: "24px" }}>💬</span>
-              <div style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-xs)", fontWeight: "var(--weight-medium)", color: "var(--text-secondary)" }}>
-                {searchQuery ? "No results found." : "No chats yet."}
+          {/* Error state */}
+          {loadError && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "32px 16px", textAlign: "center", gap: "10px" }}>
+              <span style={{ fontSize: "22px" }}>⚠</span>
+              <div style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-xs)", color: "var(--text-secondary)", lineHeight: "var(--leading-relaxed)" }}>
+                {loadError}
               </div>
+              {is401 ? (
+                <a href="/login" style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-xs)", color: "var(--brand)", textDecoration: "none" }}>Sign in →</a>
+              ) : (
+                <button onClick={() => loadChats()} className="btn btn-ghost btn-sm" style={{ fontSize: "var(--text-xs)" }}>Retry</button>
+              )}
             </div>
+          )}
+
+          {/* Empty state (no chats / no search results) */}
+          {!loadError && flatItems.length === 0 && (
+            searchQuery ? (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "40px 16px", textAlign: "center", gap: "8px" }}>
+                <span style={{ fontSize: "28px", opacity: 0.4 }}>🔍</span>
+                <div style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>
+                  No sessions matching &ldquo;{searchQuery}&rdquo;
+                </div>
+                <button onClick={() => setSearchQuery("")} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--brand)", padding: 0 }}>
+                  Clear search
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 16px", textAlign: "center", gap: "10px" }}>
+                <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style={{ opacity: 0.25 }}>
+                  <rect x="6" y="8" width="20" height="26" rx="3" stroke="currentColor" strokeWidth="1.5"/>
+                  <rect x="14" y="4" width="20" height="26" rx="3" stroke="currentColor" strokeWidth="1.5"/>
+                  <line x1="11" y1="16" x2="21" y2="16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  <line x1="11" y1="21" x2="19" y2="21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+                <div style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>No chats yet.</div>
+                <button onClick={handleNewChat} className="btn btn-secondary btn-sm" style={{ fontSize: "var(--text-xs)", marginTop: "4px" }}>
+                  Start a new chat →
+                </button>
+              </div>
+            )
           )}
 
           <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, width: "100%", position: "relative" }}>

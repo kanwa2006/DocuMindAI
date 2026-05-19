@@ -10,6 +10,33 @@ class BaseRerankerProvider(ABC):
         """Abstract method to score the relevance of documents to a query."""
         pass
 
+class LocalCrossEncoder(BaseRerankerProvider):
+    _model = None  # singleton — loads once, reused forever
+
+    @classmethod
+    def get_model(cls):
+        if cls._model is None:
+            from sentence_transformers import CrossEncoder
+            # Downloads ~80MB on first run — expected and normal
+            cls._model = CrossEncoder(
+                "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                max_length=512
+            )
+        return cls._model
+
+    def rerank(self, query: str, documents: List[str]) -> List[float]:
+        model = self.get_model()
+        pairs = [[query, p[:512]] for p in documents]
+        scores = model.predict(pairs, batch_size=min(16, len(pairs)))
+        import numpy as np
+        min_s, max_s = scores.min(), scores.max()
+        if max_s > min_s:
+            normalized = (scores - min_s) / (max_s - min_s)
+        else:
+            normalized = np.ones_like(scores) * 0.5
+        return normalized.tolist()
+
+
 class DummyLocalReranker(BaseRerankerProvider):
     def rerank(self, query: str, documents: List[str]) -> List[float]:
         """
@@ -45,4 +72,14 @@ class RerankerService:
         reranked_results.sort(key=lambda x: x["rerank_score"], reverse=True)
         return reranked_results
 
-reranker_service = RerankerService()
+def _get_default_reranker() -> BaseRerankerProvider:
+    try:
+        from app.core.config import settings
+        if getattr(settings, "RERANKER_PROVIDER", "local") == "local":
+            return LocalCrossEncoder()
+    except Exception:
+        pass
+    return DummyLocalReranker()
+
+
+reranker_service = RerankerService(_get_default_reranker())

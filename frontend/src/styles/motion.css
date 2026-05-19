@@ -1,0 +1,112 @@
+/* ═══════════════════════════════════════════════════
+   DOCUMINDAI MOTION SYSTEM
+   Motion communicates state changes — never decorates.
+   ═══════════════════════════════════════════════════ */
+
+/* Accessibility — disable animations for sensitive users */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes fade-in     { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fade-out    { from { opacity: 1; } to { opacity: 0; } }
+
+@keyframes slide-up    { from { opacity: 0; transform: translateY(8px); }
+                         to   { opacity: 1; transform: translateY(0); } }
+@keyframes slide-down  { from { opacity: 0; transform: translateY(-8px); }
+                         to   { opacity: 1; transform: translateY(0); } }
+@keyframes slide-in-right  { from { opacity: 0; transform: translateX(24px); }
+                              to   { opacity: 1; transform: translateX(0); } }
+@keyframes slide-out-right { from { opacity: 1; transform: translateX(0); }
+                              to   { opacity: 0; transform: translateX(24px); } }
+@keyframes slide-in-left   { from { opacity: 0; transform: translateX(-16px); }
+                              to   { opacity: 1; transform: translateX(0); } }
+
+@keyframes scale-in    { from { opacity: 0; transform: scale(0.95); }
+                         to   { opacity: 1; transform: scale(1); } }
+@keyframes scale-in-bounce {
+  0%   { opacity: 0; transform: scale(0.90); }
+  70%  { transform: scale(1.02); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* Streaming text tokens */
+@keyframes token-appear { from { opacity: 0; } to { opacity: 1; } }
+.streaming-token { animation: token-appear var(--dur-fast) var(--ease-decel) both; }
+
+/* Streaming cursor blink */
+@keyframes cursor-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+.streaming-cursor::after {
+  content: "▍"; display: inline-block;
+  animation: cursor-blink 0.8s ease infinite;
+  color: var(--brand); margin-left: 1px;
+  font-size: 0.9em; vertical-align: -0.05em;
+}
+
+/* Upload progress shimmer */
+@keyframes progress-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.progress-shimmer {
+  background: linear-gradient(90deg,
+    var(--brand) 0%,
+    hsl(var(--brand-hue), var(--brand-sat), 75%) 50%,
+    var(--brand) 100%);
+  background-size: 200% 100%;
+  animation: progress-shimmer 1.5s linear infinite;
+}
+
+/* Skeleton loaders */
+@keyframes skeleton-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.skeleton {
+  background: var(--surface-hover);
+  border-radius: var(--radius-sm);
+  animation: skeleton-pulse 1.8s var(--ease-standard) infinite;
+}
+
+/* Panel slide (document preview) */
+@keyframes panel-slide-in  { from { opacity: 0; transform: translateX(100%); }
+                              to   { opacity: 1; transform: translateX(0); } }
+@keyframes panel-slide-out { from { opacity: 1; transform: translateX(0); }
+                              to   { opacity: 0; transform: translateX(100%); } }
+.panel-enter { animation: panel-slide-in  var(--dur-slow)   var(--ease-decel) both; }
+.panel-exit  { animation: panel-slide-out var(--dur-normal)  var(--ease-accel) both; }
+
+/* Dropdowns */
+.dropdown-enter { animation: scale-in var(--dur-normal) var(--ease-bounce) both;
+                  transform-origin: top center; }
+.dropdown-exit  { animation: fade-out var(--dur-fast) var(--ease-accel) both; }
+
+/* Messages */
+.message-enter  { animation: slide-up var(--dur-normal) var(--ease-decel) both; }
+
+/* Modals */
+.modal-backdrop-enter { animation: fade-in var(--dur-normal) var(--ease-standard) both; }
+.modal-content-enter  { animation: scale-in-bounce var(--dur-slow) var(--ease-bounce) both; }
+
+/* Toasts */
+.toast-enter { animation: slide-in-right var(--dur-normal) var(--ease-bounce) both; }
+.toast-exit  { animation: slide-out-right var(--dur-normal) var(--ease-accel) both; }
+
+/* Interactive elements */
+.interactive {
+  transition:
+    background-color var(--dur-fast) var(--ease-standard),
+    border-color     var(--dur-fast) var(--ease-standard),
+    color            var(--dur-fast) var(--ease-standard),
+    box-shadow       var(--dur-fast) var(--ease-standard),
+    opacity          var(--dur-fast) var(--ease-standard);
+}
+
+/* Card hover lift */
+.hover-lift {
+  transition:
+    transform var(--dur-normal) var(--ease-standard),
+    box-shadow var(--dur-normal) var(--ease-standard);
+}
+.hover-lift:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }

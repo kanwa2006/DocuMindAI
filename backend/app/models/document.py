@@ -10,6 +10,7 @@ class DocumentStatus(str, enum.Enum):
     UPLOADED = "UPLOADED"
     PROCESSING = "PROCESSING"
     EXTRACTED = "EXTRACTED"
+    INDEXING = "INDEXING"
     READY = "READY"
     FAILED = "FAILED"
 

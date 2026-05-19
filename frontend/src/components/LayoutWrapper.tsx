@@ -5,8 +5,11 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import Sidebar from "./Sidebar";
 import WorkspaceDropdown from "./WorkspaceDropdown";
+import { Logo, LogoMark } from "./Logo";
 import { useTheme } from "@/hooks/useTheme";
 import { logout } from "@/lib/api";
+import { useOnboarding } from "@/hooks/useOnboarding";
+import OnboardingTooltip from "./OnboardingTooltip";
 
 // ─── Profile Dropdown ─────────────────────────────────────────────────────────
 
@@ -95,6 +98,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const [showProfile, setShowProfile] = useState(false);
   const [currentWorkspace, setCurrentWorkspace] = useState("general");
   const profileRef = useRef<HTMLDivElement>(null);
+  const { currentStep, isComplete, advance, dismiss } = useOnboarding();
 
   const pathname = usePathname();
   const router = useRouter();
@@ -169,23 +173,13 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
             <Link
               href="/"
               id="navbar-logo"
-              style={{ display: "flex", alignItems: "center", gap: "8px", textDecoration: "none", opacity: 1, transition: "opacity var(--dur-fast) var(--ease-standard)" }}
+              style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", textDecoration: "none", opacity: 1, transition: "opacity var(--dur-fast) var(--ease-standard)" }}
               onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.8")}
               onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
               aria-label="DocuMindAI home"
             >
-              {/* LogoMark */}
-              <svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                <rect x="4" y="4" width="14" height="24" rx="3" fill="none" stroke="currentColor" strokeWidth="2" />
-                <path d="M4 4 C4 4 14 4 18 10 C22 16 18 28 18 28 L4 28 Z" fill="hsl(220 90% 60% / 0.15)" />
-                <circle cx="24" cy="8" r="4" fill="hsl(220, 90%, 60%)" />
-              </svg>
-              {/* Logo text */}
-              <span style={{ display: "inline-flex", alignItems: "baseline", gap: 0, userSelect: "none" }} aria-label="DocuMindAI">
-                <span style={{ fontFamily: "var(--font-display, Georgia, serif)", fontStyle: "italic", color: "var(--text-primary)", letterSpacing: "-0.01em", lineHeight: 1, fontSize: "1.125rem" }}>Docu</span>
-                <span style={{ fontFamily: "var(--font-body, sans-serif)", fontWeight: 600, color: "var(--brand)", letterSpacing: "0.025em", lineHeight: 1, fontSize: "1.125rem" }}>Mind</span>
-                <span style={{ fontFamily: "var(--font-body, sans-serif)", fontWeight: 500, color: "var(--text-tertiary)", fontSize: "0.6em", verticalAlign: "super", lineHeight: 1, letterSpacing: "0.1em" }}>AI</span>
-              </span>
+              <LogoMark size={24} />
+              <Logo size="sm" />
             </Link>
 
             {/* Sidebar toggle */}
@@ -244,7 +238,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
                 onClick={() => setShowProfile((p) => !p)}
                 style={{
                   width: "32px", height: "32px", borderRadius: "50%",
-                  background: "hsl(220, 90%, 60%)", color: "#fff",
+                  background: "var(--brand)", color: "#fff",
                   border: "none", cursor: "pointer", fontFamily: "var(--font-body)",
                   fontSize: "var(--text-xs)", fontWeight: "var(--weight-semibold)",
                   display: "flex", alignItems: "center", justifyContent: "center",
@@ -271,6 +265,20 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
           {children}
         </div>
       </div>
+
+      {/* Onboarding tooltip overlay (Steps 1-3) */}
+      {!isComplete && currentStep >= 1 && currentStep <= 3 && (
+        <OnboardingTooltip
+          step={currentStep as 1 | 2 | 3}
+          targetSelector={
+            currentStep === 1 ? "#workspace-dropdown" :
+            currentStep === 2 ? "#upload-trigger" :
+            "#chat-textarea"
+          }
+          onNext={advance}
+          onDismiss={dismiss}
+        />
+      )}
     </div>
   );
 }

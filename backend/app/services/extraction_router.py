@@ -4,6 +4,8 @@ Routes PDFs to the fastest available extraction method.
 Wraps stable systems — never modifies them.
 """
 import logging
+import asyncio
+from functools import partial
 from app.services.pdf_extractor import smart_extract
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,8 @@ async def route_extraction(pdf_path: str) -> dict:
             "quality": "high" | "pending"
         }
     """
-    result = smart_extract(pdf_path)
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(smart_extract, pdf_path))
 
     if result["method"] == "pymupdf4llm" and result["text"]:
         logger.info(
