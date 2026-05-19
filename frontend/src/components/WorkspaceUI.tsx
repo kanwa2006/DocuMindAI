@@ -14,6 +14,10 @@ import {
 import PaperConfigPanel from "./PaperConfigPanel";
 import PomodoroTimer from "./PomodoroTimer";
 import CandidateRankingsPanel from "./CandidateRankingsPanel";
+import FinanceRatioPanel from "./FinanceRatioPanel";
+import LegalRiskPanel from "./LegalRiskPanel";
+import ResearchCitationModal from "./ResearchCitationModal";
+import ResearchGapsPanel from "./ResearchGapsPanel";
 
 // ─── Workspace configuration (Phase 5) ───────────────────────────────────────
 
@@ -558,6 +562,16 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const [flashcardMode, setFlashcardMode] = useState(false);
   const [flashcardDecks, setFlashcardDecks] = useState<any[]>([]);
 
+  // ── Finance workspace state ───────────────────────────────────────────────
+  const [showRatioPanel, setShowRatioPanel] = useState(false);
+
+  // ── Legal workspace state ─────────────────────────────────────────────────
+  const [showLegalRisk, setShowLegalRisk] = useState(false);
+
+  // ── Research workspace state ──────────────────────────────────────────────
+  const [showCitationModal, setShowCitationModal] = useState(false);
+  const [showGapsPanel, setShowGapsPanel] = useState(false);
+
   // ── HR workspace state ────────────────────────────────────────────────────
   const [showRankings, setShowRankings] = useState(false);
   // Per-file progress: { [filename]: { progress: 0-100, status: "uploading"|"done"|"error" } }
@@ -800,6 +814,18 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
 
   // ── Handle workspace action button clicks ─────────────────────────────────
   const handleWorkspaceAction = useCallback(async (label: string) => {
+    if (workspaceType === "finance") {
+      if (label === "Ratios" || label === "Verify") {
+        setShowRatioPanel((v) => !v);
+        return;
+      }
+    }
+    if (workspaceType === "legal") {
+      if (label === "Risk Report" || label === "Risk Mode") {
+        setShowLegalRisk((v) => !v);
+        return;
+      }
+    }
     if (workspaceType === "exam") {
       if (label === "Generate Paper") { setShowPaperConfig(true); return; }
       if (label === "Answer Key") { setShowAnswerKey((v) => !v); return; }
@@ -807,6 +833,16 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     if (workspaceType === "hr") {
       if (label === "View Rankings") { setShowRankings(true); return; }
       if (label === "Batch Upload") { batchFileInputRef.current?.click(); return; }
+    }
+    if (workspaceType === "research") {
+      if (label === "Citation Mode" || label === "Export Citations") {
+        setShowCitationModal((v) => !v);
+        return;
+      }
+      if (label === "Find Gaps") {
+        setShowGapsPanel((v) => !v);
+        return;
+      }
     }
     if (workspaceType === "study") {
       if (label === "Pomodoro Timer") { setShowPomodoro((v) => !v); return; }
@@ -923,6 +959,47 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         />
       )}
 
+      {/* ── Finance Ratio Panel ── */}
+      {workspaceType === "finance" && showRatioPanel && (
+        <FinanceRatioPanel
+          documentIds={docs.filter((d) => d.status === "READY").map((d) => d.id)}
+          onClose={() => setShowRatioPanel(false)}
+        />
+      )}
+
+      {/* ── Legal Risk Panel ── */}
+      {workspaceType === "legal" && showLegalRisk && (
+        <LegalRiskPanel
+          contractId={null}
+          documentId={activeDoc?.id ?? null}
+          activeDocumentId={activeDoc?.id ?? null}
+          onClose={() => setShowLegalRisk(false)}
+          onFetchContracts={async () => {
+            try {
+              const res = await fetch(`${API_BASE}/api/v1/legal/contracts`, { credentials: "include" });
+              if (res.ok) return await res.json();
+            } catch { /* non-fatal */ }
+            return [];
+          }}
+        />
+      )}
+
+      {/* ── Research Citation Modal ── */}
+      {workspaceType === "research" && showCitationModal && (
+        <ResearchCitationModal
+          documentIds={docs.filter((d) => d.status === "READY").map((d) => d.id)}
+          onClose={() => setShowCitationModal(false)}
+        />
+      )}
+
+      {/* ── Research Gaps Panel ── */}
+      {workspaceType === "research" && showGapsPanel && (
+        <ResearchGapsPanel
+          documentIds={docs.filter((d) => d.status === "READY").map((d) => d.id)}
+          onClose={() => setShowGapsPanel(false)}
+        />
+      )}
+
       {/* ── Candidate Rankings Panel (HR workspace) ── */}
       {workspaceType === "hr" && showRankings && (
         <CandidateRankingsPanel onClose={() => setShowRankings(false)} />
@@ -938,6 +1015,23 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           className="hidden"
           onChange={handleBatchFileChange}
         />
+      )}
+
+      {/* ── Amber disclaimer banner — TOP of chat area — ALWAYS VISIBLE, NEVER DISMISSABLE ── */}
+      {(workspaceType === "legal" || workspaceType === "finance") && (
+        <div style={{
+          background: "var(--warning-bg, #fffbeb)",
+          borderBottom: "1px solid var(--warning-border, #fbbf24)",
+          padding: "9px 16px",
+          fontFamily: "var(--font-body)", fontSize: "12px",
+          color: "var(--warning-text, #92400e)",
+          flexShrink: 0,
+          lineHeight: "var(--leading-relaxed)",
+        }}>
+          {workspaceType === "legal"
+            ? "⚠ This analysis is AI-generated for informational purposes only. It does not constitute legal advice. Always consult a qualified legal professional."
+            : "⚠ All figures are AI-extracted. Verify all numbers against original source documents before any financial, tax, or legal use."}
+        </div>
       )}
 
       {/* ── Flashcard Mode overlay (Student workspace) ── */}
@@ -1153,7 +1247,11 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                 (action.label === "Answer Key" && showAnswerKey) ||
                 (action.label === "Flashcard Mode" && flashcardMode) ||
                 (action.label === "Pomodoro Timer" && showPomodoro) ||
-                (action.label === "View Rankings" && showRankings);
+                (action.label === "View Rankings" && showRankings) ||
+                ((action.label === "Ratios" || action.label === "Verify") && showRatioPanel) ||
+                ((action.label === "Risk Report" || action.label === "Risk Mode") && showLegalRisk) ||
+                ((action.label === "Citation Mode" || action.label === "Export Citations") && showCitationModal) ||
+                (action.label === "Find Gaps" && showGapsPanel);
               return (
                 <button
                   key={action.label}
@@ -1193,12 +1291,21 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           </div>
         )}
 
-        {/* Sticky disclaimer pill (legal / finance) */}
+        {/* Sticky disclaimer banner — bottom of workspace — ALWAYS VISIBLE, NEVER DISMISSABLE */}
         {isLegalOrFinance && (
-          <div style={{ marginTop: "8px", textAlign: "center" }}>
-            <span style={{ background: "var(--warning-bg)", color: "var(--warning-text)", border: "1px solid var(--warning-border)", borderRadius: "var(--radius-full)", padding: "4px 14px", fontFamily: "var(--font-body)", fontSize: "12px", display: "inline-block" }}>
-              ⚠ AI analysis — not {workspaceType === "legal" ? "legal" : "financial"} advice. Always verify with a professional.
-            </span>
+          <div style={{
+            marginTop: "8px",
+            background: "var(--warning-bg, #fffbeb)",
+            border: "1px solid var(--warning-border, #fbbf24)",
+            borderRadius: "8px",
+            padding: "7px 14px",
+            fontFamily: "var(--font-body)", fontSize: "12px",
+            color: "var(--warning-text, #92400e)",
+            lineHeight: "var(--leading-relaxed)",
+          }}>
+            {workspaceType === "legal"
+              ? "⚠ This analysis is AI-generated for informational purposes only. It does not constitute legal advice. Always consult a qualified legal professional."
+              : "⚠ All figures are AI-extracted. Verify all numbers against original source documents before any financial, tax, or legal use."}
           </div>
         )}
       </div>
