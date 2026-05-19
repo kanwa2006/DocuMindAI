@@ -31,6 +31,7 @@ class CandidateProfile(Base):
     education = Column(JSON, default=[])
     extracted_data = Column(JSON, nullable=True) # Full parsed JSON from LLM
     embedding = Column(Vector(1536), nullable=True) # PHASE 2: Semantic Candidate Search
+    stage = Column(String, default="applied")  # 6-H1: pipeline stage tracking
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -62,7 +63,9 @@ class JobMatch(Base):
     job_id = Column(UUID(as_uuid=True), ForeignKey("hr_job_roles.id", ondelete="CASCADE"), nullable=False)
     candidate_id = Column(UUID(as_uuid=True), ForeignKey("hr_candidates.id", ondelete="CASCADE"), nullable=False)
     workspace_id = Column(UUID(as_uuid=True), nullable=False, index=True)
-    fit_score = Column(Float, nullable=True) # 0.0 to 100.0
+    fit_score = Column(Float, nullable=True) # 0.0 to 100.0 — LLM-assigned ATS score
+    semantic_score = Column(Float, nullable=True) # 6-H2: cosine similarity score (0.0–1.0)
+    final_score = Column(Float, nullable=True) # 6-H2: 0.6*llm + 0.4*semantic*100 blended
     match_analysis = Column(JSON, nullable=True) # {"pros": [], "cons": [], "missing_skills": []}
     status = Column(String, default="NEW") # NEW, SHORTLISTED, REJECTED, INTERVIEW
     recruiter_notes = Column(String, nullable=True)
