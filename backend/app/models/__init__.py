@@ -12,3 +12,4 @@ from app.models.study import StudyNote, FlashcardDeck, Flashcard, QuizAttempt
 from app.models.research import ResearchProject, ResearchPaper, ResearchFinding, ContradictionReport
 from app.models.org import Organization, User, OrganizationUser
 from app.models.chat import ChatSession, ChatMessage
+from app.models.legal_analysis import LegalAnalysis, LegalAuditLog, ExtractionAudit
