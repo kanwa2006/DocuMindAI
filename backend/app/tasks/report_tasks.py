@@ -187,7 +187,7 @@ async def generate_session_report(
     """
     from sqlalchemy.future import select
     from app.models.chat import ChatSession, ChatMessage
-    from app.services.llm_service import get_llm_service
+    from app.services.llm_service import llm_service
 
     session_result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
     session = session_result.scalar_one_or_none()
@@ -227,7 +227,6 @@ async def generate_session_report(
     executive_summary = ""
     if sections.get("executive_summary") and qa_text:
         try:
-            llm = get_llm_service()
             # Hard cap: 200 output tokens as specified
             sys_prompt = (
                 "You are a professional document analyst writing executive summaries. "
@@ -238,7 +237,7 @@ async def generate_session_report(
                 "Focus on key findings only. Be factual and concise.\n\n"
                 f"{qa_text}"
             )
-            raw = await llm.generate(system_prompt=sys_prompt, user_prompt=user_prompt)
+            raw = await llm_service.generate(system_prompt=sys_prompt, user_prompt=user_prompt)
             # Truncate to ~200 tokens (≈800 chars as a safe proxy)
             executive_summary = raw.strip()[:800]
         except Exception as exc:

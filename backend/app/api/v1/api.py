@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     health, documents, query, export, benchmark, exams,
     hr, legal, finance, study, research, ws, auth, csrf, chats,
-    corrections, retention, reports,
+    corrections, retention, reports, billing,
 )
 
 api_router = APIRouter()
@@ -26,3 +26,5 @@ api_router.include_router(corrections.router, prefix="/corrections", tags=["corr
 api_router.include_router(retention.router, tags=["retention"])
 # Phase 9-F: Distribution (reports, share links, message notes, doc naming)
 api_router.include_router(reports.router, tags=["reports"])
+# Phase 10: Billing / trial status
+api_router.include_router(billing.router, prefix="/billing", tags=["billing"])

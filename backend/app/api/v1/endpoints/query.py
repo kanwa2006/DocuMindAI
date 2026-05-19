@@ -16,8 +16,10 @@ from app.services.grounding_service import GroundingService
 from app.services.llm_service import llm_service
 from app.services.retrieval_service import RetrievalService
 from app.models.chat import ChatMessage
+from app.models.org import User
 from app.core.auth import get_current_user
 from app.core.config import settings
+from app.core.trial_enforcement import check_and_increment_trial
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -152,6 +154,24 @@ async def ask_question_stream(
 
     async def event_generator():
         try:
+            # Phase 10 — email verification gate
+            user_id = str(current_user["id"])
+            user_row = await db.execute(select(User).where(User.id == user_id))
+            user_obj = user_row.scalar_one_or_none()
+            if user_obj and not user_obj.email_verified:
+                yield f"event: error\ndata: {json.dumps({'detail': 'email_not_verified', 'message': 'Please verify your email first.'})}\n\n"
+                return
+
+            # Phase 10 — trial quota check (raises HTTP 402 if exhausted)
+            trial_status = await check_and_increment_trial(user_id=user_id, db=db)
+
+            # Emit trial_status as first SSE event so frontend can update counter
+            if trial_status["plan"] == "trial":
+                yield (
+                    f"event: trial_status\n"
+                    f"data: {json.dumps({'queries_used': trial_status['queries_used'], 'queries_remaining': trial_status['queries_remaining']})}\n\n"
+                )
+
             workspace_type = (request.workspace_type or "general").lower().strip()
 
             # Task 4.8 — workspace-specific retrieval config

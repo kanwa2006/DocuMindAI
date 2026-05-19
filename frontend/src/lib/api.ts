@@ -209,7 +209,8 @@ export const askQuestionStream = async (
   onDone: () => void,
   signal?: AbortSignal,
   sessionId?: string,
-  workspaceType?: string
+  workspaceType?: string,
+  onTrialStatus?: (status: { queriesUsed: number; queriesRemaining: number }) => void,
 ) => {
   try {
     const res = await apiFetch(`/query/stream`, {
@@ -226,6 +227,16 @@ export const askQuestionStream = async (
     });
 
     if (!res.ok) {
+      // Phase 10 — trial exhausted: dispatch event so UpgradeModal appears
+      if (res.status === 402) {
+        const detail = await res.json().catch(() => ({}));
+        if (detail?.detail?.error === "trial_exhausted") {
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("trial:exhausted"));
+          }
+          return;
+        }
+      }
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || "Stream failed");
     }
@@ -235,6 +246,7 @@ export const askQuestionStream = async (
 
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
+    let lastTrialStatus: { queriesUsed: number; queriesRemaining: number } | null = null;
 
     while (true) {
       const { value, done } = await reader.read();
@@ -261,10 +273,21 @@ export const askQuestionStream = async (
           onMetadata(JSON.parse(data));
         } else if (event === "token") {
           onToken(JSON.parse(data).token);
+        } else if (event === "trial_status") {
+          const ts = JSON.parse(data) as { queries_used: number; queries_remaining: number };
+          lastTrialStatus = { queriesUsed: ts.queries_used, queriesRemaining: ts.queries_remaining };
+          onTrialStatus?.(lastTrialStatus);
         } else if (event === "error") {
-          onError(JSON.parse(data).detail);
+          const parsed = JSON.parse(data);
+          onError(parsed.detail || parsed.message || "Error");
         } else if (event === "done") {
           onDone();
+          // Phase 10 — show upgrade modal 500ms AFTER the last (5th) query response renders
+          if (lastTrialStatus && lastTrialStatus.queriesRemaining === 0 && typeof window !== "undefined") {
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent("trial:exhausted"));
+            }, 500);
+          }
         }
       }
     }
@@ -661,6 +684,87 @@ export const createChatMessage = async (sessionId: string, role: string, content
     body: JSON.stringify({ role, content })
   });
   if (!res.ok) throw new Error('Failed to send message');
+  return res.json();
+};
+
+// ── Phase 10 — Registration & Email Verification ─────────────────────────────
+
+export interface RegisterPayload {
+  email: string;
+  password: string;
+  full_name?: string;
+}
+
+export const register = async (payload: RegisterPayload): Promise<{ success: boolean; user_id: string; message: string }> => {
+  const res = await apiFetch("/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const detail = err.detail;
+    if (typeof detail === "object" && detail?.error === "email_exists") {
+      throw new Error("An account with this email already exists.");
+    }
+    throw new Error(typeof detail === "string" ? detail : "Registration failed.");
+  }
+  return res.json();
+};
+
+export const verifyEmail = async (otp: string): Promise<{ success: boolean; message: string }> => {
+  const res = await apiFetch("/auth/verify-email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ otp }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Verification failed.");
+  }
+  return res.json();
+};
+
+export const resendVerificationEmail = async (): Promise<{ success: boolean; message: string }> => {
+  const res = await apiFetch("/auth/verify-email/resend", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to resend verification.");
+  }
+  return res.json();
+};
+
+// ── Phase 10 — Billing ────────────────────────────────────────────────────────
+
+export interface BillingStatus {
+  plan: string;
+  trial_queries_used: number;
+  trial_limit: number;
+  queries_remaining: number | null;
+  email_verified: boolean;
+  subscribed_at: string | null;
+  subscription_ends_at: string | null;
+}
+
+export const getBillingStatus = async (): Promise<BillingStatus> => {
+  const res = await apiFetch("/billing/status", {});
+  if (!res.ok) throw new Error("Failed to load billing status");
+  return res.json();
+};
+
+export const upgradePlan = async (
+  plan: "professional" | "business" | "enterprise" = "professional",
+  billing_cycle: "monthly" | "annual" = "monthly"
+): Promise<{ success: boolean; plan: string; message: string }> => {
+  const res = await apiFetch("/billing/upgrade", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ plan, billing_cycle }),
+  });
+  if (!res.ok) throw new Error("Upgrade failed");
   return res.json();
 };
 

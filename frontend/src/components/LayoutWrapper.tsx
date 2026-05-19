@@ -10,6 +10,9 @@ import { useTheme } from "@/hooks/useTheme";
 import { logout } from "@/lib/api";
 import { useOnboarding } from "@/hooks/useOnboarding";
 import OnboardingTooltip from "./OnboardingTooltip";
+import { TrialProvider, useTrialStore } from "@/lib/store/trialStore";
+import TrialPill from "./TrialPill";
+import UpgradeModal from "./UpgradeModal";
 
 // ─── Profile Dropdown ─────────────────────────────────────────────────────────
 
@@ -94,6 +97,15 @@ function ThemeIcon({ theme }: { theme: string }) {
 // ─── LayoutWrapper ────────────────────────────────────────────────────────────
 
 export default function LayoutWrapper({ children }: { children: React.ReactNode }) {
+  return (
+    <TrialProvider>
+      <LayoutWrapperInner>{children}</LayoutWrapperInner>
+    </TrialProvider>
+  );
+}
+
+function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
+  const { plan, queriesUsed, queriesRemaining, showUpgradeModal, upgradeTrigger, openUpgradeModal, closeUpgradeModal, setTrialStatus } = useTrialStore();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
   const [currentWorkspace, setCurrentWorkspace] = useState("general");
@@ -105,7 +117,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const searchParams = useSearchParams();
   const { theme, setTheme } = useTheme();
 
-  // Restore sidebar state from localStorage on mount
+  // Restore sidebar state from localStorage on mount + load billing status
   useEffect(() => {
     if (typeof window === "undefined") return;
     const saved = localStorage.getItem("sidebar_open");
@@ -116,7 +128,23 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
       const lastWorkspace = localStorage.getItem("lastActiveWorkspace");
       if (lastWorkspace && lastWorkspace !== "/") router.replace(lastWorkspace);
     }
+
+    // Load billing status to initialise trial counter
+    import("@/lib/api").then(({ getBillingStatus }) => {
+      getBillingStatus().then((status) => {
+        if (status.plan === "trial" && typeof status.trial_queries_used === "number") {
+          setTrialStatus(status.trial_queries_used, status.queries_remaining ?? 0);
+        }
+      }).catch(() => {});
+    });
   }, []);
+
+  // Listen for trial:exhausted (fired by api.ts on HTTP 402)
+  useEffect(() => {
+    const handler = () => openUpgradeModal("limit_reached");
+    window.addEventListener("trial:exhausted", handler);
+    return () => window.removeEventListener("trial:exhausted", handler);
+  }, [openUpgradeModal]);
 
   const toggleTheme = useCallback(() => {
     setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark");
@@ -224,6 +252,16 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
               </svg>
             </button>
 
+            {/* Trial pill — visible only on free trial */}
+            {plan === "trial" && (
+              <TrialPill
+                queriesUsed={queriesUsed}
+                queriesRemaining={queriesRemaining}
+                trialLimit={5}
+                onClick={() => openUpgradeModal("user_click")}
+              />
+            )}
+
             {/* Dark/Light toggle */}
             <button
               id="navbar-theme-toggle"
@@ -281,6 +319,14 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
           }
           onNext={advance}
           onDismiss={dismiss}
+        />
+      )}
+
+      {/* Upgrade modal — shown after trial exhaustion or user click */}
+      {showUpgradeModal && (
+        <UpgradeModal
+          trigger={upgradeTrigger}
+          onClose={upgradeTrigger !== "limit_reached" ? closeUpgradeModal : undefined}
         />
       )}
     </div>

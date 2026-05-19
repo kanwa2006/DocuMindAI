@@ -1,15 +1,21 @@
 import os
+import random
+import string
+import smtplib
 import logging
 from datetime import datetime, timedelta
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import update as sa_update
 
 from app.db.session import get_db
 from app.models.org import User
-from app.core.security import verify_password, create_access_token
+from app.core.security import verify_password, create_access_token, hash_password
 from app.core.config import settings
 from app.core.auth import get_current_user
 
@@ -216,3 +222,226 @@ async def end_impersonation(
     )
     response.delete_cookie(key="token", httponly=True, secure=IS_PRODUCTION, samesite="strict", path="/")
     return {"message": "Impersonation ended. Please log in again."}
+
+
+# ── Registration ──────────────────────────────────────────────────────────────
+
+BLOCKED_DOMAINS = [
+    "mailinator.com", "guerrillamail.com", "10minutemail.com",
+    "throwam.com", "yopmail.com", "temp-mail.org", "fakeinbox.com",
+]
+
+IP_REG_LIMIT = 3       # max registrations per IP per hour
+IP_REG_WINDOW = 3600   # seconds
+
+
+async def _get_redis():
+    try:
+        import aioredis
+        return await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+    except Exception:
+        return None
+
+
+async def _check_ip_rate_limit(ip: str) -> None:
+    redis = await _get_redis()
+    if not redis:
+        return
+    try:
+        key = f"reg_ip:{ip}"
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, IP_REG_WINDOW)
+        if count > IP_REG_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many registration attempts from this IP. Try again in 1 hour.",
+            )
+    finally:
+        await redis.close()
+
+
+async def _store_email_otp(user_id: str, otp: str) -> None:
+    redis = await _get_redis()
+    if not redis:
+        return
+    try:
+        await redis.setex(f"email_otp:{user_id}", 600, otp)
+    finally:
+        await redis.close()
+
+
+async def _get_email_otp(user_id: str) -> str | None:
+    redis = await _get_redis()
+    if not redis:
+        return None
+    try:
+        return await redis.get(f"email_otp:{user_id}")
+    finally:
+        await redis.close()
+
+
+async def _delete_email_otp(user_id: str) -> None:
+    redis = await _get_redis()
+    if not redis:
+        return
+    try:
+        await redis.delete(f"email_otp:{user_id}")
+    finally:
+        await redis.close()
+
+
+def _send_otp_email(to_email: str, otp: str) -> None:
+    """Send OTP via SMTP. Silently logs on failure — never blocks registration."""
+    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
+        logger.warning("[auth] SMTP not configured — skipping OTP email")
+        return
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "DocuMindAI — Verify your email"
+        msg["From"] = settings.EMAIL_FROM or settings.SMTP_USER
+        msg["To"] = to_email
+
+        body = (
+            f"Your DocuMindAI verification code is:\n\n"
+            f"  {otp}\n\n"
+            f"This code expires in 10 minutes.\n"
+            f"If you did not register, ignore this email."
+        )
+        msg.attach(MIMEText(body, "plain"))
+
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(settings.SMTP_USER, [to_email], msg.as_string())
+    except Exception as exc:
+        logger.error("[auth] Failed to send OTP email to %s: %s", to_email, exc)
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    full_name: str | None = None
+
+
+class VerifyEmailRequest(BaseModel):
+    otp: str
+
+
+@router.post("/register", status_code=201)
+async def register(
+    request: Request,
+    body: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Create a new trial account.
+    Abuse guards: disposable-domain block, duplicate-email check, IP rate limit.
+    After success, a 6-digit OTP is sent to the registered email (10-min TTL).
+    """
+    email = body.email.strip().lower()
+
+    # 1. Block disposable domains
+    domain = email.split("@")[-1] if "@" in email else ""
+    if domain in BLOCKED_DOMAINS:
+        raise HTTPException(status_code=400, detail="Disposable emails not allowed")
+
+    # 2. Check duplicate trial email
+    stmt = select(User).where(User.email == email)
+    result = await db.execute(stmt)
+    existing = result.scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail={"error": "email_exists", "message": "An account with this email already exists."})
+
+    # 3. IP rate limit (best-effort — failure is non-blocking)
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+    client_ip = client_ip.split(",")[0].strip()
+    await _check_ip_rate_limit(client_ip)
+
+    # 4. Create user
+    new_user = User(
+        email=email,
+        hashed_password=hash_password(body.password),
+        full_name=body.full_name,
+        workspace_id="general",
+        is_active=True,
+        plan="trial",
+        trial_queries_used=0,
+        trial_started_at=datetime.utcnow(),
+        email_verified=False,
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+
+    # 5. Generate OTP, store in Redis, send email
+    otp = "".join(random.choices(string.digits, k=6))
+    await _store_email_otp(str(new_user.id), otp)
+    _send_otp_email(email, otp)
+
+    logger.info("[auth] New trial registration: user_id=%s email=REDACTED", new_user.id)
+    return {
+        "success": True,
+        "user_id": str(new_user.id),
+        "message": "Account created. Check your email for the verification code.",
+    }
+
+
+@router.post("/verify-email")
+async def verify_email(
+    body: VerifyEmailRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Verify the 6-digit OTP sent after registration.
+    Sets email_verified = True on success.
+    """
+    user_id = current_user["id"]
+    stored_otp = await _get_email_otp(user_id)
+
+    if not stored_otp:
+        raise HTTPException(status_code=400, detail="Verification code expired or not found. Request a new one.")
+
+    if body.otp.strip() != stored_otp:
+        raise HTTPException(status_code=400, detail="Incorrect verification code.")
+
+    await db.execute(
+        sa_update(User).where(User.id == user_id).values(email_verified=True)
+    )
+    await db.commit()
+    await _delete_email_otp(user_id)
+
+    return {"success": True, "message": "Email verified successfully."}
+
+
+@router.post("/verify-email/resend")
+async def resend_verification_email(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Re-generate and resend the OTP. Rate-limit is Redis TTL (10 min)."""
+    user_id = current_user["id"]
+
+    # Don't let already-verified users resend
+    stmt = select(User).where(User.id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.email_verified:
+        return {"success": True, "message": "Email is already verified."}
+
+    # Check if an unexpired OTP already exists — avoid flooding
+    existing = await _get_email_otp(user_id)
+    if existing:
+        raise HTTPException(
+            status_code=429,
+            detail="A verification code was already sent. Please wait 10 minutes before requesting a new one.",
+        )
+
+    otp = "".join(random.choices(string.digits, k=6))
+    await _store_email_otp(user_id, otp)
+    _send_otp_email(user.email, otp)
+    return {"success": True, "message": "Verification code resent."}

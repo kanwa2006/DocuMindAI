@@ -316,7 +316,7 @@ async def suggest_document_name(
     Returns {suggested_name: str | null}.
     """
     from app.models.document import Document
-    from app.services.llm_service import get_llm_service
+    from app.services.llm_service import llm_service
 
     uid = uuid.UUID(current_user["id"])
     doc = await db.get(Document, uuid.UUID(document_id))
@@ -329,7 +329,6 @@ async def suggest_document_name(
         return {"suggested_name": None}
 
     try:
-        llm = get_llm_service()
         prompt = (
             "What is this document? Respond with ONLY a short filename "
             "(max 50 chars, no extension, use underscores). "
@@ -337,7 +336,7 @@ async def suggest_document_name(
             "Employment_Contract_Senior_Engineer\n\n"
             f"{sample}"
         )
-        suggested = await llm.generate(system_prompt="You are a document naming assistant.", user_prompt=prompt)
+        suggested = await llm_service.generate(system_prompt="You are a document naming assistant.", user_prompt=prompt)
         suggested = suggested.strip().replace(" ", "_")[:50]
     except Exception as exc:
         logger.warning("Name suggestion LLM call failed: %s", exc)

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, func, ForeignKey, Boolean
+from sqlalchemy import Column, String, DateTime, func, ForeignKey, Boolean, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.db.base import Base
@@ -24,6 +24,16 @@ class User(Base):
     workspace_id = Column(String(50), nullable=True, default="general")
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Phase 10 — trial / billing plan
+    plan = Column(String(50), nullable=False, default="trial")
+    trial_queries_used = Column(Integer, nullable=False, default=0)
+    trial_started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    subscribed_at = Column(DateTime, nullable=True)
+    subscription_ends_at = Column(DateTime, nullable=True)
+
+    # Phase 10 — email verification
+    email_verified = Column(Boolean, nullable=False, default=False)
 
     # FIX 0.6: roles relationship — auth.py reads [r.role for r in user.roles]
     roles = relationship(
