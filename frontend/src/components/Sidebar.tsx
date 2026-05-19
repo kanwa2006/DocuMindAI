@@ -150,16 +150,21 @@ function DeleteConfirmModal({ chatTitle, onConfirm, onCancel }: { chatTitle: str
         display: "flex", alignItems: "center", justifyContent: "center", padding: "16px",
       }}
       className="modal-backdrop-enter"
+      aria-hidden="true"
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-modal-title"
         style={{
           background: "var(--surface-overlay)", border: "1px solid var(--border-default)",
           borderRadius: "var(--radius-2xl)", boxShadow: "var(--shadow-2xl)", width: "100%", maxWidth: "360px",
           padding: "24px",
         }}
         className="modal-content-enter"
+        onClick={(e) => e.stopPropagation()}
       >
-        <h2 style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-base)", fontWeight: "var(--weight-semibold)", color: "var(--text-primary)", margin: "0 0 8px" }}>
+        <h2 id="delete-modal-title" style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-base)", fontWeight: "var(--weight-semibold)", color: "var(--text-primary)", margin: "0 0 8px" }}>
           Delete Chat?
         </h2>
         <p style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 20px" }}>
@@ -378,6 +383,7 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
       )}
 
       <nav
+        aria-label="Chat history"
         className={`sidebar ${isOpen ? "" : "collapsed"}`}
         style={{
           position: isMobile ? "fixed" : "sticky",
@@ -448,8 +454,11 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery("")}
+                aria-label="Clear search"
                 style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-tertiary)", fontSize: "14px", padding: "2px", lineHeight: 1 }}
-              >✕</button>
+              >
+                <span aria-hidden="true">✕</span>
+              </button>
             )}
           </div>
         </div>
@@ -575,11 +584,12 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
                         onClick={(e) => { e.stopPropagation(); openContextMenu(e, chat); }}
                         style={{ flexShrink: 0, width: "28px", height: "28px", display: "flex", alignItems: "center", justifyContent: "center", background: "none", border: "none", borderRadius: "var(--radius-md)", cursor: "pointer", color: "var(--text-tertiary)", opacity: 0, transition: "opacity var(--dur-fast) var(--ease-standard)", }}
                         className="chat-menu-btn"
+                        aria-label={`Options for ${chat.title}`}
                         title="More options"
                         onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.background = "var(--surface-hover)"; }}
                         onMouseLeave={(e) => { e.currentTarget.style.opacity = "0"; e.currentTarget.style.background = "none"; }}
                       >
-                        ⋯
+                        <span aria-hidden="true">⋯</span>
                       </button>
                     )}
                   </div>

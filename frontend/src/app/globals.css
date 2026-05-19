@@ -59,3 +59,35 @@ body {
   color: var(--text-primary);
   font-family: var(--font-body);
 }
+
+/* ── FOCUS VISIBLE (WCAG 2.1 AA) ── */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* ── SKIP LINK ── */
+.skip-link {
+  position: absolute;
+  top: -48px;
+  left: 0;
+  background: var(--brand);
+  color: #fff;
+  padding: 8px 16px;
+  z-index: 9999;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  border-radius: 0 0 var(--radius-md) 0;
+  transition: top 150ms var(--ease-decel);
+}
+.skip-link:focus-visible {
+  top: 0;
+  outline: none;
+}
+
+/* ── SPINNER ── */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

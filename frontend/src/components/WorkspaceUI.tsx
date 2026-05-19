@@ -397,14 +397,25 @@ const MemoizedMessage = memo(({
 
       {/* Actions row (hover) */}
       <div style={{ display: "flex", gap: "4px", marginTop: "8px", opacity: hovered ? 1 : 0, transition: "opacity 100ms" }}>
-        <button className="btn btn-ghost btn-sm" style={{ height: "28px" }}
+        <button
+          className="btn btn-ghost btn-sm"
+          aria-label="Copy response to clipboard"
+          style={{ height: "28px" }}
           onClick={() => { navigator.clipboard.writeText(textContent); setCopyDone(true); setTimeout(() => setCopyDone(false), 2000); toast.success("Copied"); }}
-        >{copyDone ? "✓" : "📋"} Copy</button>
+        >
+          <span aria-hidden="true">{copyDone ? "✓" : "📋"}</span> Copy
+        </button>
         {isLastAI && !isStreaming && (
-          <button className="btn btn-ghost btn-sm" style={{ height: "28px" }} onClick={onRegenerate}>🔄 Regenerate</button>
+          <button className="btn btn-ghost btn-sm" aria-label="Regenerate response" style={{ height: "28px" }} onClick={onRegenerate}>
+            <span aria-hidden="true">🔄</span> Regenerate
+          </button>
         )}
-        <button className="btn btn-ghost btn-sm" style={{ height: "28px" }} onClick={() => toast.success("Thanks for the feedback!")}>👍 Helpful</button>
-        <button className="btn btn-ghost btn-sm" style={{ height: "28px" }} onClick={() => toast("Noted — we'll improve.", { icon: "👎" })}>👎 Not Helpful</button>
+        <button className="btn btn-ghost btn-sm" aria-label="Mark response as helpful" style={{ height: "28px" }} onClick={() => toast.success("Thanks for the feedback!")}>
+          <span aria-hidden="true">👍</span> Helpful
+        </button>
+        <button className="btn btn-ghost btn-sm" aria-label="Mark response as not helpful" style={{ height: "28px" }} onClick={() => toast("Noted — we'll improve.", { icon: "👎" })}>
+          <span aria-hidden="true">👎</span> Not Helpful
+        </button>
       </div>
 
       {/* Follow-up suggestion chips (Task 4.10) */}
@@ -1061,7 +1072,12 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           </div>
         )}
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px", paddingBottom: "40px" }}>
+        <div
+          role="log"
+          aria-label="Chat messages"
+          aria-live="polite"
+          style={{ display: "flex", flexDirection: "column", gap: "16px", paddingBottom: "40px" }}
+        >
           {/* History messages */}
           {history.map((msg, idx) => (
             <MemoizedMessage
@@ -1086,7 +1102,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                 </div>
               </div>
 
-              <div style={{ paddingBottom: "8px" }}>
+              <div aria-live="polite" aria-atomic="false" style={{ paddingBottom: "8px" }}>
                 {/* AI label */}
                 <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
                   <div style={{ width: "16px", height: "16px", borderRadius: "4px", background: "var(--brand)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: "10px", fontWeight: 700 }}>D</div>
@@ -1151,13 +1167,19 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
             <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.07em" }}>Documents</span>
           </div>
           <div style={{ display: "flex", gap: "10px", overflowX: "auto", paddingBottom: "4px" }}>
-            <div id="upload-trigger" onClick={handleUploadClick}
+            <div
+              id="upload-trigger"
+              role="button"
+              tabIndex={0}
+              aria-label="Upload document"
+              onClick={handleUploadClick}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleUploadClick(); } }}
               style={{ flexShrink: 0, width: "116px", height: "80px", border: `2px dashed var(--border-default)`, borderRadius: "10px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "border-color 100ms, background 100ms",
                 animation: docs.length === 0 ? "bounce 1.5s ease-in-out 2" : "none" }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; (e.currentTarget as HTMLElement).style.background = "var(--brand-ghost)"; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.background = ""; }}
             >
-              <span style={{ fontSize: "20px", marginBottom: "4px" }}>+</span>
+              <span aria-hidden="true" style={{ fontSize: "20px", marginBottom: "4px" }}>+</span>
               <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-tertiary)" }}>Upload</span>
             </div>
             <input type="file" className="hidden" accept=".pdf,.docx" ref={fileInputRef} onChange={handleFileChange} />
@@ -1186,6 +1208,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
               ref={textareaRef}
               value={query}
               rows={1}
+              aria-label="Message input"
               onChange={handleTextareaChange}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -1200,16 +1223,20 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
             />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
               <div style={{ display: "flex", gap: "4px" }}>
-                <button type="button" onClick={handleUploadClick} className="btn-icon btn-ghost" style={{ width: "32px", height: "32px" }} title="Attach file">📎</button>
+                <button type="button" onClick={handleUploadClick} className="btn-icon btn-ghost" aria-label="Attach file" style={{ width: "32px", height: "32px" }} title="Attach file">
+                  <span aria-hidden="true">📎</span>
+                </button>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 {query.length > 3200 && (
                   <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-tertiary)" }}>{query.length} / 4000</span>
                 )}
                 {isStreaming ? (
-                  <button type="button" onClick={handleStopGenerating} className="btn btn-secondary btn-sm" style={{ height: "36px" }}>⏹ Stop</button>
+                  <button type="button" onClick={handleStopGenerating} className="btn btn-secondary btn-sm" aria-label="Stop generating" style={{ height: "36px" }}>
+                    <span aria-hidden="true">⏹</span> Stop
+                  </button>
                 ) : (
-                  <button type="submit" disabled={!query.trim() || loading} className="btn btn-primary" style={{ height: "36px", minWidth: "64px" }}>Send</button>
+                  <button type="submit" disabled={!query.trim() || loading} className="btn btn-primary" aria-label="Send message" style={{ height: "36px", minWidth: "64px" }}>Send</button>
                 )}
               </div>
             </div>

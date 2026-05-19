@@ -86,9 +86,9 @@ function ProfileDropdown({ user, onClose }: { user: { name: string; email: strin
 // ─── Theme icon ───────────────────────────────────────────────────────────────
 
 function ThemeIcon({ theme }: { theme: string }) {
-  if (theme === "dark") return <span style={{ fontSize: "16px" }}>☀️</span>;
-  if (theme === "light") return <span style={{ fontSize: "16px" }}>🌙</span>;
-  return <span style={{ fontSize: "16px" }}>💻</span>;
+  if (theme === "dark") return <span style={{ fontSize: "16px" }} aria-hidden="true">☀️</span>;
+  if (theme === "light") return <span style={{ fontSize: "16px" }} aria-hidden="true">🌙</span>;
+  return <span style={{ fontSize: "16px" }} aria-hidden="true">💻</span>;
 }
 
 // ─── LayoutWrapper ────────────────────────────────────────────────────────────
@@ -187,6 +187,8 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
               id="sidebar-toggle"
               onClick={() => setIsSidebarOpen((o) => !o)}
               className="btn-icon btn-ghost interactive"
+              aria-label="Toggle sidebar"
+              aria-expanded={isSidebarOpen}
               title={`Toggle sidebar (${navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+B)`}
               style={{ display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px" }}
             >
@@ -214,9 +216,10 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
               id="navbar-share"
               onClick={handleShare}
               className="btn-icon btn-ghost interactive"
+              aria-label="Copy share link"
               title="Share current session"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8" /><polyline points="16 6 12 2 8 6" /><line x1="12" y1="2" x2="12" y2="15" />
               </svg>
             </button>
@@ -226,6 +229,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
               id="navbar-theme-toggle"
               onClick={toggleTheme}
               className="btn-icon btn-ghost interactive"
+              aria-label={theme === "dark" ? "Switch to light mode" : theme === "light" ? "Switch to system mode" : "Switch to dark mode"}
               title={theme === "dark" ? "Switch to light mode" : theme === "light" ? "Switch to system" : "Switch to dark mode"}
             >
               <ThemeIcon theme={theme} />
@@ -261,9 +265,9 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
         </header>
 
         {/* PAGE CONTENT */}
-        <div style={{ flex: 1, overflow: "auto" }}>
+        <main id="main" role="main" style={{ flex: 1, overflow: "auto" }}>
           {children}
-        </div>
+        </main>
       </div>
 
       {/* Onboarding tooltip overlay (Steps 1-3) */}
