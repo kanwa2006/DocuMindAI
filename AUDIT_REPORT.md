@@ -348,4 +348,49 @@ Safe to delete in a follow-up commit:
 
 `export_service.py` deletion needs one more pass to confirm no external scripts or tests import it.
 
+## STEP 14 — Category E hardening — complete
+
+**E1 — CSRF wiring:**
+- Verified: `CSRFMiddleware` is added in `main.py` (line 121); `/csrf-token` endpoint in `endpoints/csrf.py` issues a 32-byte hex token bound to a cookie; double-submit-cookie validation runs on POST/PUT/DELETE/PATCH.
+- **Bug fix**: STEP 7 added `/auth/forgot-password` and `/auth/reset-password` but did not register them in `CSRF_EXEMPT_PATHS`. Since users hit these *before* they have a session (no CSRF cookie), every reset attempt was returning 403. Added both paths to `CSRF_EXEMPT_PATHS` in `middleware.py`.
+
+**E2 — Rate limiting:**
+- Found `core/rate_limiter.py` was an empty stub. The slowapi `Limiter` was being constructed inline in `main.py` (`limiter = Limiter(key_func=get_remote_address)`) and registered on `app.state.limiter`, but **zero endpoints used the `@limiter.limit(…)` decorator** — the entire infrastructure was dead-loaded.
+- Created `backend/app/core/rate_limiter.py` exporting a singleton `limiter = Limiter(key_func=get_remote_address)`.
+- Updated `backend/app/main.py` to import the shared instance instead of constructing its own.
+- Applied limits in `backend/app/api/v1/endpoints/auth.py`:
+  - `POST /auth/login` — `5/minute` per IP (credential-stuffing brake).
+  - `POST /auth/forgot-password` — `3/minute` per IP.
+  - `POST /auth/reset-password` — `10/hour` per IP.
+  - Each decorated handler now takes `request: Request` as required by slowapi.
+- `/query/stream` (E2 mentioned 30/min) and `/documents/upload` (10/min) **not yet decorated** — query is SSE so naive per-request decorators would shut down legitimate streamers; upload would need a streaming-aware key. Documented in KNOWN_REMAINING_ISSUES.md as a focused follow-up.
+
+**E3 — JSON logging:**
+- `core/json_logger.py` was also an empty stub. Wrote a real `JSONFormatter` that emits one line of JSON per record with `ts`, `level`, `logger`, `msg`, plus correlation IDs (`request_id`, `user_id`, `workspace_id` if attached to the record). PII (email / phone / SSN) is redacted in the `msg` field via `app.utils.pii_redactor.redact_pii`.
+- `core/logging.py` `setup_logging()` now branches on `ENVIRONMENT`: dev uses the previous human-readable text format; prod (`ENVIRONMENT=production`) uses the JSON formatter. Pre-existing handlers are detached on import so dev reloads don't double-attach.
+
+**E4 — Telemetry:**
+- Verified: `core/telemetry.py` initialises OpenTelemetry with `ConsoleSpanExporter` and a Prometheus metrics exporter mounted at `/metrics`. The docstring already notes that the console exporter should be swapped for OTLP in production. **No change made** — the source comment is the contract.
+- FastAPI auto-instrumentation captures URLs but slowapi-style Authorization headers are not in the default span attributes. No secrets leak under the default config.
+
+**E5 — Sentry:**
+- Verified: `main.py:61` calls `sentry_sdk.init` conditional on `settings.SENTRY_DSN`. `send_default_pii=False`. `before_send` strips `request.data` / `request.body` before posting events. **No change.**
+- Source maps upload is a frontend Sentry concern — `next.config.ts` is the right place; no changes here.
+
+**E6 — Alembic heads:**
+- Parsed `alembic/versions/*.py`: 39 migrations, **single head** (`f2a3b4c5d6e7_repair_create_bookmarks.py`). DAG is clean. Past merge revisions are present and load correctly. **No change.**
+
+**E7 — Email verification:**
+- Backend route `POST /auth/verify-email` exists and flips `email_verified=True`. Pre-existing `EmailVerificationScreen.tsx` renders inline inside `/register` after submit.
+- **Added**: `frontend/src/app/verify-email/page.tsx` — a standalone page that takes `?email=…` from the query string and renders `EmailVerificationScreen`. If `email` is absent, shows a short fallback that points the user back to `/register`. Wrapped in `<Suspense>` to satisfy `useSearchParams` SSR rules.
+- `LayoutWrapper.tsx` `isAuthPage` list extended to include `/verify-email` so the chrome (sidebar/header) stays hidden during verification.
+
+**E8 — CORS:**
+- Verified: `config.py:10` defines `CORS_ORIGINS: List[str] = ["http://localhost:3000"]`. `main.py:90` mounts CORSMiddleware with `allow_origins=settings.CORS_ORIGINS`, `allow_credentials=True`. Production override via env var (`CORS_ORIGINS='["https://app.documindai.com"]'`) supported by pydantic-settings. **No change.**
+
+**Could regress:**
+- Adding `Request` to the `login` / `forgot-password` / `reset-password` handler signatures alters FastAPI's dependency injection ordering slightly — slowapi requires it to be a *positional* parameter (no Depends). FastAPI tolerates this; verified by importing the module and inspecting `inspect.signature`.
+- JSON-only prod logs will break any log scraper that expected the previous format. Easy migration: scrapers should parse one JSON line per record from stdout.
+- `/verify-email` page added without a corresponding link in the marketing nav. Users land there only via direct URL or a deep-link from the verification email.
+
 (further steps will append below as they are completed)

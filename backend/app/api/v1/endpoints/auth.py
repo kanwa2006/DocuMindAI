@@ -20,6 +20,7 @@ from app.models.org import User
 from app.core.security import verify_password, create_access_token, hash_password
 from app.core.config import settings
 from app.core.auth import get_current_user
+from app.core.rate_limiter import limiter
 
 logger = logging.getLogger("audit.auth")
 router = APIRouter()
@@ -28,7 +29,9 @@ router = APIRouter()
 IS_PRODUCTION = os.getenv("ENVIRONMENT", "development") == "production"
 
 @router.post("/login")
+@limiter.limit("5/minute")
 async def login(
+    request: Request,
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db)
@@ -36,6 +39,7 @@ async def login(
     """
     Authenticates user and returns HTTP-Only cookie.
     secure=False in dev (HTTP localhost), secure=True in production (HTTPS).
+    Rate-limited to 5/minute per IP to slow credential-stuffing.
     """
     stmt = select(User).where(User.email == form_data.username)
     result = await db.execute(stmt)
@@ -502,7 +506,9 @@ def _send_reset_email(to_email: str, token: str) -> None:
 
 
 @router.post("/forgot-password", status_code=202)
+@limiter.limit("3/minute")
 async def forgot_password(
+    request: Request,
     body: ForgotPasswordRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -526,7 +532,9 @@ async def forgot_password(
 
 
 @router.post("/reset-password")
+@limiter.limit("10/hour")
 async def reset_password(
+    request: Request,
     body: ResetPasswordRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:

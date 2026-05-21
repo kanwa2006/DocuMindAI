@@ -247,7 +247,7 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
     localStorage.setItem("lastActiveWorkspace", `/${wsId}`);
   };
 
-  const isAuthPage = ["/login", "/register", "/forgot-password", "/reset-password"].includes(pathname);
+  const isAuthPage = ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email"].includes(pathname);
   const isMarketingPage = ["/", "/pricing", "/privacy", "/terms"].includes(pathname);
   const isSharedPage = pathname.startsWith("/shared/");
 

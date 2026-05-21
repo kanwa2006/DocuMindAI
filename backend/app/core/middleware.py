@@ -23,6 +23,9 @@ CSRF_EXEMPT_PATHS = {
     "/api/v1/auth/refresh",
     "/api/v1/auth/send-phone-otp",
     "/api/v1/auth/verify-phone",
+    # STEP 7 added password-reset; both are pre-auth so the client cannot have a CSRF cookie yet.
+    "/api/v1/auth/forgot-password",
+    "/api/v1/auth/reset-password",
     "/api/v1/csrf/csrf-token",
     "/api/v1/csrf-token",
     "/api/v1/health",

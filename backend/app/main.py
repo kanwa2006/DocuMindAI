@@ -6,9 +6,11 @@ from sentry_sdk.integrations.celery import CeleryIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+# STEP 14 — shared limiter is defined in core/rate_limiter.py so endpoint decorators
+# can import the same instance that main.py registers with the app.
+from app.core.rate_limiter import limiter
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.v1.api import api_router
 from app.core.config import settings
@@ -75,8 +77,6 @@ if settings.SENTRY_DSN:
             }} if event else None
         ),
     )
-
-limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
