@@ -393,4 +393,88 @@ Safe to delete in a follow-up commit:
 - JSON-only prod logs will break any log scraper that expected the previous format. Easy migration: scrapers should parse one JSON line per record from stdout.
 - `/verify-email` page added without a corresponding link in the marketing nav. Users land there only via direct URL or a deep-link from the verification email.
 
-(further steps will append below as they are completed)
+## STEP 15 — Final regression sweep + Phase 3 deliverables — complete
+
+### Smoke checks performed
+
+- **Backend imports**: `python -c "from app import main as _main"` from `backend/` — clean. Gemini key bridge reports `21` keys available; OpenTelemetry initialises; CSRF + rate-limiter + JSON logger import without error.
+- **Backend module signatures**: `inspect.signature(auth.login / forgot_password / reset_password)` show `request: Request` first, confirming slowapi decoration takes effect.
+- **Backend constants**: `TRIAL_QUERY_LIMIT == 10`. CSRF exempts include `/auth/forgot-password` and `/auth/reset-password`.
+- **Frontend TypeScript**: `npx tsc --noEmit` reports no errors in the source tree. (One pre-existing `.next/types/validator.ts` artefact references a non-existent `src/app/page.js`; it's a stale build cache, not source code, and was already present before this session.)
+- **Alembic graph**: single head (`f2a3b4c5d6e7_repair_create_bookmarks.py`).
+
+### Files added this session
+
+- `frontend/src/app/verify-email/page.tsx` (STEP 14)
+- `backend/app/core/rate_limiter.py` (STEP 14 — replaced empty stub)
+- `backend/app/core/json_logger.py` (STEP 14 — replaced empty stub)
+- `KNOWN_REMAINING_ISSUES.md` (STEP 15)
+
+### Files modified this session (24 total, none in CLAUDE.md STABLE list)
+
+Backend:
+- `backend/app/core/trial_enforcement.py` (5 → 10)
+- `backend/app/core/middleware.py` (CSRF exempts)
+- `backend/app/core/logging.py` (JSON in prod)
+- `backend/app/main.py` (limiter import refactor)
+- `backend/app/api/v1/endpoints/query.py` (no-doc mode)
+- `backend/app/api/v1/endpoints/auth.py` (rate limits)
+
+Frontend:
+- `frontend/src/app/(marketing)/page.tsx` (C1, C4, BF6)
+- `frontend/src/app/(marketing)/layout.tsx` (C12)
+- `frontend/src/app/login/page.tsx` (C5, BF10)
+- `frontend/src/app/sessions/page.tsx` (C11)
+- `frontend/src/app/bookmarks/page.tsx` (C11)
+- `frontend/src/styles/tokens.css` (C7)
+- `frontend/src/styles/typography.css` (C8)
+- `frontend/src/lib/api.ts` (C10 type)
+- `frontend/src/lib/store/trialStore.tsx` (C2)
+- `frontend/src/hooks/useOnboarding.ts` (BF5)
+- `frontend/src/components/LayoutWrapper.tsx` (C2, C3, C7, E7)
+- `frontend/src/components/WorkspaceUI.tsx` (C6, C9, C10, C12)
+- `frontend/src/components/WorkspaceDropdown.tsx` (C7)
+- `frontend/src/components/UpgradeModal.tsx` (C3, BF9)
+- `frontend/src/components/TrialPill.tsx` (C2, BF1)
+- `frontend/src/components/OnboardingProgress.tsx` (BF5)
+- `frontend/src/components/FeedbackModal.tsx` (BF4)
+
+### Regression risk inventory (re-summary)
+
+- Trial pill momentarily shows `Free trial — 0 left` until billing/status resolves on mount. One-shot.
+- History (`ChatMessage`) does not store `mode`; reopening a past chat won't paint the `Ungrounded` pill. Documented in KNOWN_REMAINING_ISSUES.md.
+- `/query/stream` and `/documents/upload` are not yet rate-limited (SSE/stream-aware key needed). Documented.
+- Brand colour kept at azure-blue (spec asked for indigo-600). Documented.
+- Dead-code deletions proposed, not performed. Documented.
+
+### What works now (vs. session-1 entry conditions)
+
+| Surface | Session-0 state | Now |
+|---|---|---|
+| `/general`, `/hr`, `/legal`, `/finance`, `/study`, `/research`, `/exam` | 404 on every chat list + every API call due to A1 doubled-prefix | Works |
+| `/dashboard`, `/sessions`, `/billing`, `/pricing`, `/forgot-password`, `/reset-password`, `/verify-email` | 404 (routes did not exist) | All exist |
+| Workspace chats (slug "general") | 5xx because `uuid.UUID("general")` throws | Resolved via `core/workspace.resolve_workspace_id` |
+| Celery worker on Windows | Crashed every 5 min on `WinError 5` (prefork on Windows) | `run_worker_windows.ps1 --pool=solo` script |
+| Gemini API keys | 21 keys in `.env` silently ignored → DummyLLMProvider | Bridge in `main.py` promotes plural → numbered; loud ERROR banner if 0 keys |
+| PDF viewer | SSR crash on `DOMMatrix is not defined` | next/dynamic + ssr:false |
+| Sidebar toggle | Persisted on load only — closing didn't stick | Saves on every toggle; Ctrl+B shortcut |
+| Share button | `__toastSuccess` was undefined → no feedback | Uses `react-hot-toast` |
+| Login OAuth buttons | Disabled + "Coming soon" tooltip floating | Removed |
+| Free-trial counter | Hard-coded `5` in store/pill/modal; numbers diverged | Single source = backend `TRIAL_QUERY_LIMIT = 10`; frontend reads `trial_limit` from `/billing/status` |
+| Pricing copy | Hero shouted "10 queries free"; "Razorpay billing" in feature lists; modal price tag inconsistent | "Start free. No credit card."; "UPI & card payments"; ₹799/mo annual, ₹999/mo monthly, ₹2,999/mo enterprise everywhere |
+| Disclaimer banners | Two non-dismissable banners on legal/finance, taking ~80px combined | One dismissable banner, persisted per workspace |
+| Chat input | Big "Upload / Paste Text" tile row above input bar | Tile row gone; paperclip + clipboard buttons inside input bar; docs render as removable chips |
+| Asking with no document | Cannon-text reply: "I do not have sufficient evidence…" | General-knowledge answer with `Ungrounded` pill + softened banner |
+| Empty states | "Couldn't load your chats / Retry" appeared on every fresh login (A1) | Friendly empty states with illustration + button |
+| Mobile | Sidebar drawer existed; chat input sticky; modal X tap target was a 4-px square in a 20-px char | Sidebar drawer + chat input sticky + safe-area-inset + UpgradeModal X widened to 44 px |
+| CSRF | `/auth/forgot-password` / `/auth/reset-password` blocked by CSRF middleware → 403 always | Both paths in `CSRF_EXEMPT_PATHS` |
+| Rate limiting | `Limiter` constructed but no endpoint decorated | `/auth/login` 5/min, `/forgot-password` 3/min, `/reset-password` 10/h |
+| JSON logging | `core/json_logger.py` was an empty stub | Real formatter, PII-redacting, JSON in prod |
+
+### What the user should test first (top 3)
+
+1. **Trial flow** — register a new user, confirm the pill says `Free trial — 10 left`, ask 10 questions in `/general`, confirm the 11th opens the UpgradeModal and the X button closes it.
+2. **No-document mode** — open `/general` without uploading, ask "What is the capital of India?" — should answer with the `Ungrounded` chip and the C10 banner.
+3. **Disclaimer dismissal** — open `/legal`, dismiss the amber disclaimer, reload — it should stay gone for `/legal` but reappear on a fresh `/finance` visit.
+
+(audit complete — session 2)
