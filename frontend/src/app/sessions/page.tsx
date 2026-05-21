@@ -49,14 +49,21 @@ export default function SessionsPage() {
       </p>
 
       {loading && <p style={{ color: "var(--text-tertiary)" }}>Loading…</p>}
-      {error && <p style={{ color: "var(--accent-danger, #b91c1c)" }}>{error}</p>}
+      {error && (
+        <div role="alert" style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 16px", textAlign: "center", gap: "10px", color: "var(--error-text)" }}>
+          <span style={{ fontSize: "32px" }}>⚠</span>
+          <p style={{ margin: 0 }}>{error}</p>
+          <button onClick={() => window.location.reload()} className="btn btn-ghost btn-sm">Retry</button>
+        </div>
+      )}
       {!loading && !error && sessions.length === 0 && (
-        <p style={{ color: "var(--text-tertiary)" }}>
-          No chats yet.{" "}
-          <Link href="/general" style={{ color: "var(--accent)" }}>
-            Start a new one →
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "64px 16px", textAlign: "center", gap: "12px" }}>
+          <span style={{ fontSize: "40px", opacity: 0.35 }}>💬</span>
+          <p style={{ color: "var(--text-secondary)", margin: 0 }}>No chats yet.</p>
+          <Link href="/general" className="btn btn-secondary btn-sm" style={{ textDecoration: "none" }}>
+            Start a new chat →
           </Link>
-        </p>
+        </div>
       )}
 
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>

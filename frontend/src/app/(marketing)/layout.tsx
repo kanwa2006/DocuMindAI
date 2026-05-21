@@ -36,10 +36,17 @@ export const metadata: Metadata = {
 export default function MarketingLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
-      <style>{`html { scroll-behavior: smooth; }`}</style>
+      <style>{`
+        html { scroll-behavior: smooth; }
+        @media (max-width: 480px) {
+          .marketing-nav { padding-left: 16px !important; padding-right: 16px !important; }
+          .marketing-nav .nav-pricing { display: none; }
+        }
+      `}</style>
 
       {/* ── MARKETING NAV ── */}
       <nav
+        className="marketing-nav"
         style={{
           position: "sticky",
           top: 0,
@@ -75,6 +82,7 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <Link
             href="/pricing"
+            className="nav-pricing"
             style={{
               fontFamily: "var(--font-body)",
               fontSize: "var(--text-sm)",

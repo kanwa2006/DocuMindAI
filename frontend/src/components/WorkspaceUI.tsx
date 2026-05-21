@@ -1512,7 +1512,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       </div>
 
       {/* ── Bottom bar ── */}
-      <div style={{ background: "var(--surface-base)", paddingTop: "8px", paddingBottom: "16px", backdropFilter: "blur(8px)", borderTop: "1px solid var(--border-subtle)", position: "sticky", bottom: 0, zIndex: 10 }}>
+      <div style={{ background: "var(--surface-base)", paddingTop: "8px", paddingBottom: "max(16px, env(safe-area-inset-bottom))", backdropFilter: "blur(8px)", borderTop: "1px solid var(--border-subtle)", position: "sticky", bottom: 0, zIndex: 10 }}>
 
         {/* Hidden file input — triggered by the paperclip in the input bar */}
         <input id="upload-trigger" type="file" className="hidden" accept=".pdf,.docx" ref={fileInputRef} onChange={handleFileChange} />

@@ -117,11 +117,16 @@ export default function BookmarksPage() {
           )}
 
           {!loading && filtered.length === 0 && (
-            <div style={{ padding: "48px 0", textAlign: "center" }}>
-              <div style={{ fontSize: "48px", marginBottom: "12px" }}>🔖</div>
+            <div style={{ padding: "64px 16px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: "12px" }}>
+              <div style={{ fontSize: "40px", opacity: 0.35 }}>🔖</div>
               <div style={{ fontFamily: "var(--font-body)", fontSize: "14px", color: "var(--text-secondary)" }}>
-                {selectedTag ? `No bookmarks tagged "${selectedTag}"` : "No bookmarks yet. Save AI responses with the 🔖 button."}
+                {selectedTag ? `No bookmarks tagged "${selectedTag}"` : "No bookmarks yet."}
               </div>
+              {!selectedTag && (
+                <div style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-tertiary)" }}>
+                  Save any AI response with the 🔖 button to find it here later.
+                </div>
+              )}
             </div>
           )}
 

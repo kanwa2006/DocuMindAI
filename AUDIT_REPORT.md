@@ -275,4 +275,24 @@ Running log of every change made during this audit. One line per fix.
 - Typography: any text that visually depended on tighter tracking (especially marketing display H1s at ~30 px on the landing page) will breathe slightly more. The landing page uses inline styles with explicit `letter-spacing: "var(--tracking-tight)"`; those are untouched and keep their look.
 - Body line-height 1.5 → 1.6 may slightly increase vertical rhythm. Chat history density is preserved because `.text-response` already uses `--leading-loose` (1.75); only generic body areas widen.
 
+## STEP 12 — C11 empty states + C12 mobile responsiveness — complete
+
+**C11 — empty states:**
+- `Sidebar.tsx` already had a friendly empty state (illustration + "No chats yet" + "Start a new chat →" button) and a separate error path with Retry — left intact. The "Couldn't load your chats" panel only appears on real transient errors now that A1 (doubled prefix) and A2 (slug→UUID) are fixed.
+- `frontend/src/app/sessions/page.tsx` — replaced the inline "No chats yet. Start a new one →" paragraph with a centred icon + button block: `💬` (40 px, opacity 0.35) + label + "Start a new chat →" link styled as a secondary button. Error path also gets a ⚠ icon + Retry button.
+- `frontend/src/app/bookmarks/page.tsx` — empty-state block normalised: `🔖` (40 px, opacity 0.35) + label + helper line. No CTA button (bookmarks are created from inside a chat, so the right action is to "go open one").
+- `WorkspaceUI.tsx` — the "Upload a document to begin" centre-of-screen hint was already softened in STEP 11 to "Attach a document for grounded answers — or just ask."
+
+**C12 — mobile responsiveness:**
+- Spot-checked the existing implementation at the ≤768 px breakpoint:
+  - `Sidebar.tsx` already collapses to a fixed slide-in drawer with a tap-to-close backdrop (`isMobile` detection + `translateX(-100%)` + `position: fixed`). No change needed.
+  - Chat input is already `position: "sticky", bottom: 0`. Added `paddingBottom: max(16px, env(safe-area-inset-bottom))` so iOS home-indicator devices don't truncate the input.
+  - `UpgradeModal` already uses `maxWidth: 480px; width: 100%; padding: 16px` on backdrop — fits 375 px. X tap target was widened to 44 px in STEP 9.
+- `frontend/src/app/(marketing)/layout.tsx` — at ≤480 px, the marketing nav strips the "Pricing" link (Log In + Start Free remain) and trims the side padding to 16 px so the brand + CTAs don't wrap. Implemented via a `<style>` block scoped to the layout — small, no global media-query sprawl.
+- Other modals (`ShareSessionModal`, `FeedbackModal`, `KeyboardShortcutsModal`, `CommandPalette`) use percentage widths or `maxWidth` patterns; spot-checked, no fixed-pixel overflow at 375 px.
+
+**Could regress:**
+- "Pricing" link on the marketing nav disappears below 480 px. Users can still reach `/pricing` from the hero CTAs and the footer.
+- `env(safe-area-inset-bottom)` may briefly evaluate to `0` on devices that don't expose the inset; the `max(16px, …)` keeps the default 16 px floor.
+
 (further steps will append below as they are completed)
