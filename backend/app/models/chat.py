@@ -2,8 +2,8 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from sqlalchemy import String, DateTime, ForeignKey, Boolean, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import String, DateTime, ForeignKey, Boolean, Text, Integer
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -18,7 +18,15 @@ class ChatSession(Base):
     workspace_type: Mapped[str] = mapped_column(String(50), nullable=False, default="general")
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
-    
+    tags = mapped_column(ARRAY(String), nullable=False, server_default="{}")
+
+    # Phase 22 — Collaboration
+    is_shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    share_token: Mapped[Optional[str]] = mapped_column(String(32), unique=True, nullable=True)
+    share_permissions: Mapped[str] = mapped_column(String(20), default="view_and_ask")
+    shared_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    max_collaborators: Mapped[int] = mapped_column(Integer, default=5)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

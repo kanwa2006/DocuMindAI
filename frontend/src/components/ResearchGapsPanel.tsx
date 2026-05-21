@@ -109,7 +109,7 @@ export default function ResearchGapsPanel({ documentIds, onClose }: Props) {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/research/gaps`, {
+      const res = await fetch(`${API_BASE}/research/gaps`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

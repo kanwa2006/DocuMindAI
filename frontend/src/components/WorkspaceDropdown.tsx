@@ -13,7 +13,7 @@ interface Workspace {
 }
 
 const WORKSPACES: Workspace[] = [
-  { id: "general",  label: "General",      icon: "💬", route: "/",        description: "Chat with any document" },
+  { id: "general",  label: "General",      icon: "💬", route: "/general", description: "Chat with any document" },
   { id: "exam",     label: "Teacher",      icon: "📋", route: "/exam",    badge: "OCR",       description: "Generate question papers & assessments" },
   { id: "hr",       label: "HR",           icon: "👥", route: "/hr",      badge: "Batch",     description: "Resume analysis & candidate pipeline" },
   { id: "study",    label: "Student",      icon: "📚", route: "/study",   badge: "30+ PDFs",  description: "Personalized study & exam preparation" },

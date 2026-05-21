@@ -1,8 +1,23 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import EnterpriseDocumentViewer from "./EnterpriseDocumentViewer";
-import type { Document } from "@/lib/api";
+import dynamic from "next/dynamic";
+import { API_BASE, type Document } from "@/lib/api";
+
+// react-pdf evaluates DOMMatrix at module load time, which crashes during the
+// SSR pass of the parent boundary. Loading the viewer client-only keeps the
+// pdfjs worker (and DOMMatrix) out of the server bundle.
+const EnterpriseDocumentViewer = dynamic(
+  () => import("./EnterpriseDocumentViewer"),
+  {
+    ssr: false,
+    loading: () => (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--text-tertiary)" }}>
+        Loading viewer…
+      </div>
+    ),
+  },
+);
 
 interface DocumentPreviewPanelProps {
   doc: Document;
@@ -109,7 +124,7 @@ export function DocumentPreviewPanel({
       <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
         {doc.status === "READY" ? (
           <EnterpriseDocumentViewer
-            pdfUrl={`/api/v1/documents/${doc.id}/file`}
+            pdfUrl={`${API_BASE}/documents/${doc.id}/file`}
             annotations={[]}
             targetPage={initialPage}
           />

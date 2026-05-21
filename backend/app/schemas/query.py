@@ -9,6 +9,7 @@ class QueryRequest(BaseModel):
     workspace_type: Optional[str] = "general"  # for retrieval config + disclaimers
     top_k: int = 5
     similarity_threshold: float = 0.0
+    comparison_mode: bool = False          # Phase 14.6: multi-doc comparison
 
 class EvidenceChunk(BaseModel):
     chunk_id: UUID

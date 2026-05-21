@@ -37,8 +37,8 @@ export default function AdminTenantsPage() {
     async function load() {
       try {
         const [tRes, vRes] = await Promise.all([
-          fetch(`${API_BASE}/api/v1/admin/tenants`, { credentials: "include" }),
-          fetch(`${API_BASE}/api/v1/admin/tenants/violations`, { credentials: "include" }),
+          fetch(`${API_BASE}/admin/tenants`, { credentials: "include" }),
+          fetch(`${API_BASE}/admin/tenants/violations`, { credentials: "include" }),
         ]);
         if (tRes.ok) setTenants(await tRes.json());
         if (vRes.ok) setViolations(await vRes.json());
@@ -54,7 +54,7 @@ export default function AdminTenantsPage() {
   async function handleSuspend(tenantId: string) {
     setActionLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/tenants/${tenantId}/suspend`, {
+      const res = await fetch(`${API_BASE}/admin/tenants/${tenantId}/suspend`, {
         method: "POST",
         headers: { "X-CSRF-Token": getCsrfToken() },
         credentials: "include",
@@ -75,7 +75,7 @@ export default function AdminTenantsPage() {
     setActionLoading(true);
     setConfirmAction(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/tenants/${tenantId}/rotate-keys`, {
+      const res = await fetch(`${API_BASE}/admin/tenants/${tenantId}/rotate-keys`, {
         method: "POST",
         headers: { "X-CSRF-Token": getCsrfToken() },
         credentials: "include",
@@ -100,20 +100,48 @@ export default function AdminTenantsPage() {
   return (
     <main style={{ padding: "40px 48px" }}>
       {/* Header */}
-      <div style={{ marginBottom: 32 }}>
-        <h1
+      <div style={{ marginBottom: 32, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
+        <div>
+          <h1
+            style={{
+              fontFamily: "Instrument Serif, serif",
+              fontSize: 28,
+              color: "var(--text-primary)",
+              marginBottom: 4,
+            }}
+          >
+            Tenant Management
+          </h1>
+          <p className="text-body-secondary" style={{ fontSize: 14 }}>
+            Enterprise workspace isolation controls
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            const headers = ["Organization", "Plan", "Users", "Documents", "Storage (GB)", "Isolation Mode", "Status"];
+            const rows = tenants.map((t) => [
+              t.name, t.plan, t.user_count, t.document_count, t.storage_gb, t.isolation_mode,
+              t.is_suspended ? "Suspended" : "Active",
+            ]);
+            const csv = [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+            const blob = new Blob([csv], { type: "text/csv" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url; a.download = `tenants_${Date.now()}.csv`;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }}
           style={{
-            fontFamily: "Instrument Serif, serif",
-            fontSize: 28,
-            color: "var(--text-primary)",
-            marginBottom: 4,
+            display: "inline-flex", alignItems: "center", gap: "6px",
+            height: "36px", padding: "0 14px",
+            background: "var(--surface-raised)", border: "1px solid var(--border-default)",
+            borderRadius: "8px", cursor: "pointer",
+            fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--text-secondary)",
+            flexShrink: 0,
           }}
         >
-          Tenant Management
-        </h1>
-        <p className="text-body-secondary" style={{ fontSize: 14 }}>
-          Enterprise workspace isolation controls
-        </p>
+          📊 Export CSV
+        </button>
       </div>
 
       {/* Tenant Table */}

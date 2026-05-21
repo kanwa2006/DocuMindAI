@@ -235,7 +235,7 @@ export default function LegalRiskPanel({
       }
 
       const res = await fetch(
-        `${API_BASE}/api/v1/legal/contracts/${cid}/risk-report`,
+        `${API_BASE}/legal/contracts/${cid}/risk-report`,
         { method: "POST", credentials: "include" },
       );
       if (!res.ok) {

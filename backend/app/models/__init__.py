@@ -21,3 +21,8 @@ from app.models.saved_query_template import SavedQueryTemplate, Notification
 from app.models.workspace_template import ScheduledReport
 # Phase 9-F: Distribution + sharing
 from app.models.report_share import ReportShare, MessageNote
+# Additional models registered for alembic autogenerate
+from app.models.feedback import Feedback
+from app.models.proactive_insight import ProactiveInsight
+from app.models.bookmark import Bookmark
+from app.models.notification import Notification

@@ -100,7 +100,7 @@ export default function ExportModal({
     setLoading(true);
     try {
       const res = await fetch(
-        `${API_BASE}/api/v1/export/sessions/${sessionId}/${format}`,
+        `${API_BASE}/export/sessions/${sessionId}/${format}`,
         {
           method: "POST",
           credentials: "include",

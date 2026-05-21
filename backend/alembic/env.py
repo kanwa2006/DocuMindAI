@@ -40,11 +40,25 @@ def do_run_migrations(connection: Connection) -> None:
 
 async def run_async_migrations() -> None:
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.async_database_url
+
+    # Normalise the URL — ensure asyncpg driver prefix is present
+    raw_url = str(settings.async_database_url)
+    if raw_url.startswith("postgres://"):
+        raw_url = raw_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif raw_url.startswith("postgresql://") and "+asyncpg" not in raw_url:
+        raw_url = raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    configuration["sqlalchemy.url"] = raw_url
+
+    # Supabase requires SSL — use the string "require", NOT ssl=True
+    connect_args: dict = {}
+    if "postgresql" in raw_url or "postgres" in raw_url:
+        connect_args["ssl"] = "require"
+
     connectable = async_engine_from_config(
         configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
 
     async with connectable.connect() as connection:

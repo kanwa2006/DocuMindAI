@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Allow: /pricing
+Disallow: /dashboard
+Disallow: /admin
+Disallow: /api
+Sitemap: https://documindai.com/sitemap.xml

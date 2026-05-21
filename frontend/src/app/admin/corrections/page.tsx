@@ -95,8 +95,8 @@ export default function AdminCorrectionsPage() {
       params.set("page_size", "50");
 
       const [cRes, tRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/corrections/admin?${params}`, { credentials: "include" }),
-        fetch(`${API_BASE}/api/v1/corrections/admin/trends`, { credentials: "include" }),
+        fetch(`${API_BASE}/corrections/admin?${params}`, { credentials: "include" }),
+        fetch(`${API_BASE}/corrections/admin/trends`, { credentials: "include" }),
       ]);
       if (cRes.ok) setCorrections(await cRes.json());
       if (tRes.ok) setTrends(await tRes.json());
@@ -116,7 +116,7 @@ export default function AdminCorrectionsPage() {
   ) {
     setActionLoading(correctionId);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/corrections/admin/${correctionId}`, {
+      const res = await fetch(`${API_BASE}/corrections/admin/${correctionId}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -151,7 +151,7 @@ export default function AdminCorrectionsPage() {
     if (!note) return;
     setActionLoading(correctionId);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/corrections/admin/${correctionId}/note`, {
+      const res = await fetch(`${API_BASE}/corrections/admin/${correctionId}/note`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -176,7 +176,7 @@ export default function AdminCorrectionsPage() {
     if (workspaceFilter !== "all") params.set("workspace_id", workspaceFilter);
     if (fromDate) params.set("from_date", fromDate);
     if (toDate) params.set("to_date", toDate);
-    window.location.href = `${API_BASE}/api/v1/corrections/admin/export?${params}`;
+    window.location.href = `${API_BASE}/corrections/admin/export?${params}`;
   }
 
   // Build chart data — aggregate by week
@@ -518,9 +518,33 @@ export default function AdminCorrectionsPage() {
       {/* Feedback Trend Chart */}
       {chartData.length > 0 && (
         <div className="card" style={{ padding: "24px 20px" }}>
-          <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 20 }}>
-            Feedback Trends (last 8 weeks)
-          </h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 600 }}>
+              Feedback Trends (last 8 weeks)
+            </h2>
+            <button
+              onClick={() => {
+                const headers = ["Week", "Issue Type", "Count"];
+                const rows = trends.map((t) => [t.week_start.slice(0, 10), ISSUE_LABELS[t.issue_type] ?? t.issue_type, t.count]);
+                const csv = [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+                const blob = new Blob([csv], { type: "text/csv" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url; a.download = `correction_trends_${Date.now()}.csv`;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              }}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: "6px",
+                height: "32px", padding: "0 12px",
+                background: "var(--surface-raised)", border: "1px solid var(--border-default)",
+                borderRadius: "8px", cursor: "pointer",
+                fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-secondary)",
+              }}
+            >
+              📊 Export data
+            </button>
+          </div>
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={chartData}>
               <XAxis dataKey="week" tick={{ fontSize: 11 }} />

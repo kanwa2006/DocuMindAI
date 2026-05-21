@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
+from app.core.workspace import resolve_workspace_id
 from app.models.finance import FinancialDocument, Transaction, AuditFinding, FinancialRule
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
@@ -371,7 +372,7 @@ async def process_financial_document(
     PHASE 1: ASYNC FINANCE PROCESSING
     Offloads heavy table extraction and audit finding generation to Celery workers.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     doc = (await db.execute(select(Document).where(Document.id == document_id, Document.workspace_id == workspace_id))).scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -409,7 +410,7 @@ async def semantic_search_transactions(
     PHASE 4: FINANCIAL VECTOR SEARCH
     Uses pgvector to perform semantic similarity search across historical transactions.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
     # Generate query embedding
     query_embedding = await llm_service.get_embedding(query)
@@ -441,7 +442,7 @@ async def list_financial_documents(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     result = await db.execute(select(FinancialDocument).where(FinancialDocument.workspace_id == workspace_id).order_by(FinancialDocument.created_at.desc()))
     return result.scalars().all()
 
@@ -450,7 +451,7 @@ async def list_audit_findings(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     result = await db.execute(select(AuditFinding).where(AuditFinding.workspace_id == workspace_id).order_by(AuditFinding.created_at.desc()))
     return result.scalars().all()
 

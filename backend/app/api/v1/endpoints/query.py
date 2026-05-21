@@ -18,8 +18,12 @@ from app.services.retrieval_service import RetrievalService
 from app.models.chat import ChatMessage
 from app.models.org import User
 from app.core.auth import get_current_user
+from app.core.workspace import resolve_workspace_id
 from app.core.config import settings
 from app.core.trial_enforcement import check_and_increment_trial
+from app.services.response_schemas import get_response_schema
+from app.services.language_detector import detect_query_language, get_language_instruction
+from app.services.email_service import send_trial_nudge_email, send_upgrade_reminder_email
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -78,7 +82,7 @@ async def semantic_search(
     payload = await RetrievalService.retrieve_chunks(
         db=db,
         query=request.query,
-        workspace_id=uuid.UUID(current_user["workspace_id"]),
+        workspace_id=resolve_workspace_id(current_user["workspace_id"]),
         top_k=request.top_k,
         similarity_threshold=request.similarity_threshold
     )
@@ -110,7 +114,7 @@ async def ask_question(
     grounding_payload = await GroundingService.prepare_grounded_context(
         db=db,
         query=request.query,
-        workspace_id=uuid.UUID(current_user["workspace_id"]),
+        workspace_id=resolve_workspace_id(current_user["workspace_id"]),
         final_top_k=request.top_k,
         similarity_threshold=request.similarity_threshold
     )
@@ -171,8 +175,28 @@ async def ask_question_stream(
                     f"event: trial_status\n"
                     f"data: {json.dumps({'queries_used': trial_status['queries_used'], 'queries_remaining': trial_status['queries_remaining']})}\n\n"
                 )
+                # Fire-and-forget lifecycle emails — never blocks the stream
+                if user_obj and getattr(user_obj, "email_notifications_enabled", True):
+                    _loop = asyncio.get_event_loop()
+                    _q_used = trial_status["queries_used"]
+                    if _q_used == 3:
+                        _loop.run_in_executor(
+                            None, send_trial_nudge_email,
+                            user_obj.email, user_obj.full_name, 3,
+                        )
+                    elif _q_used == 4:
+                        _loop.run_in_executor(
+                            None, send_upgrade_reminder_email,
+                            user_obj.email, user_obj.full_name,
+                        )
 
             workspace_type = (request.workspace_type or "general").lower().strip()
+
+            # Phase 14.10 — Stage 1: searching
+            yield (
+                f"event: thinking_stage\n"
+                f"data: {json.dumps({'stage': 'searching', 'detail': 'Searching your documents...'})}\n\n"
+            )
 
             # Task 4.8 — workspace-specific retrieval config
             ws_config = settings.WORKSPACE_RETRIEVAL_CONFIG.get(
@@ -227,11 +251,18 @@ async def ask_question_stream(
                 grounding_payload = await GroundingService.prepare_grounded_context(
                     db=db,
                     query=request.query,
-                    workspace_id=uuid.UUID(current_user["workspace_id"]),
+                    workspace_id=resolve_workspace_id(current_user["workspace_id"]),
                     final_top_k=effective_top_k,
                     similarity_threshold=request.similarity_threshold
                 )
                 await _set_cached_retrieval(cache_key, grounding_payload)
+
+            # Phase 14.10 — Stage 2: reranking
+            evidence_count = len(grounding_payload.get("evidence_metadata", []))
+            yield (
+                f"event: thinking_stage\n"
+                f"data: {json.dumps({'stage': 'reranking', 'detail': f'Reviewing {evidence_count} relevant passages...'})}\n\n"
+            )
 
             # Send metadata immediately so frontend renders citations before generation finishes
             metadata = {
@@ -246,7 +277,39 @@ async def ask_question_stream(
                 yield f"event: token\ndata: {json.dumps({'token': 'I do not have sufficient evidence in your documents to answer this question.'})}\n\n"
             else:
                 yield f"event: status\ndata: {json.dumps({'message': 'Generating grounded response...'})}\n\n"
+
+                # Phase 14.10 — Stage 3: generating
+                yield (
+                    f"event: thinking_stage\n"
+                    f"data: {json.dumps({'stage': 'generating', 'detail': 'Generating response...'})}\n\n"
+                )
+
                 system_prompt = llm_service._build_system_prompt(grounded_context)
+
+                # Phase 15.2 — inject workspace response schema
+                schema = get_response_schema(workspace_type)
+                system_prompt = f"{system_prompt}\n\n{schema}"
+
+                # Phase 15.4 — inject language instruction
+                preferred_lang = (
+                    getattr(user_obj, "preferred_language", "auto") or "auto"
+                )
+                if preferred_lang != "auto":
+                    query_language = preferred_lang
+                else:
+                    query_language = detect_query_language(request.query)
+                lang_instruction = get_language_instruction(query_language)
+                if lang_instruction:
+                    system_prompt = system_prompt + lang_instruction
+
+                # Phase 14.6 — comparison mode: augment system prompt
+                if getattr(request, "comparison_mode", False):
+                    system_prompt = system_prompt + (
+                        "\n\nCOMPARISON MODE ACTIVE: You are comparing multiple documents. "
+                        "For each point, specify which document supports it using [Doc A], [Doc B] notation. "
+                        "Format your response as a structured comparison. "
+                        "Use a table when 3 or more dimensions are compared."
+                    )
 
                 # Task 4.3 — prepend conversation history to user prompt
                 if history_text:

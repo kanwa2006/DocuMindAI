@@ -12,12 +12,14 @@ import logging
 
 from app.db.session import get_db, AsyncSessionLocal
 from app.core.auth import get_current_user
+from app.core.workspace import resolve_workspace_id
 from app.models.export_job import ExportJob
 from app.models.legal import Contract, Clause
 from app.models.chat import ChatSession
 from app.schemas.export import ExportJobCreate, ExportJobResponse
 from app.workers.tasks.export_tasks import process_export_job
 from app.services.export_engine import export_engine
+from app.services.audit_export import generate_session_audit_report
 
 
 class SessionExportOptions(BaseModel):
@@ -98,7 +100,7 @@ async def create_export_job(
     """
     job = ExportJob(
         owner_id=uuid.UUID(current_user["id"]),
-        workspace_id=uuid.UUID(current_user["workspace_id"]),
+        workspace_id=resolve_workspace_id(current_user["workspace_id"]),
         format=request.format,
         export_type=request.export_type,
         payload=request.payload
@@ -120,7 +122,7 @@ async def list_exports(
 ) -> Any:
     """Fetch all export jobs for the current tenant's workspace."""
     stmt = select(ExportJob).where(
-        ExportJob.workspace_id == uuid.UUID(current_user["workspace_id"])
+        ExportJob.workspace_id == resolve_workspace_id(current_user["workspace_id"])
     ).order_by(ExportJob.created_at.desc())
     
     result = await db.execute(stmt)
@@ -140,7 +142,7 @@ async def get_export_job(
 
     stmt = select(ExportJob).where(
         ExportJob.id == job_uuid,
-        ExportJob.workspace_id == uuid.UUID(current_user["workspace_id"])
+        ExportJob.workspace_id == resolve_workspace_id(current_user["workspace_id"])
     )
     result = await db.execute(stmt)
     job = result.scalar_one_or_none()
@@ -273,6 +275,90 @@ async def export_session_pdf(
     except Exception as e:
         logger.error(f"Session PDF export failed: {e}")
         raise HTTPException(status_code=500, detail="PDF generation failed.")
+
+
+@router.get("/sessions/{session_id}/audit-report")
+async def export_session_audit_report(
+    session_id: str,
+    format: str = "pdf",
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Phase 18-C — Audit Trail Export.
+    Generates a structured audit report (PDF or DOCX) for the given session.
+
+    Plan gating:
+      trial        → 402 with upgrade_required: true
+      professional → PDF only
+      enterprise   → PDF + DOCX
+    """
+    plan = (current_user.get("plan") or "trial").lower()
+
+    if plan == "trial":
+        raise HTTPException(
+            status_code=402,
+            detail={"error": "upgrade_required", "upgrade_required": True,
+                    "message": "Audit Trail Export is available on Professional and Enterprise plans."},
+        )
+
+    if plan == "professional" and format == "docx":
+        raise HTTPException(
+            status_code=402,
+            detail={"error": "upgrade_required", "upgrade_required": True,
+                    "message": "DOCX export is available on the Enterprise plan."},
+        )
+
+    if format not in ("pdf", "docx"):
+        raise HTTPException(status_code=422, detail="format must be 'pdf' or 'docx'.")
+
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(ChatSession)
+            .where(
+                ChatSession.id == uuid.UUID(session_id),
+                ChatSession.owner_id == uuid.UUID(current_user["id"]),
+            )
+            .options(selectinload(ChatSession.messages))
+        )
+        session = (await db.execute(stmt)).scalar_one_or_none()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found.")
+
+    try:
+        buf = generate_session_audit_report(session, current_user, fmt=format)  # type: ignore[arg-type]
+
+        safe_title = "".join(c if c.isalnum() or c in "- _" else "_" for c in session.title)[:50]
+
+        # Track analytics event
+        try:
+            logger.info(
+                "export_downloaded event: session=%s format=audit_%s user=%s",
+                session_id, format, current_user.get("id"),
+            )
+        except Exception:
+            pass
+
+        if format == "pdf":
+            return StreamingResponse(
+                buf,
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f'attachment; filename="audit_{safe_title}.pdf"',
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                },
+            )
+        else:
+            return StreamingResponse(
+                buf,
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                headers={
+                    "Content-Disposition": f'attachment; filename="audit_{safe_title}.docx"',
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                },
+            )
+    except Exception as e:
+        logger.error(f"Audit report generation failed: {e}")
+        raise HTTPException(status_code=500, detail="Audit report generation failed.")
 
 
 @router.post("/sessions/{session_id}/docx")

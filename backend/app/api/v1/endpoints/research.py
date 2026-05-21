@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
+from app.core.workspace import resolve_workspace_id
 from app.models.research import ResearchProject, ResearchPaper, ResearchFinding
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
@@ -172,7 +173,7 @@ async def export_citations(
             detail=f"Unsupported format '{fmt}'. Choose from: {', '.join(sorted(CITATION_FORMATS))}",
         )
 
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     citations: List[str] = []
 
     for raw_id in body.doc_ids:
@@ -238,7 +239,7 @@ async def find_research_gaps(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
 
     all_context_parts: List[str] = []
     for raw_id in body.doc_ids:
@@ -306,7 +307,7 @@ async def create_project(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     project = ResearchProject(workspace_id=workspace_id, title=title, description=description)
     db.add(project)
     await db.commit()
@@ -324,7 +325,7 @@ async def process_research_document(
     PHASE 1: ASYNC RESEARCH PIPELINE
     Offloads heavy paper validation and extraction to Celery workers.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     doc = (await db.execute(select(Document).where(Document.id == document_id, Document.workspace_id == workspace_id))).scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -361,7 +362,7 @@ async def semantic_search_research(
     PHASE 3: RESEARCH VECTOR SEARCH
     Uses pgvector to perform semantic similarity search across Findings.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     query_embedding = await llm_service.get_embedding(query)
     
     stmt = (
@@ -393,7 +394,7 @@ async def ai_copilot_chat(
     PHASE 4: AI RESEARCH COPILOT
     SSE endpoint for streaming research chat responses grounded in retrieved papers.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
     query_embedding = await llm_service.get_embedding(query)
     stmt = select(ResearchFinding).where(ResearchFinding.workspace_id == workspace_id).order_by(ResearchFinding.embedding.l2_distance(query_embedding)).limit(3)
@@ -420,7 +421,7 @@ async def synthesize_project(
     PHASE 2: CROSS-DOCUMENT SYNTHESIS
     Detects contradictions and consensus among papers in a project.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     stmt = select(ResearchFinding).where(ResearchFinding.workspace_id == workspace_id) # simplified for prototype
     findings = (await db.execute(stmt)).scalars().all()
     
@@ -448,7 +449,7 @@ async def list_projects(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     result = await db.execute(select(ResearchProject).where(ResearchProject.workspace_id == workspace_id))
     return [{"id": p.id, "title": p.title, "description": p.description} for p in result.scalars().all()]
 
@@ -458,7 +459,7 @@ async def list_papers(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     result = await db.execute(select(ResearchPaper).where(ResearchPaper.project_id == project_id, ResearchPaper.workspace_id == workspace_id))
     return [{"id": p.id, "title": p.title, "abstract": p.abstract} for p in result.scalars().all()]
 
@@ -468,6 +469,6 @@ async def list_findings(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     result = await db.execute(select(ResearchFinding).where(ResearchFinding.paper_id == paper_id, ResearchFinding.workspace_id == workspace_id))
     return [{"id": f.id, "statement": f.statement, "evidence": f.evidence_quote, "methodology": f.methodology} for f in result.scalars().all()]

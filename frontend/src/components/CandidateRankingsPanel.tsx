@@ -135,7 +135,7 @@ export default function CandidateRankingsPanel({ onClose }: Props) {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/v1/hr/jobs`, { credentials: "include" });
+        const res = await fetch(`${API_BASE}/hr/jobs`, { credentials: "include" });
         if (res.ok) {
           const data: JobRole[] = await res.json();
           setJobs(data);
@@ -156,7 +156,7 @@ export default function CandidateRankingsPanel({ onClose }: Props) {
     (async () => {
       try {
         const res = await fetch(
-          `${API_BASE}/api/v1/hr/jobs/${selectedJob}/candidates`,
+          `${API_BASE}/hr/jobs/${selectedJob}/candidates`,
           { credentials: "include" }
         );
         if (res.ok) {
@@ -194,7 +194,7 @@ export default function CandidateRankingsPanel({ onClose }: Props) {
 
   const updateStage = useCallback(async (candidateId: string, stage: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${candidateId}/stage`, {
+      const res = await fetch(`${API_BASE}/hr/candidates/${candidateId}/stage`, {
         method: "PATCH", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage }),
@@ -217,7 +217,7 @@ export default function CandidateRankingsPanel({ onClose }: Props) {
     setScoringId(row.profile.id);
     try {
       const res = await fetch(
-        `${API_BASE}/api/v1/hr/jobs/${selectedJob}/candidates/${row.profile.id}/score`,
+        `${API_BASE}/hr/jobs/${selectedJob}/candidates/${row.profile.id}/score`,
         { method: "POST", credentials: "include" }
       );
       if (!res.ok) throw new Error("Scoring failed");

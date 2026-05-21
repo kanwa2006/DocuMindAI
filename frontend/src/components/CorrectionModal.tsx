@@ -108,7 +108,7 @@ export default function CorrectionModal({
     };
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/corrections`, {
+      const res = await fetch(`${API_BASE}/corrections`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -49,8 +49,11 @@ class Settings(BaseSettings):
     MAX_UPLOAD_MB: int = 50
 
     # Gemini / LLM
-    GEMINI_API_KEYS: str
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    # Phase 12: keys are now sourced via GEMINI_API_KEY_1, _2, _3, ... by GeminiKeyRotator.
+    # GEMINI_API_KEYS (comma-separated) is kept for legacy single-key backward compatibility only.
+    GEMINI_API_KEYS: Optional[str] = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash-lite"
+    GEMINI_FALLBACK_MODEL: str = "gemini-2.0-flash"
     GEMINI_TEMPERATURE: float = 0.2
     GEMINI_TOP_P: float = 0.8
     GEMINI_MAX_OUTPUT_TOKENS: int = 8192
@@ -85,12 +88,31 @@ class Settings(BaseSettings):
     DEPLOY_EVAL_SECRET: Optional[str] = None
     EVAL_SLACK_WEBHOOK_URL: Optional[str] = None
 
-    # Email / SMTP
+    # Twilio — phone OTP
+    TWILIO_ACCOUNT_SID: Optional[str] = None
+    TWILIO_AUTH_TOKEN: Optional[str] = None
+    TWILIO_PHONE_NUMBER: Optional[str] = None
+
+    # Email / SMTP (legacy OTP emails — keep for auth.py)
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     EMAIL_FROM: str = ""
+
+    # Brevo SMTP — transactional emails (welcome, trial nudges, upgrade reminders)
+    BREVO_SMTP_HOST: str = "smtp-relay.brevo.com"
+    BREVO_SMTP_PORT: int = 587
+    BREVO_SMTP_USER: str = ""
+    BREVO_SMTP_PASSWORD: str = ""
+    EMAILS_FROM_NAME: str = "DocuMindAI"
+    EMAILS_FROM_ADDRESS: str = "noreply@documindai.com"
+
+    # Phase 20 — Admin alert email for automation scripts
+    ADMIN_EMAIL: Optional[str] = None
+
+    # Sentry
+    SENTRY_DSN: Optional[str] = None
 
     # Monitoring
     OTEL_ENABLED: bool = True
@@ -142,9 +164,6 @@ class Settings(BaseSettings):
 
         if self.VECTOR_BACKEND not in ['faiss', 'qdrant', 'pgvector']:
             raise ValueError("VECTOR_BACKEND must be 'faiss', 'qdrant', or 'pgvector'")
-
-        if not self.gemini_keys_list:
-            raise ValueError("GEMINI_API_KEYS cannot be empty. Must provide at least one key.")
 
         if not self.REDIS_URL.startswith("redis://") and not self.REDIS_URL.startswith("rediss://"):
             raise ValueError("REDIS_URL must start with redis:// or rediss://")

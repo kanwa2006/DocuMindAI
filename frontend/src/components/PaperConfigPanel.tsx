@@ -109,7 +109,7 @@ export default function PaperConfigPanel({ onClose, onGenerated }: Props) {
     setGenerating(true);
     const toastId = toast.loading("Generating exam paper…");
     try {
-      const res = await fetch(`${API_BASE}/api/v1/exams/generate/paper`, {
+      const res = await fetch(`${API_BASE}/exams/generate/paper`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

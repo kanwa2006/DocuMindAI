@@ -13,6 +13,7 @@ import logging
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
+from app.core.workspace import resolve_workspace_id
 from app.models.hr import JobRole, CandidateProfile, JobMatch, CandidateNote
 from app.models.document import Document
 from app.schemas.hr import (
@@ -37,7 +38,7 @@ async def create_job_role(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     owner_id = uuid.UUID(current_user["id"])
     
     job = JobRole(
@@ -58,7 +59,7 @@ async def list_jobs(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     stmt = select(JobRole).where(JobRole.workspace_id == workspace_id).order_by(JobRole.created_at.desc())
     result = await db.execute(stmt)
     return result.scalars().all()
@@ -75,7 +76,7 @@ async def process_candidate(
     PHASE 1: True Async Bulk Processing
     Triggers background Celery task to prevent API blocking.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
     job_stmt = select(JobRole).where(JobRole.id == job_id, JobRole.workspace_id == workspace_id)
     if not (await db.execute(job_stmt)).scalar_one_or_none():
@@ -103,7 +104,7 @@ async def list_job_candidates(
     PHASE 2: Advanced Candidate Search
     Returns filtered and semantically sorted candidates.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
     stmt = (
         select(JobMatch, CandidateProfile)
@@ -155,7 +156,7 @@ async def get_job_analytics(
     PHASE 4: HR Analytics Dashboard
     Returns applicant funnel and distribution data.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
     stmt = select(JobMatch.status, func.count(JobMatch.id)).where(
         JobMatch.job_id == job_id, JobMatch.workspace_id == workspace_id
@@ -183,7 +184,7 @@ async def export_candidates_csv(
     PHASE 2: HR Export System (CSV)
     Streams a CSV file of candidates for a specific job.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
     stmt = (
         select(JobMatch, CandidateProfile)
@@ -244,7 +245,7 @@ async def add_candidate_note(
     PHASE 1: Recruiter Collaboration
     Add a threaded note/comment to a candidate.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     author_id = uuid.UUID(current_user["id"])
     
     note = CandidateNote(
@@ -265,7 +266,7 @@ async def get_candidate_notes(
     db: AsyncSession = Depends(get_db)
 ):
     """Retrieves chronological activity timeline / recruiter notes for a candidate."""
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     stmt = select(CandidateNote).where(
         CandidateNote.candidate_id == candidate_id,
         CandidateNote.workspace_id == workspace_id
@@ -281,7 +282,7 @@ async def update_match_status(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     stmt = select(JobMatch).where(JobMatch.id == match_id, JobMatch.workspace_id == workspace_id)
     match = (await db.execute(stmt)).scalar_one_or_none()
 
@@ -312,7 +313,7 @@ async def update_candidate_stage(
             detail=f"Invalid stage. Must be one of: {VALID_STAGES}",
         )
 
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     stmt = select(CandidateProfile).where(
         CandidateProfile.id == candidate_id,
         CandidateProfile.workspace_id == workspace_id,
@@ -377,7 +378,7 @@ async def score_candidate(
     Updates JobMatch.semantic_score and JobMatch.final_score in-place.
     Returns { match_score, skill_gaps, match_breakdown }.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
 
     job_stmt = select(JobRole).where(
         JobRole.id == job_id, JobRole.workspace_id == workspace_id

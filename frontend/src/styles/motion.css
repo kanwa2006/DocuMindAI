@@ -93,6 +93,18 @@
 .toast-enter { animation: slide-in-right var(--dur-normal) var(--ease-bounce) both; }
 .toast-exit  { animation: slide-out-right var(--dur-normal) var(--ease-accel) both; }
 
+/* Voice input mic pulse ring */
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0px rgba(239, 68, 68, 0.4); }
+  70%  { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0px rgba(239, 68, 68, 0); }
+}
+
+/* Spinner for processing state */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Interactive elements */
 .interactive {
   transition:

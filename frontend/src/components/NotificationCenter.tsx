@@ -34,7 +34,7 @@ export default function NotificationCenter({ onNavigate }: NotificationCenterPro
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/notifications`, { credentials: "include" });
+      const res = await fetch(`${API_BASE}/notifications`, { credentials: "include" });
       if (res.ok) setNotifications(await res.json());
     } catch {
       // network unavailable — keep stale list
@@ -81,7 +81,7 @@ export default function NotificationCenter({ onNavigate }: NotificationCenterPro
 
   async function markRead(id: string) {
     try {
-      await fetch(`${API_BASE}/api/v1/notifications/${id}/read`, {
+      await fetch(`${API_BASE}/notifications/${id}/read`, {
         method: "POST",
         headers: { "X-CSRF-Token": getCsrfToken() },
         credentials: "include",
@@ -96,7 +96,7 @@ export default function NotificationCenter({ onNavigate }: NotificationCenterPro
 
   async function markAllRead() {
     try {
-      await fetch(`${API_BASE}/api/v1/notifications/read-all`, {
+      await fetch(`${API_BASE}/notifications/read-all`, {
         method: "POST",
         headers: { "X-CSRF-Token": getCsrfToken() },
         credentials: "include",

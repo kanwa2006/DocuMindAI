@@ -13,6 +13,12 @@ import OnboardingTooltip from "./OnboardingTooltip";
 import { TrialProvider, useTrialStore } from "@/lib/store/trialStore";
 import TrialPill from "./TrialPill";
 import UpgradeModal from "./UpgradeModal";
+import CommandPalette from "./CommandPalette";
+import NotificationCenter from "./NotificationCenter";
+import AutosaveIndicator from "./AutosaveIndicator";
+import KeyboardShortcutsModal from "./KeyboardShortcutsModal";
+import ShareSessionModal from "./ShareSessionModal";
+import { toast } from "react-hot-toast";
 
 // ─── Profile Dropdown ─────────────────────────────────────────────────────────
 
@@ -109,6 +115,9 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
   const [currentWorkspace, setCurrentWorkspace] = useState("general");
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
   const { currentStep, isComplete, advance, dismiss } = useOnboarding();
 
@@ -126,7 +135,12 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
     // Restore last workspace if landing on root without chat
     if (pathname === "/" && !searchParams.get("chat")) {
       const lastWorkspace = localStorage.getItem("lastActiveWorkspace");
-      if (lastWorkspace && lastWorkspace !== "/") router.replace(lastWorkspace);
+      if (lastWorkspace === "/" || lastWorkspace === "") {
+        // Migrate old sessions that stored "/" for general workspace
+        router.replace("/general");
+      } else if (lastWorkspace) {
+        router.replace(lastWorkspace);
+      }
     }
 
     // Load billing status to initialise trial counter
@@ -162,23 +176,81 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", handler);
   }, [toggleTheme]);
 
+  // Phase 14.1 — Cmd+K: command palette
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setShowCommandPalette((v) => !v);
+      }
+      // Cmd/Ctrl + B — toggle sidebar (added by audit pass)
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        setIsSidebarOpen((o) => {
+          const next = !o;
+          try { localStorage.setItem("sidebar_open", String(next)); } catch {}
+          return next;
+        });
+      }
+      // "?" opens keyboard shortcuts when textarea is not focused
+      if (e.key === "?" && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement)) {
+        setShowKeyboardShortcuts((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  // Persist sidebar state across reloads.
+  useEffect(() => {
+    try { localStorage.setItem("sidebar_open", String(isSidebarOpen)); } catch {}
+  }, [isSidebarOpen]);
+
+  // Phase 14.1 — handle commands from command palette
+  useEffect(() => {
+    const onToggleTheme = () => toggleTheme();
+    const onShortcuts = () => setShowKeyboardShortcuts(true);
+    window.addEventListener("cmd:toggle-theme", onToggleTheme);
+    window.addEventListener("cmd:shortcuts", onShortcuts);
+    return () => {
+      window.removeEventListener("cmd:toggle-theme", onToggleTheme);
+      window.removeEventListener("cmd:shortcuts", onShortcuts);
+    };
+  }, [toggleTheme]);
+
+  const activeSessionId = searchParams.get("chat") ?? "";
+
   const handleShare = () => {
-    navigator.clipboard.writeText(window.location.href).then(() => {
-      // fire toast via react-hot-toast global if available
-      try { (window as any).__toastSuccess?.("Link copied!"); } catch {}
-    });
+    if (activeSessionId) {
+      setShowShareModal(true);
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      toast.error("Clipboard is not available in this browser.");
+      return;
+    }
+    navigator.clipboard
+      .writeText(window.location.href)
+      .then(() => toast.success("Link copied!"))
+      .catch(() => toast.error("Couldn't copy link."));
   };
 
   const handleWorkspaceChange = (wsId: string) => {
     setCurrentWorkspace(wsId);
     document.documentElement.style.setProperty("--brand-hue", WORKSPACE_HUES[wsId] || "220");
-    localStorage.setItem("lastActiveWorkspace", `/${wsId === "general" ? "" : wsId}`);
+    localStorage.setItem("lastActiveWorkspace", `/${wsId}`);
   };
 
-  const isAuthPage = ["/login", "/register", "/forgot-password"].includes(pathname);
+  const isAuthPage = ["/login", "/register", "/forgot-password", "/reset-password"].includes(pathname);
+  const isMarketingPage = ["/", "/pricing", "/privacy", "/terms"].includes(pathname);
+  const isSharedPage = pathname.startsWith("/shared/");
 
   if (isAuthPage) {
     return <div className="h-screen bg-[var(--surface-base)]">{children}</div>;
+  }
+
+  if (isMarketingPage || isSharedPage) {
+    return <>{children}</>;
   }
 
   // Mock user — replace with real auth context when available
@@ -217,7 +289,7 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
               className="btn-icon btn-ghost interactive"
               aria-label="Toggle sidebar"
               aria-expanded={isSidebarOpen}
-              title={`Toggle sidebar (${navigator?.platform?.includes("Mac") ? "⌘" : "Ctrl"}+B)`}
+              title="Toggle sidebar (Ctrl+B)"
               style={{ display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px" }}
             >
               {isSidebarOpen ? (
@@ -233,8 +305,9 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
           </div>
 
           {/* CENTER ZONE */}
-          <div style={{ display: "flex", justifyContent: "center" }}>
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "12px" }}>
             <WorkspaceDropdown onWorkspaceChange={handleWorkspaceChange} />
+            <AutosaveIndicator />
           </div>
 
           {/* RIGHT ZONE */}
@@ -261,6 +334,9 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
                 onClick={() => openUpgradeModal("user_click")}
               />
             )}
+
+            {/* Notification center bell (Phase 14.7) */}
+            <NotificationCenter />
 
             {/* Dark/Light toggle */}
             <button
@@ -327,6 +403,26 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
         <UpgradeModal
           trigger={upgradeTrigger}
           onClose={upgradeTrigger !== "limit_reached" ? closeUpgradeModal : undefined}
+        />
+      )}
+
+      {/* Phase 14.1 — Command palette */}
+      <CommandPalette
+        isOpen={showCommandPalette}
+        onClose={() => setShowCommandPalette(false)}
+      />
+
+      {/* Phase 14.8 — Keyboard shortcuts modal */}
+      <KeyboardShortcutsModal
+        isOpen={showKeyboardShortcuts}
+        onClose={() => setShowKeyboardShortcuts(false)}
+      />
+
+      {/* Phase 22 — Share session modal */}
+      {showShareModal && activeSessionId && (
+        <ShareSessionModal
+          sessionId={activeSessionId}
+          onClose={() => setShowShareModal(false)}
         />
       )}
     </div>

@@ -6,13 +6,18 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "generate:og": "node scripts/generate-og-image.js"
   },
   "dependencies": {
+    "@fingerprintjs/fingerprintjs": "^5.2.0",
     "@headlessui/react": "^2.2.10",
     "@heroicons/react": "^2.2.0",
+    "@sentry/nextjs": "^10.53.1",
     "@tanstack/react-virtual": "^3.13.24",
+    "canvas": "^3.2.3",
     "next": "16.2.6",
+    "posthog-js": "^1.374.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-hot-toast": "^2.6.0",

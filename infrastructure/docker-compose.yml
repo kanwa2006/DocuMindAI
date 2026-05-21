@@ -56,6 +56,10 @@ services:
       - ../backend:/app
       - storage_data:/tmp/documind_storage
     environment:
+      # Gemini API keys — auto-detected by GeminiKeyRotator (Phase 12).
+      # Add GEMINI_API_KEY_1, GEMINI_API_KEY_2, _3, etc. as needed — no code changes required.
+      # - GEMINI_API_KEY_1: ${GEMINI_API_KEY_1}
+      # - GEMINI_API_KEY_2: ${GEMINI_API_KEY_2}  # uncomment to pass a second key
       - POSTGRES_SERVER=pgbouncer
       - POSTGRES_PORT=6432
       - POSTGRES_USER=${POSTGRES_USER:-postgres}

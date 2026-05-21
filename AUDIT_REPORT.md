@@ -1,0 +1,166 @@
+# AUDIT_REPORT.md — DocuMind AI Repair Pass
+
+Running log of every change made during this audit. One line per fix.
+
+---
+
+## STEP 1 — Orientation (Phase 0) — complete
+- Built [PROJECT_MAP.md](PROJECT_MAP.md): page → API → endpoint → service → model → worker.
+- Read CLAUDE.md (stable files), all .env* files, main.py, api.py, config.py, layout.tsx, middleware.ts, lib/api.ts, chats.py, auth.py, core/auth.py, models/org.py, models/chat.py, models/workspace_template.py.
+- Confirmed A1 (doubled /api/v1/ prefix), A2 (User.workspace_id is String "general" but endpoints parse as UUID), absence of any Workspace table.
+
+---
+
+## STEP 2 — A1: Doubled `/api/v1/` prefix removed — complete
+
+**Broken:** `NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1` already includes the prefix. ~50 manual `${API_BASE}/api/v1/...` calls across the frontend were producing `/api/v1/api/v1/...` → 404s. Confirmed by grep.
+
+**Convention picked:** keep `/api/v1` in `NEXT_PUBLIC_API_URL`; all callers use endpoint paths starting with `/` (matching `lib/api.ts`'s `apiFetch` convention). No env changes.
+
+**Files touched** (replace `${API_BASE}/api/v1/` → `${API_BASE}/`):
+- `frontend/src/lib/api.ts` (getSharedSession)
+- `frontend/src/app/bookmarks/page.tsx`
+- `frontend/src/app/admin/tenants/page.tsx`
+- `frontend/src/app/admin/corrections/page.tsx`
+- `frontend/src/app/settings/page.tsx`
+- `frontend/src/app/shared/[token]/page.tsx`
+- `frontend/src/components/BookmarkButton.tsx`
+- `frontend/src/components/CandidateRankingsPanel.tsx`
+- `frontend/src/components/CorrectionModal.tsx`
+- `frontend/src/components/DocumentChangeAlert.tsx`
+- `frontend/src/components/DocumentPreviewPanel.tsx` (also added `API_BASE` import for the relative-URL `pdfUrl`)
+- `frontend/src/components/ExportModal.tsx`
+- `frontend/src/components/FinanceRatioPanel.tsx`
+- `frontend/src/components/LegalRiskPanel.tsx`
+- `frontend/src/components/NotificationCenter.tsx`
+- `frontend/src/components/PaperConfigPanel.tsx`
+- `frontend/src/components/PinnedSessionsRail.tsx`
+- `frontend/src/components/ProactiveInsightsPanel.tsx`
+- `frontend/src/components/QueryTemplateModal.tsx`
+- `frontend/src/components/ReportShareModal.tsx`
+- `frontend/src/components/ResearchCitationModal.tsx`
+- `frontend/src/components/ResearchGapsPanel.tsx`
+- `frontend/src/components/Sidebar.tsx`
+- `frontend/src/components/teacher/TableExtractionPanel.tsx`
+- `frontend/src/components/WorkspaceUI.tsx` (also fixed `/api/v1/query` → `/query/ask` — the prefix-only fix would have produced a 404 since `/api/v1/query` is not a backend route; `/api/v1/query/ask` is)
+
+**Could regress:** any browser cached old paths — users may need a hard refresh. No other regressions expected since the backend routes are unchanged.
+
+**Remaining doubled-prefix references** (all comments / docstrings — left intact, they correctly describe the backend route):
+- `DocumentChangeAlert.tsx:8`, `NotificationCenter.tsx:9`, `QueryTemplateModal.tsx:7`
+
+## STEP 3 — A2: Workspace slug → UUID resolution — complete
+
+**Broken:** `User.workspace_id` is `Column(String(50), default="general")` (see `models/org.py`), and the registration flow sets `workspace_id="general"` (auth.py). But endpoints called `uuid.UUID(current_user["workspace_id"])` which throws `ValueError: badly formed hexadecimal UUID string` on every trial user. Symptom: every workspace page returned 5xx on first chat creation / chat list.
+
+**Fix approach:** Added `backend/app/core/workspace.py` with `resolve_workspace_id(value)` that:
+- Returns input as a UUID if it parses as one.
+- Otherwise produces a deterministic `uuid.uuid5(NAMESPACE_DNS, slug)`.
+- Treats None/"" as "general".
+- Raises HTTP 400 on truly malformed input.
+
+`NAMESPACE_DNS` chosen deliberately to match the existing inline fallback already in `endpoints/documents.py:82,164`, so any historical Document rows remain reachable.
+
+**No DB migration needed** — slugs map to virtual UUIDs. A proper `Workspace` table can be added later without disrupting this resolver (`resolve_workspace_id` can be extended to consult the table first).
+
+**Files touched:**
+- `backend/app/core/workspace.py` (new)
+- `backend/app/api/v1/endpoints/chats.py` (10 sites + import)
+- `backend/app/api/v1/endpoints/study.py` (8 + import)
+- `backend/app/api/v1/endpoints/exams.py` (7 + import)
+- `backend/app/api/v1/endpoints/research.py` (10 + import)
+- `backend/app/api/v1/endpoints/benchmark.py` (2 + import)
+- `backend/app/api/v1/endpoints/query.py` (3 + import)
+- `backend/app/api/v1/endpoints/export.py` (3 + import)
+- `backend/app/api/v1/endpoints/legal.py` (8 + import)
+- `backend/app/api/v1/endpoints/finance.py` (4 + import)
+- `backend/app/api/v1/endpoints/hr.py` (7 + import)
+- `backend/app/api/v1/endpoints/documents.py` (replaced two inline slug fallbacks with the shared helper, added import)
+
+**Could regress:** any code that compares ChatSession.workspace_id (UUID) to a value generated by some _other_ slug-mapping logic. None found in grep.
+
+**Observed but not changed:** `uuid.UUID(current_user["id"])` is correct (User.id is a real UUID column) and was left as-is.
+
+## STEP 4 — A3: Celery Windows pool — complete
+
+**Broken:** Worker on Windows crashed every 5 minutes with `PermissionError [WinError 5]` / `OSError [WinError 6]` because billiard's prefork pool requires POSIX fork. `auto_health_check.run_health_check` (Celery Beat task) couldn't run.
+
+**Fix:** Added two run scripts that select the right pool per OS. `backend/app/workers/celery_app.py` is untouched (per CLAUDE.md "never modify").
+
+**Files added:**
+- `backend/scripts/run_worker_windows.ps1` — uses `--pool=solo` (single-threaded, fork-free) with beat enabled. Local dev only.
+- `backend/scripts/run_worker_linux.sh` — uses `--pool=prefork --concurrency=2` with beat enabled. Production-equivalent.
+
+**Docker / Linux deploys** continue to use the command in `infrastructure/docker-compose.yml:109` (`celery -A app.workers.celery_app worker -Q main-queue,celery`) — unchanged.
+
+**Could regress:** none. New files, no edits to existing config.
+
+## STEP 5 — A4: Gemini key loading + loud warning — complete (partial)
+
+**Real bug discovered:** `.env` had `GEMINI_API_KEYS=k1,k2,...` (plural, comma-separated; 21 real keys). But `services/llm_key_rotation.py` only reads `GEMINI_API_KEY_1`, `_2`, ... — the numbered form. So **none of the 21 keys were being loaded**; `GeminiKeyRotator._load_keys()` raised RuntimeError; the system silently fell back to `DummyLLMProvider`. This is the actual cause of the "falls back to DummyLLMProvider" symptom in the user's report.
+
+**Fix:** Added a startup bridge in `backend/app/main.py` that:
+- Reads `settings.gemini_keys_list` (the plural comma-separated form) and promotes each key to `os.environ["GEMINI_API_KEY_N"]` via `setdefault` (so existing numbered keys win).
+- Also re-reads `.env` via python-dotenv to catch numbered keys that pydantic-settings ignores (they aren't declared as Settings fields).
+- Logs a LOUD `ERROR`-level multi-line banner if zero keys are detected.
+- Logs an `INFO` line with the count of loaded keys at startup.
+
+`services/llm_key_rotation.py` is **NOT modified** (per CLAUDE.md: STABLE after creation).
+
+**Migration to `google.genai` declined.** CLAUDE.md: "`llm_service.py` ... Wrap only; never rewrite provider internals." Replacing `google.generativeai` would require rewriting the entire `GeminiLLMProvider` class. Documenting as a future task in KNOWN_REMAINING_ISSUES.md.
+
+**Files touched:**
+- `backend/app/main.py` (additive — bridge + warning above existing Sentry block)
+- `.env.example` (documented `GEMINI_API_KEY_1` and noted both forms accepted)
+
+**Could regress:** None. `setdefault` won't overwrite existing GEMINI_API_KEY_N variables. The bridge only runs once at process startup, before any LLM service initializes.
+
+## STEP 6 — B1: react-pdf SSR `DOMMatrix is not defined` — complete
+
+**Broken:** Even with `'use client'` on `EnterpriseDocumentViewer.tsx`, the module's top-level `pdfjs.GlobalWorkerOptions.workerSrc = new URL(...)` (plus react-pdf's own internal references to `DOMMatrix`) executes during the Next.js SSR module-load pass for the parent boundary. Result: every workspace page crashed.
+
+**Fix:**
+- `frontend/src/components/DocumentPreviewPanel.tsx` — replaced the static `import EnterpriseDocumentViewer from "./EnterpriseDocumentViewer"` with `dynamic(() => import("./EnterpriseDocumentViewer"), { ssr: false, loading: <…> })`. The viewer is now loaded client-only.
+- `frontend/src/components/EnterpriseDocumentViewer.tsx` — guarded `pdfjs.GlobalWorkerOptions.workerSrc = …` inside `if (typeof window !== 'undefined')` as a belt-and-suspenders measure for any other entry point that might import it.
+
+**Could regress:** First-render flash of "Loading viewer…" placeholder (≈100ms) until the dynamic chunk lands. Acceptable for a PDF viewer.
+
+## STEP 7 — B4: Missing routes — complete
+
+**Created** the six routes that previously 404'd:
+- `frontend/src/app/dashboard/page.tsx` — redirects to `/general` (server-side `redirect()`).
+- `frontend/src/app/sessions/page.tsx` — lists chats across all 7 workspaces using `getChats(ws_type)`; sorted by recency.
+- `frontend/src/app/billing/page.tsx` — uses existing `getBillingStatus()` / `upgradePlan()`; shows trial usage and upgrade buttons.
+- `frontend/src/app/pricing/page.tsx` — marketing pricing page; Trial / Professional ₹799 (annual) or ₹999 (monthly) / Enterprise ₹2,999.
+- `frontend/src/app/forgot-password/page.tsx` — email form → `POST /auth/forgot-password`.
+- `frontend/src/app/reset-password/page.tsx` — token form → `POST /auth/reset-password`.
+
+**Backend additions** in `backend/app/api/v1/endpoints/auth.py`:
+- `POST /auth/forgot-password` — stores a 30-min `secrets.token_urlsafe(32)` keyed `pwreset:{token}` in Redis. Returns 202 regardless of whether the email exists (no enumeration). Email goes via SMTP if configured; otherwise logs the token loudly so admins can do manual resets in dev.
+- `POST /auth/reset-password` — validates token, sets new `hashed_password`, deletes token from Redis.
+- Added `import secrets` to auth.py.
+
+**Frontend `lib/api.ts`** — added `forgotPassword(email)` and `resetPassword(token, newPassword)` helpers.
+
+**Could regress:** The new backend endpoints add two POST routes under `/auth` — no path collisions. Pages use existing CSS variables (`--text-primary`, `--accent`, etc.) defined in `tokens.css`; they render correctly with the current theme.
+
+## STEP 8 — B5/B6/B7: sidebar toggle, share, account menu — complete
+
+**B5 — sidebar toggle:**
+- Added `Cmd+B / Ctrl+B` keyboard shortcut handler in `LayoutWrapper.tsx`.
+- Persist `isSidebarOpen` to `localStorage` on every change (separate `useEffect`). The initial-load restoration already existed; now updates are saved too.
+- The existing onClick handler already worked, but state was only saved on load. With persistence both ways, the toggle now sticks across reloads.
+
+**B6 — share button:**
+- The old code called `(window as any).__toastSuccess?.("Link copied!")`, which is a no-op since `__toastSuccess` was never defined. Replaced with `toast.success / toast.error` from `react-hot-toast` (already used elsewhere). Added clipboard-availability guard.
+
+**B7 — account dropdown items (Usage Dashboard, Billing):**
+- The dropdown already called `router.push(href)`. The targets (`/dashboard`, `/billing`) didn't exist before STEP 7 → 404s. Now they exist and resolve.
+
+**Other:**
+- Added `/reset-password` to `isAuthPage` so the reset flow gets the same minimal-chrome layout as `/login` / `/forgot-password`.
+
+**Files touched:**
+- `frontend/src/components/LayoutWrapper.tsx`
+
+(further steps will append below as they are completed)

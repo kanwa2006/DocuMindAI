@@ -13,6 +13,7 @@ class DocumentStatus(str, enum.Enum):
     INDEXING = "INDEXING"
     READY = "READY"
     FAILED = "FAILED"
+    DEDUPLICATED = "DEDUPLICATED"
 
 class Document(Base):
     __tablename__ = "documents"
@@ -29,6 +30,9 @@ class Document(Base):
     owner_id = Column(UUID(as_uuid=True), index=True, nullable=False)
     workspace_id = Column(UUID(as_uuid=True), index=True, nullable=True)
     chat_session_id = Column(UUID(as_uuid=True), index=True, nullable=True)
+
+    content_hash = Column(String(32), nullable=True, index=True)
+    source = Column(String(20), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

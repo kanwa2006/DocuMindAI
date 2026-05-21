@@ -18,6 +18,18 @@ import FinanceRatioPanel from "./FinanceRatioPanel";
 import LegalRiskPanel from "./LegalRiskPanel";
 import ResearchCitationModal from "./ResearchCitationModal";
 import ResearchGapsPanel from "./ResearchGapsPanel";
+import TableExtractionPanel from "./teacher/TableExtractionPanel";
+import VoiceInputButton from "./voice/VoiceInputButton";
+import { useVoiceReadback } from "../hooks/useVoiceReadback";
+import { useSelectionClip } from "../hooks/useSelectionClip";
+import { ClipBar } from "./clips/ClipBar";
+import { ClipModal } from "./clips/ClipModal";
+import ComparisonToggle from "./ComparisonToggle";
+import BookmarkButton from "./BookmarkButton";
+import { TrustScoreBadge, TrustReport } from "./veritas/TrustScoreBadge";
+import { TrustScorePanel } from "./veritas/TrustScorePanel";
+import { DocumentPreviewPanel } from "./DocumentPreviewPanel";
+import ProactiveInsightsPanel from "./ProactiveInsightsPanel";
 
 // ─── Workspace configuration (Phase 5) ───────────────────────────────────────
 
@@ -116,7 +128,7 @@ const FOLLOW_UP_SUGGESTIONS: Record<string, string[]> = {
 };
 
 const WORKSPACE_ACTIONS: Record<string, { icon: string; label: string }[]> = {
-  exam:     [{ icon: "📄", label: "Generate Paper" }, { icon: "📖", label: "Question Bank" }, { icon: "🔑", label: "Answer Key" }, { icon: "🖨", label: "Export DOCX" }],
+  exam:     [{ icon: "📄", label: "Generate Paper" }, { icon: "📖", label: "Question Bank" }, { icon: "🔑", label: "Answer Key" }, { icon: "🖨", label: "Export DOCX" }, { icon: "⊞", label: "Extract Tables" }],
   hr:       [{ icon: "📂", label: "Batch Upload" }, { icon: "🎯", label: "Set JD Context" }, { icon: "📊", label: "View Rankings" }, { icon: "📋", label: "Export Candidates" }],
   study:    [{ icon: "📖", label: "Study Mode" }, { icon: "🃏", label: "Flashcard Mode" }, { icon: "⏱", label: "Pomodoro Timer" }, { icon: "📊", label: "My Progress" }],
   finance:  [{ icon: "🔢", label: "Extraction Mode" }, { icon: "📊", label: "Table Mode" }, { icon: "✅", label: "Verify" }, { icon: "📈", label: "Ratios" }],
@@ -225,7 +237,7 @@ function TableWithExport({ children, workspaceType }: { children: React.ReactNod
       const dataRows = rows.slice(1).map((r) =>
         Array.from(r.querySelectorAll("td")).map((c) => c.textContent || "")
       );
-      const res = await fetch(`${API_BASE}/api/v1/exams/export/table-docx`, {
+      const res = await fetch(`${API_BASE}/exams/export/table-docx`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: "Table Export", headers, rows: dataRows }),
@@ -322,14 +334,23 @@ function WorkspaceWelcome({ workspaceType, onQuickAction }: { workspaceType: str
 
 const MemoizedMessage = memo(({
   msg, chatId, workspaceType, isLastAI, isStreaming, onRegenerate, followUps, onFollowUpClick,
+  trustData, isTrustExpanded, onTrustToggle, onViewPage, onSecondOpinion, originalQuery, voiceLang,
 }: {
   msg: ChatMessage; chatId: string | null; workspaceType: string;
   isLastAI: boolean; isStreaming: boolean;
   onRegenerate: () => void;
   followUps: string[]; onFollowUpClick: (p: string) => void;
+  trustData?: TrustReport;
+  isTrustExpanded?: boolean;
+  onTrustToggle?: () => void;
+  onViewPage?: (filename: string, page: number) => void;
+  onSecondOpinion?: (query: string) => Promise<string>;
+  originalQuery?: string;
+  voiceLang?: string;
 }) => {
   const [hovered, setHovered] = useState(false);
   const [copyDone, setCopyDone] = useState(false);
+  const { speak, stop, isSpeaking, isSupported: readbackSupported } = useVoiceReadback();
 
   const mdComponents = useMemo(() => buildMarkdownComponents(workspaceType), [workspaceType]);
 
@@ -373,19 +394,46 @@ const MemoizedMessage = memo(({
 
       {/* Citations + confidence */}
       {evidence.length > 0 && (
-        <div style={{ marginTop: "8px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px" }}>
+        <div className="no-clip-zone" style={{ marginTop: "8px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px" }}>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-tertiary)", textTransform: "uppercase" }}>Sources:</span>
-          {evidence.slice(0, 4).map((chunk: any, i: number) => (
-            <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", border: "1px solid var(--border-default)", borderRadius: "4px", fontFamily: "var(--font-mono)", fontSize: "11px", cursor: "default", transition: "border-color 100ms, background 100ms" }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; (e.currentTarget as HTMLElement).style.background = "var(--brand-ghost)"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.background = ""; }}
-            >📄 {chunk.filename} p.{chunk.page_number}</span>
-          ))}
+          {evidence.slice(0, 4).map((chunk: any, i: number) => {
+            // Phase 28: detect clip source by looking up doc in outer docs list
+            // chunk.document_source comes from backend if available, else use chunk_index heuristic
+            const isClip = chunk.document_source === "clip";
+            const citationLabel = isClip
+              ? `Clipped text, part ${(chunk.chunk_index ?? i) + 1}`
+              : `p.${chunk.page_number}`;
+            return (
+              <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", border: "1px solid var(--border-default)", borderRadius: "4px", fontFamily: "var(--font-mono)", fontSize: "11px", cursor: "default", transition: "border-color 100ms, background 100ms" }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; (e.currentTarget as HTMLElement).style.background = "var(--brand-ghost)"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.background = ""; }}
+              >{isClip ? "📋" : "📄"} {chunk.filename} {citationLabel}</span>
+            );
+          })}
           <ConfidenceBadge score={confidence} />
         </div>
       )}
       {evidence.length === 0 && (
         <div style={{ marginTop: "6px" }}><ConfidenceBadge score={confidence} /></div>
+      )}
+
+      {/* Trust Score badge + expanded panel */}
+      {trustData && (
+        <div className="no-clip-zone" style={{ marginTop: "8px" }}>
+          <TrustScoreBadge
+            trust={trustData}
+            expanded={isTrustExpanded ?? false}
+            onToggle={() => onTrustToggle?.()}
+          />
+          {isTrustExpanded && onViewPage && onSecondOpinion && (
+            <TrustScorePanel
+              trust={trustData}
+              originalQuery={originalQuery ?? ""}
+              onViewPage={onViewPage}
+              onSecondOpinion={onSecondOpinion}
+            />
+          )}
+        </div>
       )}
 
       {/* Disclaimer banner */}
@@ -396,7 +444,7 @@ const MemoizedMessage = memo(({
       )}
 
       {/* Actions row (hover) */}
-      <div style={{ display: "flex", gap: "4px", marginTop: "8px", opacity: hovered ? 1 : 0, transition: "opacity 100ms" }}>
+      <div className="no-clip-zone" style={{ display: "flex", gap: "4px", marginTop: "8px", opacity: hovered ? 1 : 0, transition: "opacity 100ms", flexWrap: "wrap" }}>
         <button
           className="btn btn-ghost btn-sm"
           aria-label="Copy response to clipboard"
@@ -405,6 +453,15 @@ const MemoizedMessage = memo(({
         >
           <span aria-hidden="true">{copyDone ? "✓" : "📋"}</span> Copy
         </button>
+        {chatId && (
+          <BookmarkButton
+            messageId={msg.id}
+            sessionId={chatId}
+            content={msg.content}
+            citations={evidence}
+            workspace={workspaceType}
+          />
+        )}
         {isLastAI && !isStreaming && (
           <button className="btn btn-ghost btn-sm" aria-label="Regenerate response" style={{ height: "28px" }} onClick={onRegenerate}>
             <span aria-hidden="true">🔄</span> Regenerate
@@ -416,6 +473,16 @@ const MemoizedMessage = memo(({
         <button className="btn btn-ghost btn-sm" aria-label="Mark response as not helpful" style={{ height: "28px" }} onClick={() => toast("Noted — we'll improve.", { icon: "👎" })}>
           <span aria-hidden="true">👎</span> Not Helpful
         </button>
+        {readbackSupported && (
+          <button
+            className="btn btn-ghost btn-sm"
+            aria-label={isSpeaking ? "Stop reading aloud" : "Read answer aloud"}
+            style={{ height: "28px" }}
+            onClick={() => isSpeaking ? stop() : speak(mainText, voiceLang || "en-IN")}
+          >
+            <span aria-hidden="true">{isSpeaking ? "⏹" : "🔊"}</span> {isSpeaking ? "Stop" : "Read"}
+          </button>
+        )}
       </div>
 
       {/* Follow-up suggestion chips (Task 4.10) */}
@@ -564,6 +631,8 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const [response, setResponse] = useState<QueryResponse | null>(null);
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [showThinkingLabel, setShowThinkingLabel] = useState(false);
+  const [thinkingStage, setThinkingStage] = useState<{ stage: string; detail: string } | null>(null);
+  const [comparisonMode, setComparisonMode] = useState(false);
 
   // ── Workspace-specific state ──────────────────────────────────────────────
   const [showPaperConfig, setShowPaperConfig] = useState(false);
@@ -572,6 +641,9 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const [showPomodoro, setShowPomodoro] = useState(false);
   const [flashcardMode, setFlashcardMode] = useState(false);
   const [flashcardDecks, setFlashcardDecks] = useState<any[]>([]);
+  // Phase 11 — Table Extraction Panel (exam/teacher workspace)
+  const [showTablePanel, setShowTablePanel] = useState(false);
+  const [tablePanelDocId, setTablePanelDocId] = useState<string | null>(null);
 
   // ── Finance workspace state ───────────────────────────────────────────────
   const [showRatioPanel, setShowRatioPanel] = useState(false);
@@ -589,12 +661,29 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const [batchProgress, setBatchProgress] = useState<Record<string, { progress: number; status: string }>>({});
   const batchFileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── Phase 28: Text Clip state ─────────────────────────────────────────────
+  const [clipBarState, setClipBarState] = useState<{ text: string; rect: DOMRect } | null>(null);
+  const [clipModalOpen, setClipModalOpen] = useState(false);
+  const [clipInitialText, setClipInitialText] = useState("");
+
+  // ── Trust Score state (Phase 18-B) ─────────────────────────────────────────
+  const [trustDataMap, setTrustDataMap] = useState<Record<string, TrustReport>>({});
+  const [expandedTrustMsgId, setExpandedTrustMsgId] = useState<string | null>(null);
+  const [docPreviewState, setDocPreviewState] = useState<{ doc: Document; page: number } | null>(null);
+  const latestTrustRef = useRef<TrustReport | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pollingIntervalsRef = useRef<NodeJS.Timeout[]>([]);
   const thinkingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Voice state
+  const [voiceLang, setVoiceLang] = useState("en-IN");
+  const [voiceInterim, setVoiceInterim] = useState("");
+  const queryRef = useRef(query);
+  queryRef.current = query;
 
   const mdComponents = useMemo(() => buildMarkdownComponents(workspaceType), [workspaceType]);
 
@@ -604,6 +693,20 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const chatId = searchParams.get("chat");
 
   const isStreaming = loading;
+
+  // Phase 11 — Cmd+Shift+T → open/close Extract Tables panel (exam workspace only)
+  useEffect(() => {
+    if (workspaceType !== "exam") return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toUpperCase() === "T") {
+        e.preventDefault();
+        setTablePanelDocId(activeDoc?.id ?? null);
+        setShowTablePanel((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [workspaceType, activeDoc]);
 
   // Scroll to bottom when new content arrives
   useEffect(() => {
@@ -650,6 +753,11 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     localStorage.setItem("lastActiveWorkspace", pathname || "/");
   }, [pathname]);
 
+  useEffect(() => {
+    const saved = localStorage.getItem("documind_voice_lang");
+    if (saved) setVoiceLang(saved);
+  }, []);
+
   // Workspace document sync
   useEffect(() => {
     const syncWorkspace = async () => {
@@ -672,6 +780,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   // ── Core send function ─────────────────────────────────────────────────────
   const sendMessage = useCallback(async (queryText: string) => {
     if (!queryText.trim()) return;
+    window.speechSynthesis?.cancel?.();
     if (!activeDoc || activeDoc.status !== "READY") {
       toast.error("Please wait for document to be ready.");
       return;
@@ -714,11 +823,13 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         (token) => {
           if (thinkingTimerRef.current) { clearTimeout(thinkingTimerRef.current); thinkingTimerRef.current = null; }
           setShowThinkingLabel(false);
+          setThinkingStage(null);
           setResponse((prev) => prev ? { ...prev, answer: prev.answer + token } : null);
         },
         (err) => {
           if (err !== "Request cancelled.") toast.error(err, { id: toastId });
           setLoading(false);
+          setThinkingStage(null);
           abortControllerRef.current = null;
           if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
         },
@@ -726,14 +837,21 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           if (!abortControllerRef.current) return;
           toast.success("Response complete.", { id: toastId });
           setLoading(false);
+          setThinkingStage(null);
           abortControllerRef.current = null;
           if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
           setShowThinkingLabel(false);
           setResponse((currentRes) => {
             if (currentRes && chatId) {
+              window.dispatchEvent(new CustomEvent("autosave:saving"));
               createChatMessage(chatId, "assistant", JSON.stringify(currentRes)).then((savedMsg) => {
                 setHistory((prev) => [...prev, savedMsg]);
-              });
+                window.dispatchEvent(new CustomEvent("autosave:saved"));
+                if (latestTrustRef.current) {
+                  setTrustDataMap((prev) => ({ ...prev, [savedMsg.id]: latestTrustRef.current! }));
+                  latestTrustRef.current = null;
+                }
+              }).catch(() => window.dispatchEvent(new CustomEvent("autosave:error")));
             }
             return currentRes;
           });
@@ -742,6 +860,10 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         abortControllerRef.current.signal,
         chatId || undefined,
         workspaceType,
+        undefined, // onTrialStatus
+        (stage) => setThinkingStage(stage), // onThinkingStage
+        comparisonMode,
+        (trust) => { latestTrustRef.current = trust; }, // onTrustReport
       );
     } catch (err: any) {
       toast.error(err.message || "Query failed.", { id: toastId });
@@ -778,6 +900,23 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     });
   };
 
+  const handleVoiceLangChange = useCallback((lang: string) => {
+    setVoiceLang(lang);
+    localStorage.setItem("documind_voice_lang", lang);
+  }, []);
+
+  const handleInterimText = useCallback((text: string) => {
+    setVoiceInterim(text);
+  }, []);
+
+  const handleVoiceTranscript = useCallback((text: string) => {
+    setVoiceInterim("");
+    setQuery(text);
+    const lang = localStorage.getItem("documind_voice_lang") || "en-IN";
+    window.dispatchEvent(new CustomEvent("voice_query_used", { detail: { workspace: workspaceType, lang } }));
+    setTimeout(() => { sendMessage(text); }, 300);
+  }, [sendMessage, workspaceType]);
+
   const handleUploadClick = () => fileInputRef.current?.click();
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -792,17 +931,23 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       localStorage.setItem(`docs_${workspaceType}`, JSON.stringify(wsDocs));
       setDocs((prev) => [uploadedDoc, ...prev]);
       setActiveDoc(uploadedDoc);
-      toast.success("Document uploaded. Starting pipeline...", { id: toastId });
-      const interval = setInterval(async () => {
-        try {
-          const statusDoc = await getDocument(uploadedDoc.id);
-          setActiveDoc(statusDoc);
-          setDocs((prev) => prev.map((d) => d.id === statusDoc.id ? statusDoc : d));
-          if (statusDoc.status === "READY") { toast.success("Extraction complete!", { id: toastId }); clearInterval(interval); setLoading(false); }
-          else if (statusDoc.status === "FAILED") { toast.error("Extraction failed.", { id: toastId }); clearInterval(interval); setLoading(false); }
-        } catch { /* transient */ }
-      }, 2000);
-      pollingIntervalsRef.current.push(interval);
+
+      if (uploadedDoc.status === "DEDUPLICATED") {
+        toast.success(`📄 This document matches '${uploadedDoc.duplicate_of}'. Using cached embeddings — instant processing!`, { id: toastId });
+        setLoading(false);
+      } else {
+        toast.success("Document uploaded. Starting pipeline...", { id: toastId });
+        const interval = setInterval(async () => {
+          try {
+            const statusDoc = await getDocument(uploadedDoc.id);
+            setActiveDoc(statusDoc);
+            setDocs((prev) => prev.map((d) => d.id === statusDoc.id ? statusDoc : d));
+            if (statusDoc.status === "READY") { toast.success("Extraction complete!", { id: toastId }); clearInterval(interval); setLoading(false); }
+            else if (statusDoc.status === "FAILED") { toast.error("Extraction failed.", { id: toastId }); clearInterval(interval); setLoading(false); }
+          } catch { /* transient */ }
+        }, 2000);
+        pollingIntervalsRef.current.push(interval);
+      }
     } catch (err: any) {
       toast.error(err.message || "Upload failed.", { id: toastId });
     } finally {
@@ -816,6 +961,53 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     handleQueryChange(e.target.value);
     e.target.style.height = "auto";
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
+  };
+
+  // Phase 28 — selection clip hook
+  useSelectionClip({
+    onSelection: (text, rect) => {
+      setClipBarState({ text, rect });
+    },
+  });
+
+  const handleClipBarAdd = () => {
+    if (!clipBarState) return;
+    if (clipBarState.text.length < 50) {
+      toast("Select more text (minimum 50 characters)", { icon: "⚠️" });
+      setClipBarState(null);
+      return;
+    }
+    setClipInitialText(clipBarState.text);
+    setClipBarState(null);
+    setClipModalOpen(true);
+  };
+
+  const handleClipped = (doc: Document) => {
+    const wsDocs = JSON.parse(localStorage.getItem(`docs_${workspaceType}`) || "[]");
+    wsDocs.push(doc.id);
+    localStorage.setItem(`docs_${workspaceType}`, JSON.stringify(wsDocs));
+    setDocs((prev) => [doc, ...prev]);
+    if (!activeDoc) setActiveDoc(doc);
+    toast.success("📋 Text clipped — processing…");
+    // Analytics: clip_text_used
+    window.dispatchEvent(new CustomEvent("clip_text_used", { detail: { workspace: workspaceType } }));
+    // Poll until READY (reuses existing pattern)
+    if (doc.status === "PROCESSING") {
+      const interval = setInterval(async () => {
+        try {
+          const updated = await getDocument(doc.id);
+          setDocs((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
+          if (updated.status === "READY") {
+            toast.success("📋 Clip ready — you can now ask questions!", { duration: 4000 });
+            clearInterval(interval);
+          } else if (updated.status === "FAILED") {
+            toast.error("Clip processing failed.");
+            clearInterval(interval);
+          }
+        } catch { /* transient */ }
+      }, 2000);
+      pollingIntervalsRef.current.push(interval);
+    }
   };
 
   const isLegalOrFinance = workspaceType === "legal" || workspaceType === "finance";
@@ -840,6 +1032,11 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     if (workspaceType === "exam") {
       if (label === "Generate Paper") { setShowPaperConfig(true); return; }
       if (label === "Answer Key") { setShowAnswerKey((v) => !v); return; }
+      if (label === "Extract Tables") {
+        setTablePanelDocId(activeDoc?.id ?? null);
+        setShowTablePanel((v) => !v);
+        return;
+      }
     }
     if (workspaceType === "hr") {
       if (label === "View Rankings") { setShowRankings(true); return; }
@@ -861,13 +1058,13 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         if (!flashcardMode) {
           // Load decks from API
           try {
-            const res = await fetch(`${API_BASE}/api/v1/study/decks`, { credentials: "include" });
+            const res = await fetch(`${API_BASE}/study/decks`, { credentials: "include" });
             if (res.ok) {
               const deckList = await res.json();
               // Load cards per deck
               const decksWithCards = await Promise.all(
                 deckList.map(async (d: any) => {
-                  const cr = await fetch(`${API_BASE}/api/v1/study/decks/${d.id}/flashcards`, { credentials: "include" });
+                  const cr = await fetch(`${API_BASE}/study/decks/${d.id}/flashcards`, { credentials: "include" });
                   const cards = cr.ok ? await cr.json() : [];
                   return { ...d, cards };
                 })
@@ -884,13 +1081,40 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
 
   const handleFlashcardReview = useCallback(async (cardId: string, quality: number) => {
     try {
-      await fetch(`${API_BASE}/api/v1/study/flashcards/${cardId}/review`, {
+      await fetch(`${API_BASE}/study/flashcards/${cardId}/review`, {
         method: "PATCH", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ quality }),
       });
     } catch { /* non-fatal */ }
   }, []);
+
+  const handleSecondOpinion = useCallback(async (query: string): Promise<string> => {
+    try {
+      const res = await fetch(`${API_BASE}/query/ask`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          top_k: 5,
+          similarity_threshold: 0.35,
+          second_opinion: true,
+          workspace_type: workspaceType,
+        }),
+      });
+      if (!res.ok) return "Alternative retrieval unavailable.";
+      const data = await res.json();
+      return data?.answer || "No alternative answer found.";
+    } catch {
+      return "Alternative retrieval unavailable.";
+    }
+  }, [workspaceType]);
+
+  const handleViewPage = useCallback((filename: string, page: number) => {
+    const doc = docs.find((d) => d.filename === filename);
+    if (doc) setDocPreviewState({ doc, page });
+  }, [docs]);
 
   // ── HR: Batch upload with per-file progress ───────────────────────────────
   const handleBatchFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -962,11 +1186,47 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     <div className="h-full flex flex-col px-4 md:px-8 py-6 pb-0 w-full max-w-6xl mx-auto" style={{ position: "relative" }}>
       <Toaster position="top-center" toastOptions={{ className: "dark:bg-black dark:text-white border dark:border-white/10 shadow-lg rounded-md text-sm" }} />
 
+      {/* ── Phase 28: Selection Clip Bar ── */}
+      {clipBarState && (
+        <ClipBar
+          rect={clipBarState.rect}
+          onAddToSession={handleClipBarAdd}
+          onDismiss={() => setClipBarState(null)}
+        />
+      )}
+
+      {/* ── Phase 28: Clip Modal ── */}
+      {clipModalOpen && (
+        <ClipModal
+          initialText={clipInitialText}
+          onClose={() => { setClipModalOpen(false); setClipInitialText(""); }}
+          onClipped={handleClipped}
+        />
+      )}
+
+      {/* ── Document Preview Panel (Trust Score contradiction "View Page") ── */}
+      {docPreviewState && (
+        <DocumentPreviewPanel
+          doc={docPreviewState.doc}
+          initialPage={docPreviewState.page}
+          onClose={() => setDocPreviewState(null)}
+        />
+      )}
+
       {/* ── Paper Config Panel (Teacher workspace) ── */}
       {showPaperConfig && (
         <PaperConfigPanel
           onClose={() => setShowPaperConfig(false)}
           onGenerated={handlePaperGenerated}
+        />
+      )}
+
+      {/* ── Phase 11: Table Extraction Panel (Teacher/Exam workspace) ── */}
+      {workspaceType === "exam" && showTablePanel && (
+        <TableExtractionPanel
+          documentId={tablePanelDocId}
+          documentName={activeDoc?.filename}
+          onClose={() => setShowTablePanel(false)}
         />
       )}
 
@@ -987,7 +1247,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           onClose={() => setShowLegalRisk(false)}
           onFetchContracts={async () => {
             try {
-              const res = await fetch(`${API_BASE}/api/v1/legal/contracts`, { credentials: "include" });
+              const res = await fetch(`${API_BASE}/legal/contracts`, { credentials: "include" });
               if (res.ok) return await res.json();
             } catch { /* non-fatal */ }
             return [];
@@ -1056,6 +1316,22 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         </div>
       ) : null}
 
+      {/* ── Phase 21: Proactive Insights Panel (above chat messages) ── */}
+      {!flashcardMode && (
+        <ProactiveInsightsPanel
+          sessionId={chatId}
+          hasDocuments={docs.length > 0}
+          onAskAbout={(question) => {
+            setQuery(question);
+            if (textareaRef.current) {
+              textareaRef.current.style.height = "auto";
+              textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + "px";
+              textareaRef.current.focus();
+            }
+          }}
+        />
+      )}
+
       {/* ── Chat area ── */}
       <div className="flex-1 overflow-y-auto mb-4 pr-2" style={{ scrollBehavior: "smooth", display: flashcardMode ? "none" : undefined }}>
 
@@ -1090,6 +1366,13 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
               onRegenerate={regenerateLastResponse}
               followUps={[]}
               onFollowUpClick={sendMessage}
+              trustData={msg.role === "assistant" ? trustDataMap[msg.id] : undefined}
+              isTrustExpanded={expandedTrustMsgId === msg.id}
+              onTrustToggle={() => setExpandedTrustMsgId((prev) => prev === msg.id ? null : msg.id)}
+              onViewPage={handleViewPage}
+              onSecondOpinion={handleSecondOpinion}
+              originalQuery={idx > 0 && history[idx - 1]?.role === "user" ? history[idx - 1].content : ""}
+              voiceLang={voiceLang}
             />
           ))}
 
@@ -1109,10 +1392,17 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                   <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-tertiary)", animation: loading ? "pulse 1.5s ease-in-out infinite" : "none" }}>DocuMindAI</span>
                 </div>
 
-                {/* Thinking label */}
-                {showThinkingLabel && !response.answer && (
-                  <div style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-tertiary)", fontStyle: "italic", marginBottom: "8px" }}>
-                    DocuMindAI is thinking...
+                {/* Thinking label — Phase 14.10 */}
+                {(showThinkingLabel || thinkingStage) && !response.answer && (
+                  <div style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-tertiary)", fontStyle: "italic", marginBottom: "8px", transition: "opacity 200ms" }}>
+                    {thinkingStage ? (
+                      <span>
+                        {thinkingStage.stage === "searching" && "🔍 "}
+                        {thinkingStage.stage === "reranking" && "📊 "}
+                        {thinkingStage.stage === "generating" && "✍ "}
+                        {thinkingStage.detail}
+                      </span>
+                    ) : "DocuMindAI is thinking..."}
                   </div>
                 )}
 
@@ -1133,13 +1423,19 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
 
                 {/* Evidence chips while streaming */}
                 {response.evidence.length > 0 && (
-                  <div style={{ marginTop: "8px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px" }}>
+                  <div className="no-clip-zone" style={{ marginTop: "8px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px" }}>
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-tertiary)", textTransform: "uppercase" }}>Sources:</span>
-                    {response.evidence.slice(0, 4).map((chunk, i) => (
-                      <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", border: "1px solid var(--border-default)", borderRadius: "4px", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
-                        📄 {chunk.filename} p.{chunk.page_number}
-                      </span>
-                    ))}
+                    {response.evidence.slice(0, 4).map((chunk: any, i) => {
+                      const isClip = chunk.document_source === "clip";
+                      const citationLabel = isClip
+                        ? `Clipped text, part ${(chunk.chunk_index ?? i) + 1}`
+                        : `p.${chunk.page_number}`;
+                      return (
+                        <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", border: "1px solid var(--border-default)", borderRadius: "4px", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
+                          {isClip ? "📋" : "📄"} {chunk.filename} {citationLabel}
+                        </span>
+                      );
+                    })}
                     {response.confidence_score > 0 && <ConfidenceBadge score={response.confidence_score} />}
                   </div>
                 )}
@@ -1165,6 +1461,11 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         <div style={{ marginBottom: "10px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px", padding: "0 2px" }}>
             <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.07em" }}>Documents</span>
+            <ComparisonToggle
+              enabled={comparisonMode}
+              documentCount={docs.filter((d) => d.status === "READY").length}
+              onToggle={setComparisonMode}
+            />
           </div>
           <div style={{ display: "flex", gap: "10px", overflowX: "auto", paddingBottom: "4px" }}>
             <div
@@ -1182,16 +1483,84 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
               <span aria-hidden="true" style={{ fontSize: "20px", marginBottom: "4px" }}>+</span>
               <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-tertiary)" }}>Upload</span>
             </div>
+            {/* Phase 28 — Paste Text button */}
+            <div
+              role="button"
+              tabIndex={0}
+              aria-label="Paste text as document"
+              onClick={() => { setClipInitialText(""); setClipModalOpen(true); }}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setClipInitialText(""); setClipModalOpen(true); } }}
+              style={{ flexShrink: 0, width: "116px", height: "80px", border: "2px dashed var(--border-default)", borderRadius: "10px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "border-color 100ms, background 100ms" }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; (e.currentTarget as HTMLElement).style.background = "var(--brand-ghost)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.background = ""; }}
+            >
+              <span aria-hidden="true" style={{ fontSize: "20px", marginBottom: "4px" }}>📋</span>
+              <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-tertiary)" }}>Paste Text</span>
+            </div>
             <input type="file" className="hidden" accept=".pdf,.docx" ref={fileInputRef} onChange={handleFileChange} />
             {docs.map((d) => (
-              <div key={d.id} onClick={() => setActiveDoc(d)}
-                style={{ flexShrink: 0, width: "116px", height: "80px", border: `1px solid ${activeDoc?.id === d.id ? "var(--brand)" : "var(--border-default)"}`, borderRadius: "10px", padding: "10px", display: "flex", flexDirection: "column", justifyContent: "space-between", cursor: "pointer", background: activeDoc?.id === d.id ? "var(--brand-ghost)" : "", transition: "border-color 100ms, background 100ms" }}
+              <div key={d.id}
+                style={{ flexShrink: 0, width: "116px", height: "80px", border: `1px solid ${activeDoc?.id === d.id ? "var(--brand)" : "var(--border-default)"}`, borderRadius: "10px", padding: "10px", display: "flex", flexDirection: "column", justifyContent: "space-between", cursor: "pointer", background: activeDoc?.id === d.id ? "var(--brand-ghost)" : "", transition: "border-color 100ms, background 100ms", position: "relative" }}
+                onClick={() => setActiveDoc(d)}
               >
-                <div style={{ fontFamily: "var(--font-body)", fontSize: "11px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-primary)" }} title={d.filename}>{d.filename}</div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ width: "7px", height: "7px", borderRadius: "50%", background: d.status === "READY" ? "var(--success-text)" : d.status === "FAILED" ? "var(--error-text)" : "var(--brand)", opacity: d.status === "READY" || d.status === "FAILED" ? 1 : undefined, animation: d.status !== "READY" && d.status !== "FAILED" ? "pulse 1.5s ease-in-out infinite" : "none" }} />
-                  <div style={{ fontFamily: "var(--font-mono)", fontSize: "9px", color: "var(--text-tertiary)" }}>{d.status}</div>
+                <div style={{ fontFamily: "var(--font-body)", fontSize: "11px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "3px" }} title={d.filename}>
+                  {/* Phase 28: source badge */}
+                  {d.source === "clip" && <span style={{ fontSize: "10px", flexShrink: 0 }}>📋</span>}
+                  {d.source === "scan" && <span style={{ fontSize: "10px", flexShrink: 0 }}>📷</span>}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.filename}</span>
                 </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  {d.status === "DEDUPLICATED" ? (
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: "9px", color: "var(--success-text)", fontWeight: 600 }}>✓ Instant</span>
+                  ) : (
+                    <>
+                      <div style={{ width: "7px", height: "7px", borderRadius: "50%", background: d.status === "READY" ? "var(--success-text)" : d.status === "FAILED" ? "var(--error-text)" : "var(--brand)", opacity: d.status === "READY" || d.status === "FAILED" ? 1 : undefined, animation: d.status !== "READY" && d.status !== "FAILED" ? "pulse 1.5s ease-in-out infinite" : "none" }} />
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: "9px", color: "var(--text-tertiary)" }}>{d.status}</div>
+                    </>
+                  )}
+                </div>
+                {/* Phase 11: Extract Tables quick-action on exam workspace doc chips */}
+                {workspaceType === "exam" && d.status === "READY" && (
+                  <button
+                    title="Extract tables from this document"
+                    aria-label={`Extract tables from ${d.filename}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveDoc(d);
+                      setTablePanelDocId(d.id);
+                      setShowTablePanel(true);
+                    }}
+                    style={{
+                      position: "absolute",
+                      bottom: "4px",
+                      right: "4px",
+                      height: "18px",
+                      padding: "0 5px",
+                      fontSize: "9px",
+                      background: "var(--surface-base)",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      color: "var(--text-tertiary)",
+                      fontFamily: "var(--font-body)",
+                      lineHeight: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "2px",
+                      transition: "border-color 100ms, color 100ms",
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)";
+                      (e.currentTarget as HTMLElement).style.color = "var(--brand)";
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLElement).style.borderColor = "var(--border-subtle)";
+                      (e.currentTarget as HTMLElement).style.color = "var(--text-tertiary)";
+                    }}
+                  >
+                    ⊞ Tables
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -1206,26 +1575,36 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
             <textarea
               id="chat-textarea"
               ref={textareaRef}
-              value={query}
+              value={voiceInterim || query}
               rows={1}
               aria-label="Message input"
-              onChange={handleTextareaChange}
+              onChange={(e) => {
+                if (voiceInterim) setVoiceInterim("");
+                handleTextareaChange(e);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
-                  sendMessage(query);
+                  sendMessage(voiceInterim || query);
                 }
               }}
               disabled={!activeDoc || activeDoc.status !== "READY" || loading}
               placeholder={!activeDoc ? "Upload a document to ask anything..." : activeDoc.status !== "READY" ? "Processing document..." : "Ask anything about your documents... (Shift+Enter for new line)"}
               className="chat-input"
-              style={{ width: "100%", background: "transparent", border: "none", outline: "none", resize: "none", minHeight: "44px", maxHeight: "200px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)", color: "var(--text-primary)", display: "block", overflow: "auto" }}
+              style={{ width: "100%", background: "transparent", border: "none", outline: "none", resize: "none", minHeight: "44px", maxHeight: "200px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)", color: voiceInterim ? "var(--text-tertiary)" : "var(--text-primary)", fontStyle: voiceInterim ? "italic" : "normal", display: "block", overflow: "auto" }}
             />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
-              <div style={{ display: "flex", gap: "4px" }}>
+              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
                 <button type="button" onClick={handleUploadClick} className="btn-icon btn-ghost" aria-label="Attach file" style={{ width: "32px", height: "32px" }} title="Attach file">
                   <span aria-hidden="true">📎</span>
                 </button>
+                <VoiceInputButton
+                  voiceLang={voiceLang}
+                  onLangChange={handleVoiceLangChange}
+                  onTranscript={handleVoiceTranscript}
+                  onInterimText={handleInterimText}
+                  disabled={!activeDoc || activeDoc.status !== "READY" || loading}
+                />
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 {query.length > 3200 && (
@@ -1267,11 +1646,12 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
 
         {/* Workspace-specific action buttons */}
         {WORKSPACE_ACTIONS[workspaceType] && (
-          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px", alignItems: "center" }}>
+          <div className="no-clip-zone" style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px", alignItems: "center" }}>
             {WORKSPACE_ACTIONS[workspaceType].map((action) => {
               const isActive =
                 (action.label === "Generate Paper" && showPaperConfig) ||
                 (action.label === "Answer Key" && showAnswerKey) ||
+                (action.label === "Extract Tables" && showTablePanel) ||
                 (action.label === "Flashcard Mode" && flashcardMode) ||
                 (action.label === "Pomodoro Timer" && showPomodoro) ||
                 (action.label === "View Rankings" && showRankings) ||

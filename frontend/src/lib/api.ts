@@ -1,9 +1,11 @@
 export interface Document {
   id: string;
   filename: string;
-  status: 'PENDING_UPLOAD' | 'UPLOADED' | 'PROCESSING' | 'EXTRACTED' | 'READY' | 'FAILED';
+  status: 'PENDING_UPLOAD' | 'UPLOADED' | 'PROCESSING' | 'EXTRACTED' | 'READY' | 'FAILED' | 'DEDUPLICATED';
+  duplicate_of?: string;
   workspace_id?: string;
   created_at: string;
+  source?: string; // "upload" | "clip" | "scan"
 }
 
 export interface EvidenceChunk {
@@ -42,6 +44,7 @@ if (!API_BASE) {
 }
 
 let csrfToken = '';
+let deviceFingerprint = '';
 
 // Fetch CSRF on boot
 if (typeof window !== 'undefined') {
@@ -49,6 +52,27 @@ if (typeof window !== 'undefined') {
     .then(res => res.json())
     .then(data => { csrfToken = data.csrf_token; })
     .catch(() => { });
+}
+
+async function initDeviceFingerprint(): Promise<void> {
+  try {
+    const FP = await import('@fingerprintjs/fingerprintjs');
+    const fp = await FP.load();
+    const result = await fp.get();
+    deviceFingerprint = result.visitorId;
+  } catch {
+    // non-blocking — fingerprint is best-effort
+  }
+}
+
+export async function getDeviceFingerprint(): Promise<string> {
+  if (!deviceFingerprint) await initDeviceFingerprint();
+  return deviceFingerprint;
+}
+
+// Initialize fingerprint once at app load (browser only)
+if (typeof window !== 'undefined') {
+  initDeviceFingerprint();
 }
 
 // TASK 1.1: Silent JWT refresh state
@@ -75,6 +99,7 @@ const apiFetch = async (endpoint: string, options: RequestInit = {}, _retried = 
   const isMutation = ['POST', 'PUT', 'DELETE', 'PATCH'].includes(options.method?.toUpperCase() || 'GET');
   const headers = new Headers(options.headers || {});
   if (isMutation && csrfToken) headers.set('X-CSRF-Token', csrfToken);
+  if (deviceFingerprint) headers.set('X-Device-ID', deviceFingerprint);
 
   let response: Response;
   try {
@@ -186,6 +211,34 @@ export const getDocument = async (docId: string): Promise<Document> => {
   return res.json();
 };
 
+// Phase 28 — Instant Text Clip
+export interface ClipTextRequest {
+  title?: string;
+  content: string;
+  source_hint?: 'email' | 'message' | 'web' | 'note' | 'other';
+}
+
+export interface ClipTextResponse {
+  document_id: string;
+  filename?: string;
+  status: string;
+  estimated_seconds: number;
+  message?: string;
+}
+
+export const clipText = async (request: ClipTextRequest): Promise<ClipTextResponse> => {
+  const res = await apiFetch('/documents/clip', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).detail || `Clip failed: ${res.status}`);
+  }
+  return res.json();
+};
+
 export const askQuestion = async (query: string, topK: number = 5): Promise<QueryResponse> => {
   const res = await apiFetch(`/query/ask`, {
     method: "POST",
@@ -211,6 +264,9 @@ export const askQuestionStream = async (
   sessionId?: string,
   workspaceType?: string,
   onTrialStatus?: (status: { queriesUsed: number; queriesRemaining: number }) => void,
+  onThinkingStage?: (stage: { stage: string; detail: string }) => void,
+  comparisonMode?: boolean,
+  onTrustReport?: (trust: any) => void,
 ) => {
   try {
     const res = await apiFetch(`/query/stream`, {
@@ -223,6 +279,7 @@ export const askQuestionStream = async (
         similarity_threshold: 0.1,
         session_id: sessionId || null,
         workspace_type: workspaceType || "general",
+        comparison_mode: comparisonMode || false,
       })
     });
 
@@ -273,10 +330,14 @@ export const askQuestionStream = async (
           onMetadata(JSON.parse(data));
         } else if (event === "token") {
           onToken(JSON.parse(data).token);
+        } else if (event === "thinking_stage") {
+          onThinkingStage?.(JSON.parse(data) as { stage: string; detail: string });
         } else if (event === "trial_status") {
           const ts = JSON.parse(data) as { queries_used: number; queries_remaining: number };
           lastTrialStatus = { queriesUsed: ts.queries_used, queriesRemaining: ts.queries_remaining };
           onTrialStatus?.(lastTrialStatus);
+        } else if (event === "trust_report") {
+          onTrustReport?.(JSON.parse(data));
         } else if (event === "error") {
           const parsed = JSON.parse(data);
           onError(parsed.detail || parsed.message || "Error");
@@ -630,7 +691,17 @@ export interface ChatSession {
   is_archived: boolean;
   created_at?: string;
   workspace_id?: string;
+  tags?: string[];
 }
+
+export const updateChatTags = async (id: string, tags: string[]): Promise<void> => {
+  const res = await apiFetch(`/chats/${id}/tags`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tags }),
+  });
+  if (!res.ok) throw new Error("Failed to update tags");
+};
 
 export interface ChatMessage {
   id: string;
@@ -721,6 +792,29 @@ export const verifyEmail = async (otp: string): Promise<{ success: boolean; mess
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || "Verification failed.");
+  }
+  return res.json();
+};
+
+export const forgotPassword = async (email: string): Promise<{ message: string }> => {
+  const res = await apiFetch("/auth/forgot-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  // Always treated as success — backend returns 202 regardless to prevent enumeration.
+  return res.json().catch(() => ({ message: "If an account exists, a reset link has been sent." }));
+};
+
+export const resetPassword = async (token: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
+  const res = await apiFetch("/auth/reset-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, new_password: newPassword }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Password reset failed.");
   }
   return res.json();
 };
@@ -848,6 +942,34 @@ export const uploadDocumentWithProgress = (
 
 // ── TASK 3.3 — Document Status Polling ───────────────────────────────────────
 
+// ── Phase 16 — Phone OTP ─────────────────────────────────────────────────────
+
+export const sendPhoneOTP = async (phone: string): Promise<{ message: string; expires_in: number }> => {
+  const res = await apiFetch('/auth/send-phone-otp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to send OTP');
+  }
+  return res.json();
+};
+
+export const verifyPhone = async (otp: string): Promise<{ verified: boolean }> => {
+  const res = await apiFetch('/auth/verify-phone', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ otp }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Phone verification failed');
+  }
+  return res.json();
+};
+
 export const pollDocumentStatus = (
   docId: string,
   onStatusChange: (status: string) => void,
@@ -886,4 +1008,56 @@ export const pollDocumentStatus = (
     clearTimeout(timeoutId);
     if (intervalId) clearInterval(intervalId);
   };
+};
+
+// ── Phase 22 — Collaboration / Session Sharing ────────────────────────────────
+
+export interface ShareSessionResult {
+  share_url: string;
+  share_token: string;
+  share_permissions: string;
+  max_collaborators: number;
+}
+
+export interface SharedSessionMessage {
+  id: string;
+  role: string;
+  content: string;
+  created_at?: string;
+}
+
+export interface SharedSession {
+  id: string;
+  title: string;
+  workspace_type: string;
+  share_permissions: string;
+  owner_id: string;
+  messages: SharedSessionMessage[];
+}
+
+export const shareSession = async (
+  sessionId: string,
+  share_permissions: "view_only" | "view_and_ask" = "view_and_ask"
+): Promise<ShareSessionResult> => {
+  const res = await apiFetch(`/chats/${sessionId}/share`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ share_permissions }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).detail ?? "Failed to generate share link");
+  }
+  return res.json();
+};
+
+export const unshareSession = async (sessionId: string): Promise<void> => {
+  const res = await apiFetch(`/chats/${sessionId}/share`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to stop sharing");
+};
+
+export const getSharedSession = async (token: string): Promise<SharedSession> => {
+  const res = await fetch(`${API_BASE}/shared/${token}`);
+  if (!res.ok) throw new Error("Shared session not found");
+  return res.json();
 };

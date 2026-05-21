@@ -45,7 +45,7 @@ export default function DocumentChangeAlert({
     async function check() {
       try {
         const res = await fetch(
-          `${API_BASE}/api/v1/documents/${documentId}/change-detection`,
+          `${API_BASE}/documents/${documentId}/change-detection`,
           { credentials: "include" }
         );
         if (!cancelled && res.ok) {

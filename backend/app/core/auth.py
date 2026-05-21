@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from fastapi import HTTPException, Depends, WebSocketException, status, Request
 import jwt
 from app.core.config import settings
@@ -47,3 +47,14 @@ async def get_current_user(request: Request) -> Dict[str, Any]:
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return AuthProvider.verify_token(token)
+
+
+async def get_optional_current_user(request: Request) -> Optional[Dict[str, Any]]:
+    """Like get_current_user but returns None instead of raising for unauthenticated requests."""
+    token = request.cookies.get("token")
+    if not token:
+        return None
+    try:
+        return AuthProvider.verify_token(token)
+    except HTTPException:
+        return None

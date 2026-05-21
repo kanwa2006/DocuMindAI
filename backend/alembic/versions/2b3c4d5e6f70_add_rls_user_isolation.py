@@ -20,24 +20,11 @@ def upgrade() -> None:
     # 9-C4: Owner-based RLS policy (defense-in-depth layer on top of existing workspace policy).
     # The primary guard is tenant_guard.py; RLS prevents direct DB-level leaks.
     # RLS is already enabled from migration e253f70b7e95 — only add the new policy.
-    op.execute(
-        """
-        DROP POLICY IF EXISTS documents_user_isolation ON documents;
-        CREATE POLICY documents_user_isolation ON documents
-          USING (owner_id = current_setting('app.current_user_id', true)::uuid);
-        """
-    )
+    op.execute("DROP POLICY IF EXISTS documents_user_isolation ON documents;")
+    op.execute("CREATE POLICY documents_user_isolation ON documents USING (owner_id = current_setting('app.current_user_id', true)::uuid);")
     # Organisation-scoped policy (enterprise mode — additive, does not break single-user deployments).
-    op.execute(
-        """
-        DROP POLICY IF EXISTS documents_org_isolation ON documents;
-        CREATE POLICY documents_org_isolation ON documents
-          USING (
-            current_setting('app.current_org_id', true) IS NOT NULL
-            AND current_setting('app.current_org_id', true) != ''
-          );
-        """
-    )
+    op.execute("DROP POLICY IF EXISTS documents_org_isolation ON documents;")
+    op.execute("""CREATE POLICY documents_org_isolation ON documents USING (current_setting('app.current_org_id', true) IS NOT NULL AND current_setting('app.current_org_id', true) != '');""")
 
 
 def downgrade() -> None:

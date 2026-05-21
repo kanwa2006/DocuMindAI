@@ -37,7 +37,7 @@ export default function ResearchCitationModal({ documentIds, onClose }: Props) {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/research/citations`, {
+      const res = await fetch(`${API_BASE}/research/citations`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

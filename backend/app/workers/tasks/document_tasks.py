@@ -110,6 +110,16 @@ def process_document(self, document_id: str):
         db.commit()
         
         logger.info(f"[Tracing] Task successful: {total_pages} pages, {total_chunks} chunks extracted for {document_id}")
+
+        # Phase 21 — fire-and-forget proactive insights (does not block document completion)
+        try:
+            workspace_type = getattr(doc, "workspace_type", None) or "general"
+            session_id = str(doc.chat_session_id) if doc.chat_session_id else None
+            owner_id = str(doc.owner_id) if doc.owner_id else None
+            generate_proactive_insights_task.delay(document_id, workspace_type, session_id, owner_id)
+        except Exception as insight_exc:
+            logger.warning(f"[Tracing] Could not enqueue proactive insights task: {insight_exc}")
+
         return {"document_id": document_id, "pages": total_pages, "chunks": total_chunks, "status": "success"}
         
     except Exception as e:
@@ -125,5 +135,126 @@ def process_document(self, document_id: str):
                 doc_fail.status = DocumentStatus.FAILED
                 db.commit()
             return {"status": "error", "detail": "Dead letter threshold reached", "original_error": str(e)}
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, name="app.workers.tasks.document_tasks.process_clip_document")
+def process_clip_document(self, document_id: str, content: str):
+    """
+    Phase 28 — process a text clip: skip OCR/file storage, go directly to
+    chunking → embedding → READY. Creates one synthetic DocumentPage (page 1).
+    """
+    logger.info(f"[ClipTask] Starting for {document_id}")
+    db = SyncSessionLocal()
+    try:
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if not doc:
+            logger.error(f"[ClipTask] Document {document_id} not found")
+            return {"status": "error", "detail": "Document not found"}
+
+        # Create synthetic page so chunk FK is satisfied
+        page_record = DocumentPage(
+            document_id=doc.id,
+            page_number=1,
+            extracted_text=content,
+            layout_metadata={"source": "clip"},
+        )
+        db.add(page_record)
+        db.flush()
+
+        chunks = ChunkingService.chunk_page_text(content, {"source": "clip"})
+
+        chunk_records = []
+        for idx, c in enumerate(chunks):
+            cr = DocumentChunk(
+                document_id=doc.id,
+                page_id=page_record.id,
+                chunk_index=idx,
+                text_content=c["text_content"],
+                chunk_metadata=c["chunk_metadata"],
+            )
+            db.add(cr)
+            chunk_records.append(cr)
+
+        db.flush()
+
+        if chunk_records:
+            vectors = embedding_service.generate_embeddings(
+                [c.text_content for c in chunk_records]
+            )
+            for cr, vec in zip(chunk_records, vectors):
+                cr.embedding = vec
+
+        doc.status = DocumentStatus.READY
+        db.commit()
+        logger.info(f"[ClipTask] Done: {len(chunk_records)} chunks for {document_id}")
+        return {"document_id": document_id, "chunks": len(chunk_records), "status": "success"}
+
+    except Exception as e:
+        logger.error(f"[ClipTask] Failed for {document_id}: {e}")
+        db.rollback()
+        try:
+            self.retry(exc=e, countdown=2 ** self.request.retries, max_retries=3)
+        except MaxRetriesExceededError:
+            doc_fail = db.query(Document).filter(Document.id == document_id).first()
+            if doc_fail:
+                doc_fail.status = DocumentStatus.FAILED
+                db.commit()
+            return {"status": "error", "detail": str(e)}
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=False, name="app.workers.tasks.document_tasks.generate_proactive_insights_task")
+def generate_proactive_insights_task(document_id: str, workspace: str, session_id: str = None, owner_id: str = None):
+    """
+    Phase 21 — Proactive Intelligence Layer.
+    Runs after document reaches READY status. Fire-and-forget; never blocks processing pipeline.
+    """
+    import asyncio
+    from app.db.session import SyncSessionLocal
+    from app.models.document_chunk import DocumentChunk
+    from app.services.proactive_insights import proactive_insights_service
+
+    logger.info(f"[ProactiveInsights] Starting for document {document_id}, workspace={workspace}")
+    db = SyncSessionLocal()
+    try:
+        import uuid as _uuid
+        doc_uuid = _uuid.UUID(str(document_id))
+
+        # Fetch chunks with page numbers via join
+        from app.models.document_page import DocumentPage
+        rows = (
+            db.query(DocumentChunk, DocumentPage.page_number)
+            .join(DocumentPage, DocumentChunk.page_id == DocumentPage.id)
+            .filter(DocumentChunk.document_id == doc_uuid)
+            .all()
+        )
+        if not rows:
+            logger.info(f"[ProactiveInsights] No chunks found for {document_id}; skipping.")
+            return
+
+        top_chunks = sorted(
+            [{"text_content": chunk.text_content, "page_number": page_num}
+             for chunk, page_num in rows],
+            key=lambda x: len(x.get("text_content", "")),
+            reverse=True,
+        )[:10]
+
+        asyncio.run(
+            proactive_insights_service.generate_insights(
+                document_id=document_id,
+                workspace=workspace,
+                top_chunks=top_chunks,
+                session_id=session_id,
+                owner_id=owner_id,
+                db=db,
+            )
+        )
+        logger.info(f"[ProactiveInsights] Completed for document {document_id}")
+    except Exception as exc:
+        logger.error(f"[ProactiveInsights] Task failed for {document_id}: {exc}")
+        db.rollback()
     finally:
         db.close()

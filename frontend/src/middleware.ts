@@ -5,10 +5,10 @@ import type { NextRequest } from 'next/server';
 // Secures the application globally by protecting sensitive routes at the Edge.
 export function middleware(request: NextRequest) {
   const token = request.cookies.get('token')?.value;
-  
-  const isAuthPage = request.nextUrl.pathname.startsWith('/login') || 
+
+  const isAuthPage = request.nextUrl.pathname.startsWith('/login') ||
                      request.nextUrl.pathname.startsWith('/signup');
-                     
+
   const isProtectedRoute = request.nextUrl.pathname.startsWith('/dashboard') ||
                            request.nextUrl.pathname.startsWith('/hr') ||
                            request.nextUrl.pathname.startsWith('/legal') ||

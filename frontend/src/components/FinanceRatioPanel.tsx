@@ -284,7 +284,7 @@ export default function FinanceRatioPanel({ documentIds, onClose }: Props) {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/finance/ratios`, {
+      const res = await fetch(`${API_BASE}/finance/ratios`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

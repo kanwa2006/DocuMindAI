@@ -30,7 +30,7 @@ export async function pinSession(
     toast.error(`You can pin up to ${MAX_PINNED} sessions. Unpin one to continue.`);
     return false;
   }
-  const res = await fetch(`${API_BASE}/api/v1/chats/${sessionId}`, {
+  const res = await fetch(`${API_BASE}/chats/${sessionId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() },
     credentials: "include",
@@ -40,7 +40,7 @@ export async function pinSession(
 }
 
 export async function unpinSession(sessionId: string): Promise<boolean> {
-  const res = await fetch(`${API_BASE}/api/v1/chats/${sessionId}`, {
+  const res = await fetch(`${API_BASE}/chats/${sessionId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() },
     credentials: "include",

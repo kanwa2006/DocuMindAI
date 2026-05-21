@@ -4,11 +4,15 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
-// Configure WebWorker for parsing performance (Phase 8: Performance Hardening)
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
+// Configure the WebWorker only in the browser. Even with 'use client', this
+// module can be reached during the SSR module-load pass, where `window` and
+// the URL/worker plumbing are unavailable.
+if (typeof window !== 'undefined') {
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url,
+  ).toString();
+}
 
 interface BoundingBox {
   id: string;

@@ -1,10 +1,13 @@
 import type { Metadata } from 'next'
+import { Suspense } from 'react'
 import { Instrument_Serif, DM_Sans, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
 import LayoutWrapper from '@/components/LayoutWrapper'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { SessionExpiredOverlay } from '@/components/SessionExpiredOverlay'
 import { Toaster } from 'react-hot-toast'
+import PWAInstaller from '@/components/PWAInstaller'
+import AnalyticsProvider from '@/components/AnalyticsProvider'
 
 const instrumentSerif = Instrument_Serif({
   weight: '400',
@@ -29,16 +32,20 @@ export const metadata: Metadata = {
   title: { default: 'DocuMindAI', template: '%s — DocuMindAI' },
   description: 'Trusted document intelligence with grounded answers.',
   applicationName: 'DocuMindAI',
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#FAFAFA' },
-    { media: '(prefers-color-scheme: dark)',  color: '#0C0C0E' },
-  ],
   icons: { icon: '/favicon.svg', apple: '/apple-touch-icon.png' },
   openGraph: {
     title: 'DocuMindAI',
     description: 'Trusted document intelligence with grounded answers.',
     type: 'website',
   },
+  manifest: '/manifest.json',
+}
+
+export const viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#FAFAFA' },
+    { media: '(prefers-color-scheme: dark)',  color: '#0C0C0E' },
+  ],
 }
 
 export default function RootLayout({
@@ -53,6 +60,13 @@ export default function RootLayout({
       className={`${instrumentSerif.variable} ${dmSans.variable} ${jetbrainsMono.variable}`}
     >
       <head>
+        {/* PWA */}
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#0C0C0E" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="DocuMindAI" />
+        <link rel="apple-touch-icon" href="/icon-192.png" />
         {/* FOUC prevention — runs before React hydrates */}
         <script dangerouslySetInnerHTML={{ __html: `
           (function() {
@@ -69,11 +83,15 @@ export default function RootLayout({
       <body>
         <a href="#main" className="skip-link">Skip to content</a>
         <Toaster position="top-center" toastOptions={{ duration: 4000 }} />
+        <PWAInstaller />
+        <AnalyticsProvider />
         <ErrorBoundary>
           <SessionExpiredOverlay />
-          <LayoutWrapper>
-            {children}
-          </LayoutWrapper>
+          <Suspense fallback={<div style={{ display: "none" }} />}>
+            <LayoutWrapper>
+              {children}
+            </LayoutWrapper>
+          </Suspense>
         </ErrorBoundary>
       </body>
     </html>

@@ -35,6 +35,16 @@ class User(Base):
     # Phase 10 — email verification
     email_verified = Column(Boolean, nullable=False, default=False)
 
+    # Phase 15 — preferred response language ("auto" = detect from query)
+    preferred_language = Column(String(50), nullable=False, default="auto")
+
+    # Phase 16 — phone verification
+    phone_number = Column(String(20), nullable=True, unique=True)
+    phone_verified = Column(Boolean, nullable=False, default=False)
+
+    # Phase 17 — email notification preferences
+    email_notifications_enabled = Column(Boolean, nullable=False, default=True)
+
     # FIX 0.6: roles relationship — auth.py reads [r.role for r in user.roles]
     roles = relationship(
         "UserRole",

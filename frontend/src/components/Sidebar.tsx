@@ -4,8 +4,11 @@ import Link from "next/link";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { QuestionMarkCircleIcon } from "@heroicons/react/24/outline";
 import LogoutButton from "./LogoutButton";
-import { getChats, createChat, updateChat, deleteChat, ChatSession } from "@/lib/api";
+import FeedbackModal from "./FeedbackModal";
+import { toast } from "react-hot-toast";
+import { getChats, createChat, updateChat, deleteChat, updateChatTags, ChatSession, getBillingStatus, API_BASE } from "@/lib/api";
 import { useOnboarding } from "@/hooks/useOnboarding";
 import OnboardingProgress from "./OnboardingProgress";
 
@@ -50,20 +53,80 @@ const WORKSPACE_ICONS: Record<string, string> = {
   finance:  "📊",
 };
 
+// ─── Tag Popover ──────────────────────────────────────────────────────────────
+
+function TagPopover({ chat, onClose, onSave }: { chat: ChatSession; onClose: () => void; onSave: (tags: string[]) => void }) {
+  const [tags, setTags] = useState<string[]>(chat.tags || []);
+  const [input, setInput] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  const addTag = () => {
+    const trimmed = input.trim();
+    if (trimmed && !tags.includes(trimmed)) {
+      const next = [...tags, trimmed];
+      setTags(next);
+      onSave(next);
+    }
+    setInput("");
+  };
+
+  const removeTag = (tag: string) => {
+    const next = tags.filter((t) => t !== tag);
+    setTags(next);
+    onSave(next);
+  };
+
+  return (
+    <div ref={ref} style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)", zIndex: 400, background: "var(--surface-overlay)", border: "1px solid var(--border-default)", borderRadius: "12px", boxShadow: "var(--shadow-xl)", padding: "16px", width: "260px" }}>
+      <div style={{ fontFamily: "var(--font-body)", fontSize: "13px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "10px" }}>🏷 Tags for &ldquo;{chat.title.slice(0, 24)}&rdquo;</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "10px", minHeight: "24px" }}>
+        {tags.map((tag) => (
+          <span key={tag} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", background: "var(--brand-ghost)", color: "var(--brand)", borderRadius: "999px", fontSize: "12px", fontFamily: "var(--font-body)" }}>
+            {tag}
+            <button onClick={() => removeTag(tag)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--brand)", fontSize: "11px", padding: 0, lineHeight: 1 }}>×</button>
+          </span>
+        ))}
+        {tags.length === 0 && <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-tertiary)", fontStyle: "italic" }}>No tags yet</span>}
+      </div>
+      <div style={{ display: "flex", gap: "6px" }}>
+        <input
+          autoFocus
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } if (e.key === "Escape") onClose(); }}
+          placeholder="Type tag, press Enter"
+          style={{ flex: 1, height: "32px", padding: "0 8px", background: "var(--surface-sunken)", border: "1px solid var(--border-default)", borderRadius: "6px", fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-primary)", outline: "none" }}
+        />
+        <button onClick={addTag} style={{ height: "32px", padding: "0 10px", background: "var(--brand)", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "12px" }}>Add</button>
+      </div>
+      <button onClick={onClose} style={{ marginTop: "10px", width: "100%", height: "28px", background: "none", border: "1px solid var(--border-default)", borderRadius: "6px", cursor: "pointer", fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-secondary)" }}>Done</button>
+    </div>
+  );
+}
+
 // ─── Context Menu ─────────────────────────────────────────────────────────────
 
 interface ContextMenuProps {
   x: number;
   y: number;
   chat: ChatSession;
+  plan: string;
   onClose: () => void;
   onRename: (chat: ChatSession) => void;
   onPin: (chat: ChatSession) => void;
   onShare: (chat: ChatSession) => void;
   onDelete: (chat: ChatSession) => void;
+  onTag: (chat: ChatSession) => void;
+  onExportAudit: (chat: ChatSession) => void;
 }
 
-function ContextMenu({ x, y, chat, onClose, onRename, onPin, onShare, onDelete }: ContextMenuProps) {
+function ContextMenu({ x, y, chat, plan, onClose, onRename, onPin, onShare, onDelete, onTag, onExportAudit }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -114,14 +177,31 @@ function ContextMenu({ x, y, chat, onClose, onRename, onPin, onShare, onDelete }
       {[
         { icon: "✏️", label: "Rename", action: () => { onRename(chat); onClose(); } },
         { icon: chat.is_pinned ? "⭐" : "☆", label: chat.is_pinned ? "Unpin" : "Pin", action: () => { onPin(chat); onClose(); } },
+        { icon: "🏷", label: "Add Tags", action: () => { onTag(chat); onClose(); } },
         { icon: "🔗", label: "Share", action: () => { onShare(chat); onClose(); } },
-      ].map(({ icon, label, action }) => (
+        {
+          icon: plan === "trial" ? "🔒" : "📋",
+          label: "Export Audit Report",
+          action: () => { onExportAudit(chat); onClose(); },
+          locked: plan === "trial",
+        },
+      ].map(({ icon, label, action, locked }) => (
         <button
           key={label}
-          onClick={action}
-          style={itemStyle}
+          onClick={locked ? undefined : action}
+          title={locked ? "Available on Professional plan" : undefined}
+          style={{
+            ...itemStyle,
+            opacity: locked ? 0.55 : 1,
+            cursor: locked ? "default" : "pointer",
+          }}
           className="sidebar-item"
-          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--surface-hover)"; (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; }}
+          onMouseEnter={(e) => {
+            if (!locked) {
+              (e.currentTarget as HTMLElement).style.background = "var(--surface-hover)";
+              (e.currentTarget as HTMLElement).style.color = "var(--text-primary)";
+            }
+          }}
           onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = ""; (e.currentTarget as HTMLElement).style.color = ""; }}
         >
           <span>{icon}</span> {label}
@@ -188,10 +268,19 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
   const [renameValue, setRenameValue] = useState("");
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; chat: ChatSession } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null);
+  const [tagTarget, setTagTarget] = useState<ChatSession | null>(null);
+  const [selectedTagFilter, setSelectedTagFilter] = useState<string | null>(null);
+  const [showTagFilter, setShowTagFilter] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [is401, setIs401] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [plan, setPlan] = useState<string>("trial");
   const { isComplete, dismiss } = useOnboarding();
+
+  useEffect(() => {
+    getBillingStatus().then((s) => setPlan(s.plan)).catch(() => {});
+  }, []);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -203,7 +292,7 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
   useEffect(() => { isOpenRef.current = isOpen; }, [isOpen]);
 
   // Current workspace type from pathname
-  const workspaceType = pathname === "/" || pathname === "/dashboard" ? "general" : pathname.replace("/", "").split("/")[0] || "general";
+  const workspaceType = pathname === "/dashboard" ? "general" : pathname.replace("/", "").split("/")[0] || "general";
 
   // ─── Mobile detection ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -280,9 +369,13 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
   }, [setIsOpen]);
 
   // ─── Filtered & grouped chats ────────────────────────────────────────────────
-  const filtered = searchQuery
-    ? chats.filter((c) => c.title.toLowerCase().includes(searchQuery.toLowerCase()))
-    : chats;
+  const allTags = Array.from(new Set(chats.flatMap((c) => c.tags || [])));
+
+  const filtered = chats.filter((c) => {
+    const matchesSearch = !searchQuery || c.title.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesTag = !selectedTagFilter || (c.tags || []).includes(selectedTagFilter);
+    return matchesSearch && matchesTag;
+  });
 
   const grouped = groupChatsByDate(filtered);
 
@@ -340,11 +433,49 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
   const handleShare = (chat: ChatSession) => {
     const url = `${window.location.origin}${pathname}?chat=${chat.id}`;
     navigator.clipboard.writeText(url).then(() => {
-      // Use react-hot-toast if available
       if (typeof window !== "undefined" && (window as any).__toastSuccess) {
         (window as any).__toastSuccess("Link copied!");
       }
     });
+  };
+
+  const handleTagSave = async (chat: ChatSession, tags: string[]) => {
+    try {
+      await updateChatTags(chat.id, tags);
+      setChats((prev) => prev.map((c) => c.id === chat.id ? { ...c, tags } : c));
+    } catch { /* non-fatal */ }
+  };
+
+  const handleExportAudit = async (chat: ChatSession) => {
+    const toastId = toast.loading("Generating audit report…");
+    try {
+      const res = await fetch(
+        `${API_BASE}/export/sessions/${chat.id}/audit-report?format=pdf`,
+        { credentials: "include" },
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const detail = err.detail || {};
+        if (detail.upgrade_required || res.status === 402) {
+          toast.error("Upgrade to Professional to export audit reports.", { id: toastId });
+        } else {
+          toast.error("Export failed.", { id: toastId });
+        }
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit_${chat.title.slice(0, 40).replace(/[^a-z0-9_-]/gi, "_")}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("Audit report downloaded.", { id: toastId });
+    } catch {
+      toast.error("Export failed.", { id: toastId });
+    }
   };
 
   const handleDelete = async () => {
@@ -423,8 +554,9 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
             />
           )}
 
-          {/* Search */}
-          <div style={{ position: "relative" }}>
+          {/* Search + Tag Filter */}
+          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+          <div style={{ position: "relative", flex: 1 }}>
             <span style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", fontSize: "12px", color: "var(--text-tertiary)" }}>🔍</span>
             <input
               ref={searchRef}
@@ -460,6 +592,35 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
                 <span aria-hidden="true">✕</span>
               </button>
             )}
+          </div>
+          {/* Tag filter button */}
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <button
+              onClick={() => setShowTagFilter((v) => !v)}
+              aria-label="Filter by tag"
+              title="Filter by tag"
+              style={{
+                width: "36px", height: "36px", border: `1px solid ${selectedTagFilter ? "var(--brand)" : "var(--border-default)"}`,
+                borderRadius: "var(--radius-md)", background: selectedTagFilter ? "var(--brand-ghost)" : "var(--surface-sunken)",
+                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", flexShrink: 0,
+              }}
+            >⊡</button>
+            {showTagFilter && (
+              <div style={{ position: "absolute", top: "calc(100% + 4px)", right: 0, background: "var(--surface-overlay)", border: "1px solid var(--border-default)", borderRadius: "10px", boxShadow: "var(--shadow-lg)", padding: "8px", minWidth: "160px", zIndex: 200 }}>
+                <button onClick={() => { setSelectedTagFilter(null); setShowTagFilter(false); }}
+                  style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 10px", borderRadius: "6px", border: "none", cursor: "pointer", background: !selectedTagFilter ? "var(--brand-ghost)" : "transparent", color: !selectedTagFilter ? "var(--brand)" : "var(--text-secondary)", fontFamily: "var(--font-body)", fontSize: "12px", marginBottom: "2px" }}>
+                  All sessions
+                </button>
+                {allTags.length === 0 && <div style={{ padding: "6px 10px", fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-tertiary)", fontStyle: "italic" }}>No tags yet</div>}
+                {allTags.map((tag) => (
+                  <button key={tag} onClick={() => { setSelectedTagFilter(tag === selectedTagFilter ? null : tag); setShowTagFilter(false); }}
+                    style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 10px", borderRadius: "6px", border: "none", cursor: "pointer", background: selectedTagFilter === tag ? "var(--brand-ghost)" : "transparent", color: selectedTagFilter === tag ? "var(--brand)" : "var(--text-secondary)", fontFamily: "var(--font-body)", fontSize: "12px", marginBottom: "2px" }}>
+                    🏷 {tag}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           </div>
         </div>
 
@@ -603,6 +764,7 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
         <div style={{ flexShrink: 0, borderTop: "1px solid var(--border-subtle)", padding: "8px" }}>
           {[
             { icon: "📋", label: "All Sessions", href: "/sessions" },
+            { icon: "🔖", label: "Saved", href: "/bookmarks" },
             { icon: "⚙️", label: "Settings", href: "/settings" },
             { icon: "👤", label: "Account", href: "/account" },
           ].map(({ icon, label, href }) => (
@@ -616,6 +778,16 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
               {label}
             </Link>
           ))}
+          <button
+            onClick={() => setShowFeedback(true)}
+            className="sidebar-item"
+            style={{ height: "36px", display: "flex", alignItems: "center", gap: "8px", border: "none", background: "none", cursor: "pointer", width: "100%", textAlign: "left", fontFamily: "var(--font-body)", fontSize: "var(--text-sm)", color: "var(--text-secondary)", padding: "0 8px", borderRadius: "var(--radius-md)" }}
+          >
+            <span style={{ fontSize: "14px", display: "flex", alignItems: "center", flexShrink: 0 }}>
+              <QuestionMarkCircleIcon style={{ width: "16px", height: "16px" }} />
+            </span>
+            Help & Feedback
+          </button>
           <div style={{ marginTop: "4px" }}>
             <LogoutButton />
           </div>
@@ -628,11 +800,22 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
           x={contextMenu.x}
           y={contextMenu.y}
           chat={contextMenu.chat}
+          plan={plan}
           onClose={() => setContextMenu(null)}
           onRename={handleRename}
           onPin={handlePin}
           onShare={handleShare}
           onDelete={(chat) => { setDeleteTarget(chat); }}
+          onTag={(chat) => { setTagTarget(chat); }}
+          onExportAudit={handleExportAudit}
+        />
+      )}
+
+      {tagTarget && (
+        <TagPopover
+          chat={tagTarget}
+          onClose={() => setTagTarget(null)}
+          onSave={(tags) => handleTagSave(tagTarget, tags)}
         />
       )}
 
@@ -644,6 +827,8 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
           onCancel={() => setDeleteTarget(null)}
         />
       )}
+
+      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
     </>
   );
 }

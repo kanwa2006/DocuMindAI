@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
+from app.core.workspace import resolve_workspace_id
 from app.models.legal import Contract, Clause, ComplianceRule, RedlineSuggestion, ApprovalWorkflow
 from app.models.legal_analysis import LegalAnalysis, LegalAuditLog
 from app.models.document import Document
@@ -90,7 +91,7 @@ async def create_compliance_rule(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     rule = ComplianceRule(
         workspace_id=workspace_id,
         name=request.name,
@@ -108,7 +109,7 @@ async def list_rules(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     result = await db.execute(select(ComplianceRule).where(ComplianceRule.workspace_id == workspace_id))
     return result.scalars().all()
 
@@ -123,7 +124,7 @@ async def process_contract(
     PHASE 1: ASYNC LEGAL PROCESSING
     Offloads heavy compliance processing to Celery workers.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     doc = (await db.execute(select(Document).where(Document.id == document_id, Document.workspace_id == workspace_id))).scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -161,7 +162,7 @@ async def semantic_search_clauses(
     PHASE 2: LEGAL VECTOR SEARCH
     Uses pgvector to perform semantic similarity search across historical clauses.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
     # Generate query embedding
     query_embedding = await llm_service.get_embedding(query)
@@ -199,7 +200,7 @@ async def add_contract_approval(
     PHASE 4: LEGAL COLLABORATION
     Adds an approval or rejection decision to the contract's audit timeline.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     reviewer_id = uuid.UUID(current_user["id"])
     
     approval = ApprovalWorkflow(
@@ -223,7 +224,7 @@ async def list_contracts(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     result = await db.execute(select(Contract).where(Contract.workspace_id == workspace_id).order_by(Contract.created_at.desc()))
     return result.scalars().all()
 
@@ -233,7 +234,7 @@ async def get_contract_clauses(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
 
     stmt = (
         select(Clause, RedlineSuggestion)
@@ -328,7 +329,7 @@ async def generate_risk_report(
     consistency validation against previous analyses, escalation logic, and audit trail.
     Mandatory legal disclaimer prepended to every response.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     user_id_str = current_user.get("id")
     user_id = uuid.UUID(user_id_str) if user_id_str else None
     client_ip = request.client.host if request.client else "unknown"

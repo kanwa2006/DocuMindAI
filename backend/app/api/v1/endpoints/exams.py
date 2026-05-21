@@ -1,20 +1,26 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from pydantic import BaseModel, model_validator
-from typing import List, Optional, Dict
+from typing import Any, List, Optional, Dict
 import uuid
 import json
+import tempfile
+import os
 from datetime import datetime, timezone
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
+from app.core.workspace import resolve_workspace_id
+from app.models.document import Document
 from app.models.exam import ExamPaper, ExamVersion
 from app.schemas.exam import ExamPaperCreate, ExamPaperUpdate, ExamPaperResponse, GenerateQuestionRequest
 from app.services.retrieval_service import RetrievalService
 from app.services.llm_service import llm_service
 from app.services.export_engine import ExportEngine
+from app.services.table_extractor import get_table_extractor
+from app.services.pdf_extractor import is_native_pdf
 
 router = APIRouter()
 
@@ -204,7 +210,7 @@ async def export_exam_docx(
     db: AsyncSession = Depends(get_db),
 ):
     """6-T3: Export a stored ExamPaper as an academically formatted DOCX."""
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     stmt = select(ExamPaper).where(ExamPaper.id == exam_id, ExamPaper.workspace_id == workspace_id)
     result = await db.execute(stmt)
     exam = result.scalar_one_or_none()
@@ -247,6 +253,101 @@ async def export_table_docx(
     )
 
 
+# ─── Phase 11: Table Extraction Models ───────────────────────────────────────
+
+class ExtractTablesRequest(BaseModel):
+    document_id: str
+
+class ExportTableRequest(BaseModel):
+    table: Dict[str, Any]
+    format: str  # "docx" | "csv" | "html"
+
+
+# ─── Phase 11: Extract Tables Endpoint ───────────────────────────────────────
+
+@router.post("/extract-tables")
+async def extract_tables(
+    request: ExtractTablesRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Phase 11 Task 11.2: Extract all tables from a document.
+    Uses Docling for native PDFs, PaddleOCR for scanned/image documents.
+    """
+    try:
+        doc_id = uuid.UUID(request.document_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document_id")
+
+    owner_id = uuid.UUID(current_user["id"])
+    stmt = select(Document).where(Document.id == doc_id, Document.owner_id == owner_id)
+    result = await db.execute(stmt)
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    file_path = doc.storage_path
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Document file not found on disk")
+
+    # Determine if scanned: native PDF = selectable text present
+    is_scanned = not is_native_pdf(file_path)
+
+    extractor = get_table_extractor()
+    tables = await extractor.extract_tables(file_path, is_scanned=is_scanned)
+
+    return {
+        "document_id": request.document_id,
+        "tables_found": len(tables),
+        "tables": tables,
+    }
+
+
+# ─── Phase 11: Export Table Endpoint ─────────────────────────────────────────
+
+@router.post("/export/table")
+async def export_table(
+    request: ExportTableRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Phase 11 Task 11.2: Export a single extracted table as DOCX, CSV, or HTML.
+    """
+    extractor = get_table_extractor()
+    fmt = request.format.lower()
+
+    if fmt == "docx":
+        tmp = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+        tmp.close()
+        try:
+            extractor.export_to_docx(request.table, tmp.name)
+            with open(tmp.name, "rb") as f:
+                data = f.read()
+        finally:
+            os.unlink(tmp.name)
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="extracted_table_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.docx"'},
+        )
+
+    elif fmt == "csv":
+        csv_str = extractor.export_to_csv(request.table)
+        return Response(
+            content=csv_str,
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="table_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.csv"'},
+        )
+
+    elif fmt == "html":
+        html = extractor.export_to_html(request.table)
+        return {"html": html}
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported format: {fmt!r}. Use 'docx', 'csv', or 'html'.")
+
+
 # ─── Existing CRUD endpoints (unchanged) ─────────────────────────────────────
 
 @router.post("", response_model=ExamPaperResponse)
@@ -255,7 +356,7 @@ async def create_exam(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     owner_id = uuid.UUID(current_user["id"])
 
     db_exam = ExamPaper(
@@ -275,7 +376,7 @@ async def list_exams(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     stmt = select(ExamPaper).where(ExamPaper.workspace_id == workspace_id).order_by(ExamPaper.updated_at.desc())
     result = await db.execute(stmt)
     return result.scalars().all()
@@ -286,7 +387,7 @@ async def get_exam(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     stmt = select(ExamPaper).where(ExamPaper.id == exam_id, ExamPaper.workspace_id == workspace_id)
     result = await db.execute(stmt)
     exam = result.scalar_one_or_none()
@@ -301,7 +402,7 @@ async def update_exam(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     stmt = select(ExamPaper).where(ExamPaper.id == exam_id, ExamPaper.workspace_id == workspace_id)
     result = await db.execute(stmt)
     exam = result.scalar_one_or_none()
@@ -336,7 +437,7 @@ async def generate_exam_question(
     PHASE 1 & 2: Grounded Question and Answer Key Generation
     Uses Hybrid RRF Retrieval to fetch context, then LLM generates strict schemas.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
 
     retrieval_result = await RetrievalService.retrieve_chunks(
         db=db,

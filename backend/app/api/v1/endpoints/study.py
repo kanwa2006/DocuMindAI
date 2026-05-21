@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
+from app.core.workspace import resolve_workspace_id
 from app.models.study import StudyNote, FlashcardDeck, Flashcard, StudyQuiz
 from app.models.document import Document
 from app.schemas.study import DocumentStudyExtractionSchema, DeckResponse, FlashcardResponse
@@ -55,7 +56,7 @@ async def process_study_document(
     PHASE 1: ASYNC STUDY PIPELINE
     Offloads heavy flashcard generation and extraction to Celery workers.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     doc = (await db.execute(select(Document).where(Document.id == document_id, Document.workspace_id == workspace_id))).scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -92,7 +93,7 @@ async def semantic_search_study(
     PHASE 2: STUDY VECTOR SEARCH
     Uses pgvector to perform semantic similarity search across StudyNotes and Flashcards.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     query_embedding = await llm_service.get_embedding(query)
     
     # Search closest flashcards
@@ -124,7 +125,7 @@ async def ai_tutor_chat(
     PHASE 4: AI TUTOR CHAT
     SSE endpoint for streaming tutor chat responses grounded in retrieved workspace context.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
     # Simple semantic context retrieval
     query_embedding = await llm_service.get_embedding(query)
@@ -149,7 +150,7 @@ async def list_decks(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     result = await db.execute(select(FlashcardDeck).where(FlashcardDeck.workspace_id == workspace_id))
     return result.scalars().all()
 
@@ -159,7 +160,7 @@ async def list_flashcards(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     result = await db.execute(select(Flashcard).where(Flashcard.deck_id == deck_id, Flashcard.workspace_id == workspace_id))
     return result.scalars().all()
 
@@ -175,7 +176,7 @@ async def generate_quiz(
     Generate an MCQ quiz via LLM. Stores correct_index server-side;
     strips it before returning to the frontend (anti-cheat).
     """
-    workspace_id = request.workspace_id or uuid.UUID(current_user["workspace_id"])
+    workspace_id = request.workspace_id or resolve_workspace_id(current_user["workspace_id"])
 
     grounded_context = (
         f"Generate {request.count} multiple-choice questions on the topic: '{request.topic}'. "
@@ -258,7 +259,7 @@ async def submit_quiz(
     db: AsyncSession = Depends(get_db),
 ):
     """Grade a submitted quiz. Returns score, grade, and per-question explanations."""
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
 
     stmt = select(StudyQuiz).where(StudyQuiz.id == quiz_id, StudyQuiz.workspace_id == workspace_id)
     result = await db.execute(stmt)
@@ -327,7 +328,7 @@ async def review_flashcard(
     if not (0 <= request.quality <= 5):
         raise HTTPException(status_code=400, detail="quality must be between 0 and 5")
 
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     stmt = select(Flashcard).where(Flashcard.id == flashcard_id, Flashcard.workspace_id == workspace_id)
     result = await db.execute(stmt)
     card = result.scalar_one_or_none()

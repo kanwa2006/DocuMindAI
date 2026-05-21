@@ -1,7 +1,9 @@
 import os
 import random
 import string
+import secrets
 import smtplib
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
@@ -229,6 +231,7 @@ async def end_impersonation(
 BLOCKED_DOMAINS = [
     "mailinator.com", "guerrillamail.com", "10minutemail.com",
     "throwam.com", "yopmail.com", "temp-mail.org", "fakeinbox.com",
+    "sharklasers.com", "guerrillamailblock.com", "grr.la", "spamgourmet.com",
 ]
 
 IP_REG_LIMIT = 3       # max registrations per IP per hour
@@ -380,6 +383,16 @@ async def register(
     await _store_email_otp(str(new_user.id), otp)
     _send_otp_email(email, otp)
 
+    # 6. Persist device fingerprint (no TTL = permanent trial lock per device)
+    device_id = request.headers.get("X-Device-ID", "").strip()
+    if device_id:
+        redis = await _get_redis()
+        if redis:
+            try:
+                await redis.set(f"device_trial:{device_id}", str(new_user.id))
+            finally:
+                await redis.close()
+
     logger.info("[auth] New trial registration: user_id=%s email=REDACTED", new_user.id)
     return {
         "success": True,
@@ -413,7 +426,122 @@ async def verify_email(
     await db.commit()
     await _delete_email_otp(user_id)
 
+    # Fire-and-forget welcome email — never blocks the response
+    try:
+        from app.services.email_service import send_welcome_email
+        _loop = asyncio.get_event_loop()
+        _loop.run_in_executor(
+            None, send_welcome_email,
+            current_user["email"], current_user.get("full_name"),
+        )
+    except Exception:
+        pass  # email failure must never break verification
+
     return {"success": True, "message": "Email verified successfully."}
+
+
+# ── Password reset ──────────────────────────────────────────────────────────
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+async def _store_reset_token(user_id: str, token: str) -> None:
+    """Store a password-reset token with 30-minute TTL."""
+    redis = await _get_redis()
+    if not redis:
+        return
+    try:
+        await redis.setex(f"pwreset:{token}", 1800, user_id)
+    finally:
+        await redis.close()
+
+
+async def _consume_reset_token(token: str) -> str | None:
+    redis = await _get_redis()
+    if not redis:
+        return None
+    try:
+        user_id = await redis.get(f"pwreset:{token}")
+        if user_id:
+            await redis.delete(f"pwreset:{token}")
+        return user_id
+    finally:
+        await redis.close()
+
+
+def _send_reset_email(to_email: str, token: str) -> None:
+    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
+        logger.warning("[auth] SMTP not configured — reset token logged below (use it directly)")
+        logger.warning("[auth] Password-reset token for %s: %s", to_email, token)
+        return
+    try:
+        reset_link = f"{settings.FRONTEND_URL.rstrip('/')}/reset-password?token={token}"
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "DocuMindAI — Reset your password"
+        msg["From"] = settings.EMAIL_FROM or settings.SMTP_USER
+        msg["To"] = to_email
+        body = (
+            f"Click the link below to reset your DocuMindAI password.\n\n"
+            f"  {reset_link}\n\n"
+            f"This link expires in 30 minutes. If you did not request a reset, ignore this email.\n"
+        )
+        msg.attach(MIMEText(body, "plain"))
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(settings.SMTP_USER, [to_email], msg.as_string())
+    except Exception as exc:
+        logger.error("[auth] Reset email failed for %s: %s", to_email, exc)
+
+
+@router.post("/forgot-password", status_code=202)
+async def forgot_password(
+    body: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Send a password-reset link by email.
+
+    Always returns 202 regardless of whether the email exists, to prevent
+    user-enumeration attacks. Tokens are random 32-char URL-safe strings
+    with a 30-minute TTL stored in Redis.
+    """
+    email = body.email.strip().lower()
+    stmt = select(User).where(User.email == email)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    if user is not None:
+        token = secrets.token_urlsafe(32)
+        await _store_reset_token(str(user.id), token)
+        _send_reset_email(email, token)
+
+    return {"message": "If an account exists for that email, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+async def reset_password(
+    body: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    user_id = await _consume_reset_token(body.token.strip())
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Reset link is invalid or has expired.")
+
+    await db.execute(
+        sa_update(User).where(User.id == user_id).values(hashed_password=hash_password(body.new_password))
+    )
+    await db.commit()
+    return {"success": True, "message": "Password updated. You can now sign in."}
 
 
 @router.post("/verify-email/resend")
@@ -445,3 +573,118 @@ async def resend_verification_email(
     await _store_email_otp(user_id, otp)
     _send_otp_email(user.email, otp)
     return {"success": True, "message": "Verification code resent."}
+
+
+# ── Phone OTP (Layer 1 — Twilio) ──────────────────────────────────────────────
+
+import json as _json
+
+
+async def _store_phone_otp(user_id: str, otp: str, phone: str) -> None:
+    redis = await _get_redis()
+    if not redis:
+        return
+    try:
+        await redis.setex(f"phone_otp:{user_id}", 600, _json.dumps({"otp": otp, "phone": phone}))
+    finally:
+        await redis.close()
+
+
+async def _get_phone_otp_data(user_id: str) -> dict | None:
+    redis = await _get_redis()
+    if not redis:
+        return None
+    try:
+        raw = await redis.get(f"phone_otp:{user_id}")
+        return _json.loads(raw) if raw else None
+    finally:
+        await redis.close()
+
+
+async def _delete_phone_otp(user_id: str) -> None:
+    redis = await _get_redis()
+    if not redis:
+        return
+    try:
+        await redis.delete(f"phone_otp:{user_id}")
+    finally:
+        await redis.close()
+
+
+class SendPhoneOTPRequest(BaseModel):
+    phone: str
+
+
+class VerifyPhoneRequest(BaseModel):
+    otp: str
+
+
+@router.post("/send-phone-otp")
+async def send_phone_otp(
+    body: SendPhoneOTPRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Send a 6-digit OTP via Twilio SMS to the given E.164 phone number.
+    Rejects the number if it is already linked to any trial account.
+    """
+    from app.core.config import settings
+
+    phone = body.phone.strip()
+
+    # Check if phone is already claimed by another user
+    stmt = select(User).where(User.phone_number == phone)
+    result = await db.execute(stmt)
+    existing = result.scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="Phone number already registered to a trial account.")
+
+    otp = "".join(random.choices(string.digits, k=6))
+    await _store_phone_otp(current_user["id"], otp, phone)
+
+    if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN and settings.TWILIO_PHONE_NUMBER:
+        try:
+            from twilio.rest import Client
+            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            client.messages.create(
+                body=f"Your DocuMindAI code: {otp}",
+                from_=settings.TWILIO_PHONE_NUMBER,
+                to=phone,
+            )
+        except Exception as exc:
+            logger.error("[auth] Twilio SMS failed to %s: %s", phone, exc)
+            raise HTTPException(status_code=502, detail="Failed to send OTP. Please try again.")
+    else:
+        logger.warning("[auth] Twilio not configured — OTP for user %s: %s", current_user["id"], otp)
+
+    return {"message": "OTP sent", "expires_in": 600}
+
+
+@router.post("/verify-phone")
+async def verify_phone(
+    body: VerifyPhoneRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Verify the SMS OTP. On success sets phone_verified=True and stores the phone number.
+    """
+    user_id = current_user["id"]
+    data = await _get_phone_otp_data(user_id)
+
+    if not data:
+        raise HTTPException(status_code=400, detail="OTP expired or not found. Request a new one.")
+
+    if body.otp.strip() != data["otp"]:
+        raise HTTPException(status_code=400, detail="Incorrect OTP.")
+
+    await db.execute(
+        sa_update(User)
+        .where(User.id == user_id)
+        .values(phone_number=data["phone"], phone_verified=True)
+    )
+    await db.commit()
+    await _delete_phone_otp(user_id)
+
+    return {"verified": True}

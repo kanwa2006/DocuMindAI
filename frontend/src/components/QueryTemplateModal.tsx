@@ -73,7 +73,7 @@ export default function QueryTemplateModal({
 
     setSubmitting(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/query-templates`, {
+      const res = await fetch(`${API_BASE}/query-templates`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

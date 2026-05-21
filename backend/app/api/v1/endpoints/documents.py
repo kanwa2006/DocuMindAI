@@ -16,8 +16,9 @@ from app.schemas.document import DocumentResponse
 from app.services.document_service import DocumentService
 from app.models.document import Document, DocumentStatus
 from app.core.auth import get_current_user
+from app.core.workspace import resolve_workspace_id
 from app.core.config import settings
-from app.workers.tasks.document_tasks import process_document
+from app.workers.tasks.document_tasks import process_document, process_clip_document
 from app.services.extraction_router import route_extraction
 from pydantic import BaseModel
 
@@ -43,6 +44,12 @@ ALLOWED_MIMES = [
 ]
 
 
+class ClipRequest(BaseModel):
+    title: Optional[str] = None
+    content: str
+    source_hint: Optional[str] = None  # "email", "message", "web", "note", "other"
+
+
 class VerifyUploadRequest(BaseModel):
     document_id: str
     filename: str
@@ -51,6 +58,87 @@ class VerifyUploadRequest(BaseModel):
     file_hash: Optional[str] = None
     mime_type: Optional[str] = None
     size_bytes: Optional[int] = None
+
+
+@router.post("/clip")
+async def clip_text(
+    request: ClipRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Phase 28 — Instant Text Clip.
+    Accepts raw text, deduplicates via MD5, creates a Document record,
+    dispatches process_clip_document Celery task (no OCR, no file storage).
+    Returns immediately with estimated_seconds: 5.
+    """
+    if len(request.content) < 50:
+        raise HTTPException(status_code=400, detail="Text must be at least 50 characters")
+    if len(request.content) > 50000:
+        raise HTTPException(status_code=400, detail="Text must be under 50,000 characters")
+
+    owner_id = uuid.UUID(current_user["id"])
+    ws_uuid = resolve_workspace_id(current_user.get("workspace_id"))
+
+    content_hash = hashlib.md5(request.content.encode()).hexdigest()
+
+    # Deduplication check
+    dup_result = await db.execute(
+        select(Document).where(
+            Document.owner_id == owner_id,
+            Document.content_hash == content_hash,
+        )
+    )
+    existing = dup_result.scalar_one_or_none()
+    if existing:
+        return {
+            "document_id": str(existing.id),
+            "status": "deduplicated",
+            "estimated_seconds": 0,
+            "message": "Text matches a previous clip. Using cached embeddings.",
+        }
+
+    # Build filename from source_hint + title or first 40 chars of content
+    prefix_map = {
+        "email": "Email — ",
+        "message": "Message — ",
+        "web": "Web — ",
+        "note": "Note — ",
+        "other": "Clip — ",
+    }
+    prefix = prefix_map.get(request.source_hint or "", "Clip — ")
+    base = (request.title or request.content[:40].strip()).replace("\n", " ")
+    filename = (prefix + base)[:60]
+
+    doc_id = uuid.uuid4()
+    file_hash = hashlib.sha256(request.content.encode()).hexdigest()
+    size_bytes = len(request.content.encode("utf-8"))
+
+    new_doc = Document(
+        id=doc_id,
+        filename=filename,
+        file_hash=file_hash,
+        mime_type="text/plain",
+        size_bytes=size_bytes,
+        storage_path=f"clip://{doc_id}",
+        status=DocumentStatus.PROCESSING,
+        owner_id=owner_id,
+        workspace_id=ws_uuid,
+        content_hash=content_hash,
+        source="clip",
+    )
+    db.add(new_doc)
+    await db.commit()
+    await db.refresh(new_doc)
+
+    process_clip_document.delay(str(doc_id), request.content)
+
+    return {
+        "document_id": str(doc_id),
+        "filename": filename,
+        "status": "processing",
+        "estimated_seconds": 5,
+    }
 
 
 @router.post("/upload/verify", response_model=DocumentResponse)
@@ -66,14 +154,7 @@ async def verify_upload(
     """
     doc_id = uuid.UUID(request.document_id)
     owner_id = uuid.UUID(current_user["id"])
-    workspace_id = current_user.get("workspace_id", "general")
-
-    # Resolve workspace_id to a UUID for the document table
-    try:
-        ws_uuid = uuid.UUID(workspace_id)
-    except (ValueError, AttributeError):
-        # workspace_id is a slug like "general" — generate deterministic UUID
-        ws_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, workspace_id)
+    ws_uuid = resolve_workspace_id(current_user.get("workspace_id"))
 
     storage_path = request.object_key
 

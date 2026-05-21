@@ -136,7 +136,7 @@ function GenerateReportPanel({
     e.preventDefault();
     setGenerating(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/export/${sessionId}/report`, {
+      const res = await fetch(`${API_BASE}/export/${sessionId}/report`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -316,7 +316,7 @@ function CreateShareLinkPanel({
   async function handleGenerate() {
     setGenerating(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/share`, {
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}/share`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

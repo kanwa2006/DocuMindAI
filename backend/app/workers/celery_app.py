@@ -11,7 +11,15 @@ celery_app = Celery(
         "app.workers.tasks.export_tasks",
         "app.workers.tasks.audio_tasks",
         "app.workers.tasks.ocr_tasks",
-        "app.workers.tasks.hr_tasks"
+        "app.workers.tasks.hr_tasks",
+        # Phase 20 — automation tasks
+        "app.automation.auto_health_check",
+        "app.automation.auto_key_rotation",
+        "app.automation.auto_daily_digest",
+        "app.automation.auto_db_cleanup",
+        "app.automation.auto_subscription_check",
+        "app.automation.auto_gst_notice",
+        "app.automation.auto_model_check",
     ]
 )
 
@@ -41,6 +49,35 @@ celery_app.conf.beat_schedule = {
     'flag-stale-hr-reviews-daily': {
         'task': 'app.workers.tasks.hr_tasks.flag_stale_reviews',
         'schedule': crontab(hour=8, minute=0), # Every morning at 8:00 AM
+    },
+    # Phase 20 — Automation scripts
+    'auto-health-check': {
+        'task': 'app.automation.auto_health_check.run_health_check',
+        'schedule': crontab(minute='*/5'),
+    },
+    'auto-key-rotation-check': {
+        'task': 'app.automation.auto_key_rotation.check_api_keys',
+        'schedule': crontab(minute=0),
+    },
+    'auto-daily-digest': {
+        'task': 'app.automation.auto_daily_digest.send_daily_digest',
+        'schedule': crontab(hour=2, minute=30),
+    },
+    'auto-db-cleanup': {
+        'task': 'app.automation.auto_db_cleanup.run_db_cleanup',
+        'schedule': crontab(hour=20, minute=30, day_of_week=6),
+    },
+    'auto-subscription-check': {
+        'task': 'app.automation.auto_subscription_check.run_subscription_check',
+        'schedule': crontab(hour=18, minute=30),
+    },
+    'auto-gst-notice': {
+        'task': 'app.automation.auto_gst_notice.check_gst_rates',
+        'schedule': crontab(hour=3, minute=30, day_of_week=1),
+    },
+    'auto-model-check': {
+        'task': 'app.automation.auto_model_check.check_model_status',
+        'schedule': crontab(hour=4, minute=30, day_of_week=1),
     },
 }
 

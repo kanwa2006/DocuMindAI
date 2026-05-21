@@ -27,12 +27,18 @@ def upgrade() -> None:
     )
 
     # Phase 9-G4: GIN index on legal_analyses.clause_risks for fast JSONB full-text search.
-    # CREATE INDEX IF NOT EXISTS so this is idempotent across environments.
+    # Guarded: table may not exist in all environments.
     op.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_legal_analyses_clause_risks_gin
-        ON legal_analyses
-        USING GIN (clause_risks)
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_name = 'legal_analyses'
+          ) THEN
+            CREATE INDEX IF NOT EXISTS idx_legal_analyses_clause_risks_gin
+            ON legal_analyses USING GIN (clause_risks);
+          END IF;
+        END $$
         """
     )
 

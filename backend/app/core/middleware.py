@@ -5,6 +5,14 @@ import logging
 
 from app.core.config import settings
 
+
+async def _middleware_get_redis():
+    try:
+        import aioredis
+        return await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+    except Exception:
+        return None
+
 logger = logging.getLogger(__name__)
 
 # FIX 0.5: Paths that must never be blocked by CSRF check.
@@ -13,6 +21,8 @@ CSRF_EXEMPT_PATHS = {
     "/api/v1/auth/login",
     "/api/v1/auth/register",
     "/api/v1/auth/refresh",
+    "/api/v1/auth/send-phone-otp",
+    "/api/v1/auth/verify-phone",
     "/api/v1/csrf/csrf-token",
     "/api/v1/csrf-token",
     "/api/v1/health",
@@ -92,4 +102,32 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         else:
             request.state.collection_name = f"docuMind_{user_id}"
 
+        return await call_next(request)
+
+
+class DeviceFingerprintMiddleware(BaseHTTPMiddleware):
+    """
+    Layer 2 abuse prevention: checks X-Device-ID on registration.
+    If the device has already been used for a trial, returns 409.
+    Persistence after successful registration is handled in the register endpoint.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path == "/api/v1/auth/register" and request.method == "POST":
+            device_id = request.headers.get("X-Device-ID", "").strip()
+            if device_id:
+                redis = await _middleware_get_redis()
+                if redis:
+                    try:
+                        existing = await redis.get(f"device_trial:{device_id}")
+                        if existing:
+                            logger.warning(
+                                "[abuse] Registration blocked — device fingerprint already used: device_id=REDACTED"
+                            )
+                            return JSONResponse(
+                                status_code=409,
+                                content={"detail": "Trial already used on this device"},
+                            )
+                    finally:
+                        await redis.close()
         return await call_next(request)

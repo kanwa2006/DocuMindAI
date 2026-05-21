@@ -6,6 +6,7 @@ import uuid
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
+from app.core.workspace import resolve_workspace_id
 from app.models.benchmark_run import BenchmarkRun
 from app.schemas.benchmark import BenchmarkRunCreate, BenchmarkRunResponse
 from app.services.evaluation_service import EvaluationService
@@ -21,7 +22,7 @@ async def create_benchmark_run(
     """
     Execute a deterministic retrieval benchmark suite and persist metrics.
     """
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
     # Run evaluation suite
     eval_report = await EvaluationService.run_benchmark(
@@ -50,7 +51,7 @@ async def list_benchmark_runs(
     db: AsyncSession = Depends(get_db)
 ) -> Any:
     """Fetch benchmark history for the active workspace."""
-    workspace_id = uuid.UUID(current_user["workspace_id"])
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     stmt = select(BenchmarkRun).where(BenchmarkRun.workspace_id == workspace_id).order_by(BenchmarkRun.created_at.desc())
     result = await db.execute(stmt)
     return result.scalars().all()
