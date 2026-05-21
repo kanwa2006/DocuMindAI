@@ -241,7 +241,9 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
 
   const handleWorkspaceChange = (wsId: string) => {
     setCurrentWorkspace(wsId);
-    document.documentElement.style.setProperty("--brand-hue", WORKSPACE_HUES[wsId] || "220");
+    // C7 — workspace identity is a small dot/monogram, not a UI wash.
+    // The previous global `--brand-hue` swap is removed; per-workspace accents
+    // are exposed via --ws-*-accent for components that opt in.
     localStorage.setItem("lastActiveWorkspace", `/${wsId}`);
   };
 
@@ -433,8 +435,9 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Workspace hue map (shared with sidebar context)
-const WORKSPACE_HUES: Record<string, string> = {
+// Workspace hue map — kept for reference; the dot/monogram in WorkspaceDropdown
+// renders each workspace's accent. No longer mutates --brand-hue (C7).
+export const WORKSPACE_HUES: Record<string, string> = {
   general:  "220",
   exam:     "262",
   hr:       "198",

@@ -131,6 +131,23 @@
   --warning-bg:     #FFFBEB;  --warning-text:   #92400E;  --warning-border: #FDE68A;
   --error-bg:       #FEF2F2;  --error-text:     #991B1B;  --error-border:   #FECACA;
   --info-bg:        #EFF6FF;  --info-text:      #1E40AF;  --info-border:    #BFDBFE;
+
+  /* C7 — spec aliases (additive). Components may reference either the
+     existing surface-* / brand tokens or these spec names; both stay in sync. */
+  --bg:               var(--surface-base);
+  --surface:          var(--surface-raised);
+  --surface-2:        var(--surface-sunken);
+  --border:           var(--border-default);
+  --accent:           var(--brand);
+  --accent-hover:     var(--brand-dim);
+  --accent-ghost:     var(--brand-ghost);
+  --danger:           var(--error-text);
+  --success:          var(--success-text);
+  --warning:          var(--warning-text);
+
+  /* C7 — solid border alternates for components that need opaque borders */
+  --border-solid:         #E5E5E5;
+  --border-strong-solid:  #D4D4D8;
 }
 
 /* DARK MODE SURFACES */
@@ -156,4 +173,8 @@
   --warning-bg:     #1C1400;  --warning-text:   #FDE68A;  --warning-border: #92400E;
   --error-bg:       #1C0000;  --error-text:     #FCA5A5;  --error-border:   #991B1B;
   --info-bg:        #0A1628;  --info-text:      #93C5FD;  --info-border:    #1E40AF;
+
+  /* C7 — dark-mode solid border alternates */
+  --border-solid:         #262626;
+  --border-strong-solid:  #3F3F46;
 }

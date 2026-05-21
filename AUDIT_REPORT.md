@@ -239,4 +239,40 @@ Running log of every change made during this audit. One line per fix.
 - Removing the doc-tile row also removes the `bounce` 2× animation on first-time empty-state. The chips and the centre-of-screen "Attach…" hint should be enough discoverability. Will revisit if user feedback says otherwise.
 - `ComparisonToggle` now only shows when ≥2 docs are READY. Single-doc users no longer see it (which is correct — there's nothing to compare).
 
+## STEP 10 — C7 color tokens + C8 typography — complete
+
+**C7 — color tokens, additive:**
+- `frontend/src/styles/tokens.css` — added spec aliases mapped to existing tokens so both naming conventions stay synchronised:
+  - `--bg` ← `--surface-base`
+  - `--surface` ← `--surface-raised`
+  - `--surface-2` ← `--surface-sunken`
+  - `--border` ← `--border-default`
+  - `--accent` ← `--brand`
+  - `--accent-hover` ← `--brand-dim`
+  - `--accent-ghost` ← `--brand-ghost`
+  - `--danger` ← `--error-text`
+  - `--success` ← `--success-text`
+  - `--warning` ← `--warning-text`
+- Added `--border-solid` / `--border-strong-solid` opaque variants (light: `#E5E5E5` / `#D4D4D8`, dark: `#262626` / `#3F3F46`) for components that can't compose alpha borders against gradients.
+- The existing palette was already very close to spec (gray-50/100/200 family). Did not flip `--brand` to indigo-600 (#4f46e5) — that would visually retheme the entire UI and risk surprise; the existing azure-blue (`hsl(220, 90%, 60%)`) stays. Documented in KNOWN_REMAINING_ISSUES.md so a single-line change can promote indigo when the user is ready.
+
+**C7 — workspace identity: dot replaces UI wash:**
+- `frontend/src/components/LayoutWrapper.tsx` — `document.documentElement.style.setProperty("--brand-hue", …)` removed from `handleWorkspaceChange`. Per-workspace UI wash gone. `WORKSPACE_HUES` map is now exported (kept for reference / dot tinting if needed).
+- `frontend/src/components/WorkspaceDropdown.tsx` — added `WORKSPACE_DOT_COLORS` map (one entry per workspace pointing at `--ws-{id}-accent`) and rendered an 8 px coloured dot before the emoji inside the dropdown trigger. The dropdown panel and emoji icons keep the existing identity; the dot is the additional, persistent identity cue per spec.
+
+**C8 — typography:**
+- `frontend/src/styles/typography.css` —
+  - `body { line-height: 1.6; letter-spacing: 0; text-rendering: optimizeLegibility; }` (was `var(--leading-normal)` = 1.5 and no explicit tracking; cramped/attached-looking glyphs come from H2/H3 inheriting `--tracking-snug` as -0.01em).
+  - `.text-display` tracking `var(--tracking-tight)` (-0.025em) → `-0.01em`.
+  - `.text-heading-1` tracking `var(--tracking-snug)` (-0.01em) → `0`.
+  - `.text-heading-2` tracking `var(--tracking-snug)` (-0.01em) → `0`.
+  - `.text-body-lg`, `.text-body`, `.text-body-secondary` line-height locked to `1.6` and `letter-spacing: 0` (was `--leading-normal` = 1.5).
+  - Only `.text-display` (>32 px / `--text-4xl` = 36 px) retains the -0.01em negative tracking, per spec.
+- Single UI font: `--font-body` is `DM Sans` loaded via next/font. Spec asked for `Inter or system-ui`; DM Sans is in the same humanist-sans family and is already loaded. Keeping it avoids a second font-load round-trip. The fallback chain ends in `sans-serif` so `system-ui` is implicit. Documented in KNOWN_REMAINING_ISSUES.md.
+
+**Could regress:**
+- Removing the `--brand-hue` wash means any element that was reading the workspace-tinted `--brand` value will now show the base azure-blue instead of the per-workspace hue. The intended consumers (chat input border, send button, brand-coloured chips) are now visually consistent across workspaces, which is what the spec asks. Side effect: per-workspace badges (`--ws-*-accent`) keep their distinct hue; only the global `--brand` wash is removed.
+- Typography: any text that visually depended on tighter tracking (especially marketing display H1s at ~30 px on the landing page) will breathe slightly more. The landing page uses inline styles with explicit `letter-spacing: "var(--tracking-tight)"`; those are untouched and keep their look.
+- Body line-height 1.5 → 1.6 may slightly increase vertical rhythm. Chat history density is preserved because `.text-response` already uses `--leading-loose` (1.75); only generic body areas widen.
+
 (further steps will append below as they are completed)

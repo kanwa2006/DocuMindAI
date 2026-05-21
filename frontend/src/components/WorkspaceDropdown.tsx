@@ -22,6 +22,17 @@ const WORKSPACES: Workspace[] = [
   { id: "finance",  label: "CA / Finance", icon: "📊", route: "/finance", badge: "Precision", description: "Financial documents & ratio analysis" },
 ];
 
+// C7 — workspace identity dot color. Matches --ws-*-accent in tokens.css.
+const WORKSPACE_DOT_COLORS: Record<string, string> = {
+  general:  "var(--ws-general-accent)",
+  exam:     "var(--ws-exam-accent)",
+  hr:       "var(--ws-hr-accent)",
+  study:    "var(--ws-study-accent)",
+  research: "var(--ws-research-accent)",
+  legal:    "var(--ws-legal-accent)",
+  finance:  "var(--ws-finance-accent)",
+};
+
 function getActiveWorkspace(pathname: string): Workspace {
   // Match longest prefix first
   const sorted = [...WORKSPACES].sort((a, b) => b.route.length - a.route.length);
@@ -119,6 +130,17 @@ export default function WorkspaceDropdown({ onWorkspaceChange }: WorkspaceDropdo
           color: "var(--text-primary)",
         }}
       >
+        {/* C7 — workspace identity dot (NOT a UI wash) */}
+        <span
+          aria-hidden="true"
+          style={{
+            width: "8px",
+            height: "8px",
+            borderRadius: "50%",
+            background: WORKSPACE_DOT_COLORS[active.id] || "var(--ws-general-accent)",
+            flexShrink: 0,
+          }}
+        />
         <span style={{ fontSize: "16px", lineHeight: 1 }}>{active.icon}</span>
         <span style={{ flex: 1, textAlign: "left", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {active.label}
