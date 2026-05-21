@@ -264,71 +264,85 @@ async def ask_question_stream(
                 f"data: {json.dumps({'stage': 'reranking', 'detail': f'Reviewing {evidence_count} relevant passages...'})}\n\n"
             )
 
-            # Send metadata immediately so frontend renders citations before generation finishes
+            grounded_context = grounding_payload["grounded_context_str"]
+            is_grounded = bool(grounded_context.strip())
+
+            # Send metadata immediately so frontend renders citations before generation finishes.
+            # `grounded` / `mode` lets the UI show an "Ungrounded" badge instead of a fake TrustScore.
             metadata = {
-                "confidence_score": grounding_payload["confidence_score"],
-                "evidence": grounding_payload["evidence_metadata"],
-                "tracing": grounding_payload["tracing"]
+                "confidence_score": grounding_payload["confidence_score"] if is_grounded else 0.0,
+                "evidence": grounding_payload["evidence_metadata"] if is_grounded else [],
+                "tracing": grounding_payload["tracing"],
+                "grounded": is_grounded,
+                "mode": "grounded" if is_grounded else "general",
             }
             yield f"event: metadata\ndata: {json.dumps(metadata)}\n\n"
 
-            grounded_context = grounding_payload["grounded_context_str"]
-            if not grounded_context.strip():
-                yield f"event: token\ndata: {json.dumps({'token': 'I do not have sufficient evidence in your documents to answer this question.'})}\n\n"
-            else:
-                yield f"event: status\ndata: {json.dumps({'message': 'Generating grounded response...'})}\n\n"
+            yield f"event: status\ndata: {json.dumps({'message': 'Generating grounded response...' if is_grounded else 'Generating response from workspace context...'})}\n\n"
 
-                # Phase 14.10 — Stage 3: generating
-                yield (
-                    f"event: thinking_stage\n"
-                    f"data: {json.dumps({'stage': 'generating', 'detail': 'Generating response...'})}\n\n"
-                )
+            # Phase 14.10 — Stage 3: generating
+            yield (
+                f"event: thinking_stage\n"
+                f"data: {json.dumps({'stage': 'generating', 'detail': 'Generating response...'})}\n\n"
+            )
 
+            # C10 — no-document mode: skip grounded prompt; answer from workspace system prompt only.
+            if is_grounded:
                 system_prompt = llm_service._build_system_prompt(grounded_context)
-
-                # Phase 15.2 — inject workspace response schema
-                schema = get_response_schema(workspace_type)
-                system_prompt = f"{system_prompt}\n\n{schema}"
-
-                # Phase 15.4 — inject language instruction
-                preferred_lang = (
-                    getattr(user_obj, "preferred_language", "auto") or "auto"
+            else:
+                system_prompt = (
+                    "You are DocuMindAI, a helpful assistant. The user has not attached "
+                    "any documents to this workspace, so answer from general knowledge. "
+                    "Be concise and clear. Never invent citations or quote non-existent "
+                    "documents. If the user's question would require document content "
+                    "to answer accurately, recommend they upload one for grounded, "
+                    "cited responses."
                 )
-                if preferred_lang != "auto":
-                    query_language = preferred_lang
-                else:
-                    query_language = detect_query_language(request.query)
-                lang_instruction = get_language_instruction(query_language)
-                if lang_instruction:
-                    system_prompt = system_prompt + lang_instruction
 
-                # Phase 14.6 — comparison mode: augment system prompt
-                if getattr(request, "comparison_mode", False):
-                    system_prompt = system_prompt + (
-                        "\n\nCOMPARISON MODE ACTIVE: You are comparing multiple documents. "
-                        "For each point, specify which document supports it using [Doc A], [Doc B] notation. "
-                        "Format your response as a structured comparison. "
-                        "Use a table when 3 or more dimensions are compared."
-                    )
+            # Phase 15.2 — inject workspace response schema
+            schema = get_response_schema(workspace_type)
+            system_prompt = f"{system_prompt}\n\n{schema}"
 
-                # Task 4.3 — prepend conversation history to user prompt
-                if history_text:
-                    user_prompt = (
-                        f"Previous conversation:\n{history_text}\n\n---\n\n"
-                        f"Question: {request.query}"
-                    )
-                else:
-                    user_prompt = f"Question: {request.query}"
+            # Phase 15.4 — inject language instruction
+            preferred_lang = (
+                getattr(user_obj, "preferred_language", "auto") or "auto"
+            )
+            if preferred_lang != "auto":
+                query_language = preferred_lang
+            else:
+                query_language = detect_query_language(request.query)
+            lang_instruction = get_language_instruction(query_language)
+            if lang_instruction:
+                system_prompt = system_prompt + lang_instruction
 
-                async for token in llm_service.provider.generate_stream(system_prompt, user_prompt):
-                    yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"
-                    # Micro-sleep allows ASGI to check for client disconnects
-                    await asyncio.sleep(0.005)
+            # Phase 14.6 — comparison mode: augment system prompt
+            if is_grounded and getattr(request, "comparison_mode", False):
+                system_prompt = system_prompt + (
+                    "\n\nCOMPARISON MODE ACTIVE: You are comparing multiple documents. "
+                    "For each point, specify which document supports it using [Doc A], [Doc B] notation. "
+                    "Format your response as a structured comparison. "
+                    "Use a table when 3 or more dimensions are compared."
+                )
 
-                # Task 4.7 — append workspace disclaimer as final chunk before done
-                disclaimer = WORKSPACE_DISCLAIMERS.get(workspace_type, "")
-                if disclaimer:
-                    yield f"event: token\ndata: {json.dumps({'token': disclaimer})}\n\n"
+            # Task 4.3 — prepend conversation history to user prompt
+            if history_text:
+                user_prompt = (
+                    f"Previous conversation:\n{history_text}\n\n---\n\n"
+                    f"Question: {request.query}"
+                )
+            else:
+                user_prompt = f"Question: {request.query}"
+
+            async for token in llm_service.provider.generate_stream(system_prompt, user_prompt):
+                yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"
+                # Micro-sleep allows ASGI to check for client disconnects
+                await asyncio.sleep(0.005)
+
+            # Task 4.7 — append workspace disclaimer (legal/finance only — keeps regulatory
+            # voice in no-doc mode where users might still ask domain questions).
+            disclaimer = WORKSPACE_DISCLAIMERS.get(workspace_type, "")
+            if disclaimer:
+                yield f"event: token\ndata: {json.dumps({'token': disclaimer})}\n\n"
 
             yield f"event: done\ndata: {{}}\n\n"
 

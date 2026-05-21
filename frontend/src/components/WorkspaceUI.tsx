@@ -793,7 +793,9 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const sendMessage = useCallback(async (queryText: string) => {
     if (!queryText.trim()) return;
     window.speechSynthesis?.cancel?.();
-    if (!activeDoc || activeDoc.status !== "READY") {
+    // C10 — no-document mode: allow asking without an attached doc. If a doc *is*
+    // attached but still processing, gate.
+    if (activeDoc && activeDoc.status !== "READY") {
       toast.error("Please wait for document to be ready.");
       return;
     }
@@ -830,7 +832,13 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         queryText, 5,
         (msg) => toast.loading(msg, { id: toastId }),
         (metadata) => {
-          setResponse((prev) => prev ? { ...prev, confidence_score: metadata.confidence_score, evidence: metadata.evidence } : null);
+          setResponse((prev) => prev ? {
+            ...prev,
+            confidence_score: metadata.confidence_score,
+            evidence: metadata.evidence,
+            grounded: metadata.grounded,
+            mode: metadata.mode,
+          } : null);
         },
         (token) => {
           if (thinkingTimerRef.current) { clearTimeout(thinkingTimerRef.current); thinkingTimerRef.current = null; }
@@ -1377,11 +1385,11 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           <WorkspaceWelcome workspaceType={workspaceType} onQuickAction={sendMessage} />
         )}
 
-        {/* No documents empty state (Task 5.2) */}
+        {/* No documents hint — softened in C10. Asking without a doc is allowed; this is a nudge, not a gate. */}
         {!response && !loading && history.length === 0 && docs.length === 0 && activeDoc === null && (
-          <div style={{ position: "absolute", bottom: "180px", left: "50%", transform: "translateX(-50%)", textAlign: "center", pointerEvents: "none", opacity: 0.6 }}>
-            <div style={{ fontSize: "48px", marginBottom: "8px" }}>📄</div>
-            <div style={{ fontFamily: "var(--font-body)", fontSize: "14px", color: "var(--text-secondary)" }}>Upload a document to begin</div>
+          <div style={{ position: "absolute", bottom: "180px", left: "50%", transform: "translateX(-50%)", textAlign: "center", pointerEvents: "none", opacity: 0.55 }}>
+            <div style={{ fontSize: "40px", marginBottom: "6px" }}>📎</div>
+            <div style={{ fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--text-secondary)" }}>Attach a document for grounded answers — or just ask.</div>
           </div>
         )}
 
@@ -1427,7 +1435,19 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                 <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
                   <div style={{ width: "16px", height: "16px", borderRadius: "4px", background: "var(--brand)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: "10px", fontWeight: 700 }}>D</div>
                   <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-tertiary)", animation: loading ? "pulse 1.5s ease-in-out infinite" : "none" }}>DocuMindAI</span>
+                  {response.mode === "general" && (
+                    <span title="Answered without documents — general knowledge only" style={{ background: "var(--surface-sunken)", color: "var(--text-secondary)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-full)", padding: "1px 8px", fontSize: "10px", fontWeight: 500, letterSpacing: "0.02em" }}>
+                      Ungrounded
+                    </span>
+                  )}
                 </div>
+
+                {/* C10 — no-document mode banner */}
+                {response.mode === "general" && (
+                  <div style={{ marginBottom: "8px", padding: "8px 12px", background: "var(--surface-sunken)", border: "1px solid var(--border-subtle)", borderRadius: "8px", fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-secondary)", lineHeight: "var(--leading-snug)" }}>
+                    Answering without documents. Upload one for grounded, cited responses.
+                  </div>
+                )}
 
                 {/* Thinking label — Phase 14.10 */}
                 {(showThinkingLabel || thinkingStage) && !response.answer && (
@@ -1494,121 +1514,134 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       {/* ── Bottom bar ── */}
       <div style={{ background: "var(--surface-base)", paddingTop: "8px", paddingBottom: "16px", backdropFilter: "blur(8px)", borderTop: "1px solid var(--border-subtle)", position: "sticky", bottom: 0, zIndex: 10 }}>
 
-        {/* Document tray */}
-        <div style={{ marginBottom: "10px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px", padding: "0 2px" }}>
-            <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.07em" }}>Documents</span>
+        {/* Hidden file input — triggered by the paperclip in the input bar */}
+        <input id="upload-trigger" type="file" className="hidden" accept=".pdf,.docx" ref={fileInputRef} onChange={handleFileChange} />
+
+        {/* Comparison toggle row (shown only when 2+ docs are READY) */}
+        {docs.filter((d) => d.status === "READY").length >= 2 && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "6px", padding: "0 2px" }}>
             <ComparisonToggle
               enabled={comparisonMode}
               documentCount={docs.filter((d) => d.status === "READY").length}
               onToggle={setComparisonMode}
             />
           </div>
-          <div style={{ display: "flex", gap: "10px", overflowX: "auto", paddingBottom: "4px" }}>
-            <div
-              id="upload-trigger"
-              role="button"
-              tabIndex={0}
-              aria-label="Upload document"
-              onClick={handleUploadClick}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleUploadClick(); } }}
-              style={{ flexShrink: 0, width: "116px", height: "80px", border: `2px dashed var(--border-default)`, borderRadius: "10px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "border-color 100ms, background 100ms",
-                animation: docs.length === 0 ? "bounce 1.5s ease-in-out 2" : "none" }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; (e.currentTarget as HTMLElement).style.background = "var(--brand-ghost)"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.background = ""; }}
-            >
-              <span aria-hidden="true" style={{ fontSize: "20px", marginBottom: "4px" }}>+</span>
-              <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-tertiary)" }}>Upload</span>
-            </div>
-            {/* Phase 28 — Paste Text button */}
-            <div
-              role="button"
-              tabIndex={0}
-              aria-label="Paste text as document"
-              onClick={() => { setClipInitialText(""); setClipModalOpen(true); }}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setClipInitialText(""); setClipModalOpen(true); } }}
-              style={{ flexShrink: 0, width: "116px", height: "80px", border: "2px dashed var(--border-default)", borderRadius: "10px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "border-color 100ms, background 100ms" }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; (e.currentTarget as HTMLElement).style.background = "var(--brand-ghost)"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.background = ""; }}
-            >
-              <span aria-hidden="true" style={{ fontSize: "20px", marginBottom: "4px" }}>📋</span>
-              <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-tertiary)" }}>Paste Text</span>
-            </div>
-            <input type="file" className="hidden" accept=".pdf,.docx" ref={fileInputRef} onChange={handleFileChange} />
-            {docs.map((d) => (
-              <div key={d.id}
-                style={{ flexShrink: 0, width: "116px", height: "80px", border: `1px solid ${activeDoc?.id === d.id ? "var(--brand)" : "var(--border-default)"}`, borderRadius: "10px", padding: "10px", display: "flex", flexDirection: "column", justifyContent: "space-between", cursor: "pointer", background: activeDoc?.id === d.id ? "var(--brand-ghost)" : "", transition: "border-color 100ms, background 100ms", position: "relative" }}
-                onClick={() => setActiveDoc(d)}
-              >
-                <div style={{ fontFamily: "var(--font-body)", fontSize: "11px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "3px" }} title={d.filename}>
-                  {/* Phase 28: source badge */}
-                  {d.source === "clip" && <span style={{ fontSize: "10px", flexShrink: 0 }}>📋</span>}
-                  {d.source === "scan" && <span style={{ fontSize: "10px", flexShrink: 0 }}>📷</span>}
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.filename}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  {d.status === "DEDUPLICATED" ? (
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: "9px", color: "var(--success-text)", fontWeight: 600 }}>✓ Instant</span>
-                  ) : (
-                    <>
-                      <div style={{ width: "7px", height: "7px", borderRadius: "50%", background: d.status === "READY" ? "var(--success-text)" : d.status === "FAILED" ? "var(--error-text)" : "var(--brand)", opacity: d.status === "READY" || d.status === "FAILED" ? 1 : undefined, animation: d.status !== "READY" && d.status !== "FAILED" ? "pulse 1.5s ease-in-out infinite" : "none" }} />
-                      <div style={{ fontFamily: "var(--font-mono)", fontSize: "9px", color: "var(--text-tertiary)" }}>{d.status}</div>
-                    </>
-                  )}
-                </div>
-                {/* Phase 11: Extract Tables quick-action on exam workspace doc chips */}
-                {workspaceType === "exam" && d.status === "READY" && (
-                  <button
-                    title="Extract tables from this document"
-                    aria-label={`Extract tables from ${d.filename}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActiveDoc(d);
-                      setTablePanelDocId(d.id);
-                      setShowTablePanel(true);
-                    }}
-                    style={{
-                      position: "absolute",
-                      bottom: "4px",
-                      right: "4px",
-                      height: "18px",
-                      padding: "0 5px",
-                      fontSize: "9px",
-                      background: "var(--surface-base)",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: "4px",
-                      cursor: "pointer",
-                      color: "var(--text-tertiary)",
-                      fontFamily: "var(--font-body)",
-                      lineHeight: 1,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "2px",
-                      transition: "border-color 100ms, color 100ms",
-                    }}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)";
-                      (e.currentTarget as HTMLElement).style.color = "var(--brand)";
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLElement).style.borderColor = "var(--border-subtle)";
-                      (e.currentTarget as HTMLElement).style.color = "var(--text-tertiary)";
-                    }}
-                  >
-                    ⊞ Tables
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
+        )}
 
-        {/* Input container (Task 4.11 textarea) */}
+        {/* Input container — refactored (C9): paperclip + clipboard live in the input bar; attached docs render as removable chips. */}
         <form onSubmit={handleAsk}>
           <div style={{ background: "var(--surface-raised)", border: "1px solid var(--border-default)", borderRadius: "16px", boxShadow: "var(--shadow-sm)", padding: "12px 16px", transition: "border-color 100ms, box-shadow 100ms" }}
             onFocusCapture={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-strong)"; (e.currentTarget as HTMLElement).style.boxShadow = "var(--shadow-md)"; }}
             onBlurCapture={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.boxShadow = "var(--shadow-sm)"; }}
           >
+            {/* Attached document chips — above the textarea, scrollable horizontally if many */}
+            {docs.length > 0 && (
+              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "8px" }}>
+                {docs.map((d) => {
+                  const isActive = activeDoc?.id === d.id;
+                  const statusColor =
+                    d.status === "READY" ? "var(--success-text)" :
+                    d.status === "FAILED" ? "var(--error-text)" :
+                    "var(--brand)";
+                  const isLoading = d.status !== "READY" && d.status !== "FAILED" && d.status !== "DEDUPLICATED";
+                  return (
+                    <div
+                      key={d.id}
+                      role="button"
+                      tabIndex={0}
+                      title={d.filename + (d.status !== "READY" ? ` · ${d.status}` : "")}
+                      onClick={() => setActiveDoc(d)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveDoc(d); } }}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        height: "28px",
+                        padding: "0 6px 0 10px",
+                        background: isActive ? "var(--brand-ghost)" : "var(--surface-sunken)",
+                        border: `1px solid ${isActive ? "var(--brand)" : "var(--border-subtle)"}`,
+                        borderRadius: "var(--radius-full)",
+                        cursor: "pointer",
+                        fontFamily: "var(--font-body)",
+                        fontSize: "12px",
+                        color: "var(--text-primary)",
+                        maxWidth: "240px",
+                        transition: "border-color 100ms, background 100ms",
+                      }}
+                    >
+                      {d.source === "clip" && <span aria-hidden="true" style={{ fontSize: "11px" }}>📋</span>}
+                      {d.source === "scan" && <span aria-hidden="true" style={{ fontSize: "11px" }}>📷</span>}
+                      <span
+                        style={{
+                          display: "inline-block",
+                          width: "7px",
+                          height: "7px",
+                          borderRadius: "50%",
+                          background: statusColor,
+                          animation: isLoading ? "pulse 1.5s ease-in-out infinite" : "none",
+                          flexShrink: 0,
+                        }}
+                        aria-hidden="true"
+                      />
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "160px" }}>
+                        {d.filename}
+                      </span>
+                      {/* Phase 11: Extract Tables quick-action on exam workspace */}
+                      {workspaceType === "exam" && d.status === "READY" && (
+                        <button
+                          type="button"
+                          title="Extract tables"
+                          aria-label={`Extract tables from ${d.filename}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveDoc(d);
+                            setTablePanelDocId(d.id);
+                            setShowTablePanel(true);
+                          }}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            cursor: "pointer",
+                            color: "var(--text-tertiary)",
+                            fontSize: "11px",
+                            padding: "2px 4px",
+                            borderRadius: "var(--radius-sm)",
+                            lineHeight: 1,
+                          }}
+                        >
+                          ⊞
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${d.filename}`}
+                        title="Remove"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDocs((prev) => prev.filter((x) => x.id !== d.id));
+                          if (activeDoc?.id === d.id) setActiveDoc(null);
+                        }}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          cursor: "pointer",
+                          color: "var(--text-tertiary)",
+                          fontSize: "14px",
+                          lineHeight: 1,
+                          padding: "2px 4px",
+                          borderRadius: "var(--radius-sm)",
+                        }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-tertiary)"; }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             <textarea
               id="chat-textarea"
               ref={textareaRef}
@@ -1625,22 +1658,33 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                   sendMessage(voiceInterim || query);
                 }
               }}
-              disabled={!activeDoc || activeDoc.status !== "READY" || loading}
-              placeholder={!activeDoc ? "Upload a document to ask anything..." : activeDoc.status !== "READY" ? "Processing document..." : "Ask anything about your documents... (Shift+Enter for new line)"}
+              disabled={loading || (activeDoc != null && activeDoc.status !== "READY")}
+              placeholder={
+                loading
+                  ? "Thinking…"
+                  : activeDoc && activeDoc.status !== "READY"
+                  ? "Processing document..."
+                  : docs.length === 0
+                  ? "Ask anything, or attach a document for grounded answers... (Shift+Enter for new line)"
+                  : "Ask anything about your documents... (Shift+Enter for new line)"
+              }
               className="chat-input"
               style={{ width: "100%", background: "transparent", border: "none", outline: "none", resize: "none", minHeight: "44px", maxHeight: "200px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)", color: voiceInterim ? "var(--text-tertiary)" : "var(--text-primary)", fontStyle: voiceInterim ? "italic" : "normal", display: "block", overflow: "auto" }}
             />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
               <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                <button type="button" onClick={handleUploadClick} className="btn-icon btn-ghost" aria-label="Attach file" style={{ width: "32px", height: "32px" }} title="Attach file">
+                <button type="button" onClick={handleUploadClick} className="btn-icon btn-ghost" aria-label="Attach file" style={{ width: "32px", height: "32px" }} title="Attach file (PDF, DOCX)">
                   <span aria-hidden="true">📎</span>
+                </button>
+                <button type="button" onClick={() => { setClipInitialText(""); setClipModalOpen(true); }} className="btn-icon btn-ghost" aria-label="Paste text as document" style={{ width: "32px", height: "32px" }} title="Paste text as document">
+                  <span aria-hidden="true">📋</span>
                 </button>
                 <VoiceInputButton
                   voiceLang={voiceLang}
                   onLangChange={handleVoiceLangChange}
                   onTranscript={handleVoiceTranscript}
                   onInterimText={handleInterimText}
-                  disabled={!activeDoc || activeDoc.status !== "READY" || loading}
+                  disabled={loading || (activeDoc != null && activeDoc.status !== "READY")}
                 />
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>

@@ -35,6 +35,10 @@ export interface QueryResponse {
   confidence_score: number;
   evidence: EvidenceChunk[];
   diagnostics: TracingDiagnostics;
+  /** C10 — false when the backend answered from general knowledge (no documents indexed for this workspace). */
+  grounded?: boolean;
+  /** C10 — "grounded" | "general". Frontend shows an Ungrounded badge for "general". */
+  mode?: "grounded" | "general";
 }
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL;

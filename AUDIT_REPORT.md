@@ -211,4 +211,32 @@ Running log of every change made during this audit. One line per fix.
 - Users with a stale `onboarding_complete = false` but who *have* finished all three steps will see the checklist briefly before the new `useEffect` re-dismisses it. One-shot.
 - If a user dismisses the legal/finance disclaimer and then changes regulatory context, they'll need to clear localStorage to see it again. Acceptable: the spec asks for per-workspace dismissal.
 
+## STEP 11 — C9 chat input refactor + C10 no-document mode — complete
+
+**C9 — chat input refactor:**
+- `frontend/src/components/WorkspaceUI.tsx` — deleted the `Documents` tile row (the big "Upload" / "Paste Text" dashed 116×80 tiles plus the per-doc tile chips and the section header). It lived in the bottom bar above the input and ate ~96 px of vertical space.
+- The hidden `<input type="file" id="upload-trigger">` was preserved so the OnboardingTooltip step-2 selector (`#upload-trigger`) still resolves; it now lives at the top of the bottom-bar.
+- `ComparisonToggle` was moved to a thin row above the input, shown only when ≥2 documents are READY.
+- Attached documents now render as rounded chip pills inside the input container (above the textarea): filename, status dot, source badge (`📋`/`📷`), per-chip `✕` to detach. Clicking a chip still sets `activeDoc`. Exam workspace keeps the `⊞` Extract-tables button on its chips. Long filenames truncate via ellipsis with max-width 240 px.
+- Bottom row of the input bar gained a `📋` clipboard icon button next to the existing `📎` paperclip. Paperclip → `handleUploadClick()` (file picker). Clipboard → opens the existing `clipModalOpen` paste dialog. Voice + send unchanged.
+- Textarea `disabled` predicate flipped: was `!activeDoc || activeDoc.status !== "READY" || loading`, now `loading || (activeDoc != null && activeDoc.status !== "READY")`. So you can type without a doc.
+- Placeholder copy now adapts: "Ask anything, or attach a document for grounded answers..." when no docs; the doc-specific copy returns once docs are present.
+
+**C10 — no-document mode (backend + frontend):**
+- `backend/app/api/v1/endpoints/query.py` — restructured `event_generator`. Previously: "if grounded_context is empty, yield a hard-coded `I do not have sufficient evidence ...` token and stop." Now:
+  - Computes `is_grounded = bool(grounded_context.strip())`.
+  - Emits `metadata` with two new fields: `grounded: bool`, `mode: "grounded"|"general"`. Evidence/confidence is zeroed-out when ungrounded so the frontend doesn't render a fake TrustScore.
+  - When `is_grounded` is false, builds a workspace-agnostic system prompt that explicitly tells the LLM the user has no documents and not to fabricate citations. Workspace response-schema and language instruction still apply.
+  - Comparison-mode prompt is gated on `is_grounded` (no point comparing nonexistent docs).
+  - Legal/finance workspace disclaimers still append (regulated copy should appear regardless of mode).
+- `frontend/src/lib/api.ts` — `QueryResponse` interface gained `grounded?: boolean; mode?: "grounded" | "general";`.
+- `frontend/src/components/WorkspaceUI.tsx` — `setResponse` on `onMetadata` now persists `grounded` and `mode`. AI label row gains an `Ungrounded` pill (subtle neutral chip) when `mode === "general"`. An info banner above the streaming content reads "Answering without documents. Upload one for grounded, cited responses." Evidence chips and ConfidenceBadge naturally hide when `confidence_score === 0`, which is the ungrounded case.
+- `sendMessage` — old guard `if (!activeDoc || activeDoc.status !== "READY") return;` becomes `if (activeDoc && activeDoc.status !== "READY") return;`. Asking without a doc is allowed; mid-processing is still blocked.
+- The "No documents" centre-of-screen hint was softened from `Upload a document to begin` (gating language) to `📎 Attach a document for grounded answers — or just ask.` (nudge, not a gate).
+
+**Could regress:**
+- History (`ChatMessage`) rows do not store `mode`. Re-opening a past chat will not show the "Ungrounded" pill on those assistant messages. Acceptable: the streaming banner is informative enough, and the trust badge subsystem already gates on `trustDataMap[msg.id]` which would be empty for ungrounded answers.
+- Removing the doc-tile row also removes the `bounce` 2× animation on first-time empty-state. The chips and the centre-of-screen "Attach…" hint should be enough discoverability. Will revisit if user feedback says otherwise.
+- `ComparisonToggle` now only shows when ≥2 docs are READY. Single-doc users no longer see it (which is correct — there's nothing to compare).
+
 (further steps will append below as they are completed)
