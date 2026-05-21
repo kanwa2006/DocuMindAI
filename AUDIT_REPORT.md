@@ -295,4 +295,57 @@ Running log of every change made during this audit. One line per fix.
 - "Pricing" link on the marketing nav disappears below 480 px. Users can still reach `/pricing` from the hero CTAs and the footer.
 - `env(safe-area-inset-bottom)` may briefly evaluate to `0` on devices that don't expose the inset; the `max(16px, …)` keeps the default 16 px floor.
 
+## STEP 13 — Dead-code / duplicate audit (PROPOSALS ONLY) — complete
+
+**No files deleted in this step.** Per session-1 rule D2, deletions are proposed below for explicit user confirmation.
+
+### Backend — proposed deletions
+
+| File | Lines | Status | Reason |
+|---|---|---|---|
+| `backend/app/services/eval_service.py` | 1 (whitespace only) | **safe** | Empty stub file. Zero imports anywhere. Real implementation lives in `evaluation_service.py` (71 lines, used by `endpoints/benchmark.py`). |
+| `backend/app/services/export_service.py` | 155 | **likely safe — verify** | Contains `PDFReport` + `ExportService` (FPDF-based). Zero imports anywhere. The canonical export module is `export_engine.py` (314 lines, imported by `export_tasks.py`, `endpoints/exams.py`, `endpoints/export.py`). However, `export_service.py` uses a DIFFERENT PDF library (`fpdf` vs `python-docx`) — if there's any external tooling or test that imported it directly, deletion will break that. Recommend grep across deploys/scripts before deletion. |
+
+### Frontend — proposed deletions (components with zero references)
+
+Grep was done across `frontend/src/**/*.{ts,tsx}` for each component name. Each entry below had **zero matches outside its own file**. (Components dynamically imported via `next/dynamic` were confirmed by re-grep — none of the below are dynamically loaded.)
+
+| Component | Notes |
+|---|---|
+| `frontend/src/components/CitationHighlighter.tsx` | Likely a Phase-X experiment that never landed in `WorkspaceUI`. |
+| `frontend/src/components/DocumentChangeAlert.tsx` | A1 fix removed its only call site? Verify before deletion. |
+| `frontend/src/components/ExportModal.tsx` | The export flow now uses `ReportShareModal` or backend-triggered exports. |
+| `frontend/src/components/InlineValueVerifier.tsx` | Finance workspace stub — never wired. |
+| `frontend/src/components/PinnedSessionsRail.tsx` | Pinned chats render inside `Sidebar.tsx` directly; the rail is unused. |
+| `frontend/src/components/QueryTemplateModal.tsx` | Templates never shipped; no callers. |
+| `frontend/src/components/ReportShareModal.tsx` | Verify against `endpoints/export.py` "report share" flow — the backend route exists but the frontend caller is gone. |
+| `frontend/src/components/SkeletonLoader.tsx` | Generic skeleton component — replaced by per-component inline skeletons. |
+| `frontend/src/components/WorkspaceInfoModal.tsx` | Workspace info now lives in `WorkspaceDropdown.tsx` descriptions. |
+
+### Backend — kept as-is (referenced)
+
+- `eval_service.py` vs `evaluation_service.py` — keep `evaluation_service.py`, delete the stub.
+- `export_engine.py` vs `export_service.py` — keep `export_engine.py`.
+- `audit_export.py` — used by `endpoints/export.py:22`. Keep.
+
+### Frontend — kept as-is (false positives from naive grep)
+
+- `LayoutWrapper.tsx` — referenced by `app/layout.tsx`.
+- `EnterpriseDocumentViewer.tsx` — dynamic-imported by `DocumentPreviewPanel.tsx` (per STEP 6).
+- `LogoMark.tsx` — used by `LayoutWrapper`.
+- `AnalyticsProvider`, `PWAInstaller`, `ErrorBoundary`, `SessionExpiredOverlay` — referenced in `app/layout.tsx`.
+
+### Alembic — keep all (per D1)
+All migration revisions including merge revisions are git history; never delete.
+
+### PWA icons — keep both formats (per D1)
+`public/icon-192.png` + `icon-192.svg` (and 512) are referenced by `manifest.json`. Both stay.
+
+### Recommendation
+Safe to delete in a follow-up commit:
+1. `backend/app/services/eval_service.py` (empty stub, zero references)
+2. The 9 frontend dead components, after a manual sanity check by the user.
+
+`export_service.py` deletion needs one more pass to confirm no external scripts or tests import it.
+
 (further steps will append below as they are completed)
