@@ -213,9 +213,25 @@ export default function FeedbackModal({ onClose }: FeedbackModalProps) {
 
           {/* Error */}
           {error && (
-            <p style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-sm)", color: "var(--error-text, #dc2626)", margin: 0 }}>
-              {error}
-            </p>
+            <div
+              role="alert"
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "8px",
+                padding: "10px 12px",
+                background: "var(--error-bg, #fef2f2)",
+                border: "1px solid var(--error-border, #fecaca)",
+                borderRadius: "var(--radius-md)",
+                fontFamily: "var(--font-body)",
+                fontSize: "var(--text-sm)",
+                color: "var(--error-text, #b91c1c)",
+                margin: 0,
+              }}
+            >
+              <span aria-hidden="true" style={{ lineHeight: "var(--leading-snug)" }}>⚠</span>
+              <span style={{ lineHeight: "var(--leading-snug)" }}>{error}</span>
+            </div>
           )}
 
           {/* Actions */}

@@ -302,7 +302,7 @@ function WorkspaceWelcome({ workspaceType, onQuickAction }: { workspaceType: str
         <p style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px", lineHeight: "var(--leading-relaxed)" }}>{cfg.subtitle}</p>
         {cfg.badge && (
           <div style={{ display: "flex", justifyContent: "center", marginBottom: "12px" }}>
-            <span style={{ background: cfg.badge.color + "22", color: cfg.badge.color, border: `1px solid ${cfg.badge.color}55`, borderRadius: "var(--radius-full)", padding: "3px 12px", fontSize: "12px", fontWeight: 500 }}>{cfg.badge.text}</span>
+            <span style={{ background: "var(--surface-raised)", color: "var(--text-secondary)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-full)", padding: "4px 12px", fontSize: "12px", fontWeight: 500, textDecoration: "none" }}>{cfg.badge.text}</span>
           </div>
         )}
         {cfg.disclaimer && (
@@ -660,6 +660,18 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   // Per-file progress: { [filename]: { progress: 0-100, status: "uploading"|"done"|"error" } }
   const [batchProgress, setBatchProgress] = useState<Record<string, { progress: number; status: string }>>({});
   const batchFileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Disclaimer dismissal (C6) ─────────────────────────────────────────────
+  const [disclaimerDismissed, setDisclaimerDismissed] = useState(true); // start true to avoid SSR flash; corrected in effect
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const dismissed = localStorage.getItem(`dm.disclaimer.dismissed.${workspaceType}`) === "true";
+    setDisclaimerDismissed(dismissed);
+  }, [workspaceType]);
+  const dismissDisclaimer = useCallback(() => {
+    setDisclaimerDismissed(true);
+    try { localStorage.setItem(`dm.disclaimer.dismissed.${workspaceType}`, "true"); } catch {}
+  }, [workspaceType]);
 
   // ── Phase 28: Text Clip state ─────────────────────────────────────────────
   const [clipBarState, setClipBarState] = useState<{ text: string; rect: DOMRect } | null>(null);
@@ -1288,20 +1300,45 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         />
       )}
 
-      {/* ── Amber disclaimer banner — TOP of chat area — ALWAYS VISIBLE, NEVER DISMISSABLE ── */}
-      {(workspaceType === "legal" || workspaceType === "finance") && (
+      {/* ── Amber disclaimer banner — TOP of chat area, sticky, dismissable. Dismissal persisted per workspace via localStorage (`dm.disclaimer.dismissed.{slug}`). ── */}
+      {(workspaceType === "legal" || workspaceType === "finance") && !disclaimerDismissed && (
         <div style={{
           background: "var(--warning-bg, #fffbeb)",
           borderBottom: "1px solid var(--warning-border, #fbbf24)",
-          padding: "9px 16px",
+          padding: "9px 40px 9px 16px",
           fontFamily: "var(--font-body)", fontSize: "12px",
           color: "var(--warning-text, #92400e)",
           flexShrink: 0,
           lineHeight: "var(--leading-relaxed)",
+          position: "relative",
         }}>
           {workspaceType === "legal"
             ? "⚠ This analysis is AI-generated for informational purposes only. It does not constitute legal advice. Always consult a qualified legal professional."
             : "⚠ All figures are AI-extracted. Verify all numbers against original source documents before any financial, tax, or legal use."}
+          <button
+            onClick={dismissDisclaimer}
+            aria-label="Dismiss disclaimer"
+            title="Dismiss"
+            style={{
+              position: "absolute",
+              top: "50%",
+              right: "8px",
+              transform: "translateY(-50%)",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "var(--warning-text, #92400e)",
+              fontSize: "16px",
+              lineHeight: 1,
+              padding: "4px 8px",
+              borderRadius: "var(--radius-sm)",
+              opacity: 0.7,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = "0.7"; }}
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -1698,23 +1735,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           </div>
         )}
 
-        {/* Sticky disclaimer banner — bottom of workspace — ALWAYS VISIBLE, NEVER DISMISSABLE */}
-        {isLegalOrFinance && (
-          <div style={{
-            marginTop: "8px",
-            background: "var(--warning-bg, #fffbeb)",
-            border: "1px solid var(--warning-border, #fbbf24)",
-            borderRadius: "8px",
-            padding: "7px 14px",
-            fontFamily: "var(--font-body)", fontSize: "12px",
-            color: "var(--warning-text, #92400e)",
-            lineHeight: "var(--leading-relaxed)",
-          }}>
-            {workspaceType === "legal"
-              ? "⚠ This analysis is AI-generated for informational purposes only. It does not constitute legal advice. Always consult a qualified legal professional."
-              : "⚠ All figures are AI-extracted. Verify all numbers against original source documents before any financial, tax, or legal use."}
-          </div>
-        )}
+        {/* Bottom disclaimer banner removed (C6). The top dismissable banner is the single canonical instance. */}
       </div>
     </div>
   );

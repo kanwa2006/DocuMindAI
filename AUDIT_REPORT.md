@@ -163,4 +163,52 @@ Running log of every change made during this audit. One line per fix.
 **Files touched:**
 - `frontend/src/components/LayoutWrapper.tsx`
 
+## STEP 9 — Category C copy / pricing fixes (C1, C2, C3, C4, C5, C6) + bonus — complete
+
+**C1 — Landing page hero CTA:**
+- `frontend/src/app/(marketing)/page.tsx` — replaced `Start Free — 10 Queries` with `Start free. No credit card.` Removed `· 10 queries free ·` from the trust line. Subheadline now mentions "...and more across 7 specialised workspaces" so the persona list is internally consistent with the actual 7 workspaces (BF6).
+
+**C2 — Free trial 5 → 10, frontend de-hardcoded:**
+- `backend/app/core/trial_enforcement.py` — `TRIAL_QUERY_LIMIT` 5 → **10**. Single source of truth; already exported via `GET /billing/status` (field `trial_limit`).
+- `frontend/src/lib/store/trialStore.tsx` — added `trialLimit: number | null` to the store; `setTrialStatus` now accepts an optional third arg and merges it in. Initial value is `null` until billing/status loads — no hardcoded 5.
+- `frontend/src/components/LayoutWrapper.tsx` — billing-status fetch now passes `status.trial_limit` to `setTrialStatus`. `<TrialPill trialLimit={5} … />` → `trialLimit={trialLimit ?? undefined}`.
+- `frontend/src/components/TrialPill.tsx` — `trialLimit = 5` default removed; thresholds use `queriesRemaining` only. Pill label reworded `{used} / {limit} free queries` → `Free trial — {N} left` (BF1 — smaller, cleaner).
+
+**C3 — Pricing consistency + read-only fallback on exhaustion:**
+- `frontend/src/app/(marketing)/page.tsx` — Professional card period `/month` + description `Billed annually · ₹999/mo monthly`; Enterprise description `Billed monthly · SLA included`. Matches `/pricing` and the billing page exactly.
+- `frontend/src/components/UpgradeModal.tsx` — modal is now **always dismissable**, X button is always rendered as a 44px tap target, ESC and backdrop-click always close. The "trap on limit_reached" branch is gone. Title and copy now switch by trigger: `Your free trial is complete` + read-only reassurance vs `Upgrade DocuMindAI` / `Unlock unlimited queries…`. The hardcoded `TRIAL_LIMIT = 5` constant was removed (unused). (BF9 — close affordance.)
+- `frontend/src/components/LayoutWrapper.tsx` — `onClose={upgradeTrigger !== "limit_reached" ? closeUpgradeModal : undefined}` is now `onClose={closeUpgradeModal}` unconditionally. The 402 from backend still opens the modal with `limit_reached`, but the user can dismiss it and remain in read-only mode (chat list and message history don't require quota; only `/query/stream` does, which will return 402 again on attempt).
+- Verified: `WorkspaceUI.tsx` does not gate the input on `queriesRemaining`. Backend's 402 is the gate; modal reopens via the existing `trial:exhausted` event.
+
+**C4 — Razorpay user-facing copy:**
+- `frontend/src/app/(marketing)/page.tsx` — `UPI & Razorpay billing` → `Secure UPI & card payments` (trust bar) and `UPI & Razorpay billing` → `UPI & card payments` (Professional feature list).
+- `frontend/src/app/privacy/page.tsx` left intact (legitimate legal disclosure of the processor identity).
+
+**C5 — Login Google/Microsoft buttons + tooltip:**
+- `frontend/src/app/login/page.tsx` — removed the `Continue with Google`, `Continue with Microsoft` disabled buttons, the `or` divider, and both `title="Coming soon"` tooltips. The single Sign In button + Forgot password + Create one link remain. (BF10.)
+
+**C6 — Duplicate disclaimer banner on legal/finance:**
+- `frontend/src/components/WorkspaceUI.tsx` — top banner (line ~1291) now dismissable: small ✕ button, dismissal persisted to `localStorage["dm.disclaimer.dismissed.{workspace_slug}"]`. Added a `disclaimerDismissed` boolean + `dismissDisclaimer` callback in the component body. Bottom sticky banner (line ~1701, "ALWAYS VISIBLE, NEVER DISMISSABLE") **deleted entirely**.
+- The small inline `cfg.disclaimer` chip in the empty/welcome state was kept — it's an informational pill, not a sticky banner, and it never duplicated.
+- HR was not listed in `WORKSPACE_CONFIG` as having a disclaimer in either banner; no HR copy was invented (sticking to "preserve existing behavior").
+
+**Bonus fixes done in this step:**
+- **BF1** — Trial pill copy (done with C2 above).
+- **BF2** — Exam workspace badge "OCR Extraction Available" was rendered with the workspace accent colour at 13% opacity, which read as a faint coloured link. Re-styled as a subtle neutral pill (surface-raised bg, secondary text, subtle border) so it no longer looks clickable.
+- **BF3** — Account dropdown avatar already shows `user.initials = "DU"` (line 257 of LayoutWrapper.tsx). The "exam" the user saw was the workspace pill *inside* the dropdown, not the circle. **No change needed.** Noted in OBSERVED BUT NOT CHANGED.
+- **BF4** — `FeedbackModal.tsx` error rendering: was a bare `<p>` in red. Now a proper alert region with icon, padding, error-bg/border tokens, `role="alert"`.
+- **BF5** — `OnboardingProgress.tsx`: on `allDone`, a `useEffect` now persists `localStorage["dm.onboarding.dismissed"] = "true"` and calls `onDismiss()`. `useOnboarding.ts` honours both `onboarding_complete` (legacy) and `dm.onboarding.dismissed` keys.
+- **BF6** — Hero subhead now adds "...and more across 7 specialised workspaces". Trust-bar sub now lists all 7 (General · HR · Finance · Legal · Research · Study · Exam). Consistent with the workspace grid below.
+- **BF9** — UpgradeModal X tap target widened to 44×44 (was 4px padding around a 20px char). Done with C3 above.
+- **BF10** — Login "Coming soon" tooltip removed with C5.
+
+**OBSERVED BUT NOT CHANGED:**
+- **BF3** — Avatar shows "DU" (correct). Workspace pill is rendered separately inside the profile dropdown.
+- **BF7** (emoji on /exam) and **BF8** (anchor links) — deferred to STEP 10 (typography/color pass), since they overlap with the broader typography refactor.
+
+**Could regress:**
+- Trial pill briefly shows `Free trial — 0 left` between mount and the billing-status fetch resolving. The store's initial `queriesRemaining = 0` was already there; the only change is `trialLimit: null`, which only affects the (now optional) aria-label.
+- Users with a stale `onboarding_complete = false` but who *have* finished all three steps will see the checklist briefly before the new `useEffect` re-dismisses it. One-shot.
+- If a user dismisses the legal/finance disclaimer and then changes regulatory context, they'll need to clear localStorage to see it again. Acceptable: the spec asks for per-workspace dismissal.
+
 (further steps will append below as they are completed)

@@ -10,10 +10,11 @@ interface TrialPillProps {
 export default function TrialPill({
   queriesUsed,
   queriesRemaining,
-  trialLimit = 5,
+  trialLimit,
   onClick,
 }: TrialPillProps) {
-  const isUrgent = queriesRemaining === 1;
+  // queriesRemaining is authoritative; use trialLimit only for warning thresholds (defaults derived from remaining).
+  const isUrgent = queriesRemaining <= 1;
   const isWarning = queriesRemaining <= 3 && !isUrgent;
 
   const borderColor = isUrgent
@@ -28,10 +29,14 @@ export default function TrialPill({
     ? "var(--amber-500, #f59e0b)"
     : "var(--text-secondary)";
 
+  const ariaLabel = trialLimit != null
+    ? `Free trial: ${queriesUsed} of ${trialLimit} queries used`
+    : `Free trial: ${queriesRemaining} queries left`;
+
   return (
     <button
       onClick={onClick}
-      aria-label={`Free trial: ${queriesUsed} of ${trialLimit} queries used`}
+      aria-label={ariaLabel}
       title="Click to upgrade"
       style={{
         display: "inline-flex",
@@ -57,7 +62,7 @@ export default function TrialPill({
       }}
     >
       <span aria-hidden="true">✦</span>
-      {queriesUsed} / {trialLimit} free queries
+      Free trial — {Math.max(queriesRemaining, 0)} left
     </button>
   );
 }

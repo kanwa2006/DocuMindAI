@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useEffect } from "react";
 
 interface OnboardingProgressProps {
   documentsCount: number;
@@ -15,6 +15,17 @@ export default function OnboardingProgress({ documentsCount, messagesCount, onDi
   ];
 
   const allDone = items.every((i) => i.done);
+
+  // BF5: auto-dismiss once all three items are checked. Persist so the
+  // checklist never reappears even after document/message counters reset
+  // (e.g. switching to a fresh workspace).
+  useEffect(() => {
+    if (allDone) {
+      try { localStorage.setItem("dm.onboarding.dismissed", "true"); } catch {}
+      onDismiss();
+    }
+  }, [allDone, onDismiss]);
+
   if (allDone) return null;
 
   return (

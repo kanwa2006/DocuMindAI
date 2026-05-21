@@ -8,24 +8,23 @@ interface UpgradeModalProps {
   onClose?: () => void;
 }
 
-const TRIAL_LIMIT = 5;
-
 export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
   const [billingCycle, setBillingCycle] = useState<"annual" | "monthly">("annual");
   const [upgrading, setUpgrading] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
 
-  const isDismissable = trigger !== "limit_reached";
+  // Per audit C3: never trap the user. Modal is always dismissable; quota-exhausted users fall back to read-only mode.
+  const isDismissable = true;
+  const isLimitReached = trigger === "limit_reached";
 
-  // ESC key — only when dismissable
+  // ESC key
   useEffect(() => {
-    if (!isDismissable) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose?.();
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [isDismissable, onClose]);
+  }, [onClose]);
 
   // Focus trap into modal on mount
   useEffect(() => {
@@ -75,7 +74,7 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
         justifyContent: "center",
         padding: "16px",
       }}
-      onClick={isDismissable ? (e) => { if (e.target === e.currentTarget) onClose?.(); } : undefined}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
     >
       <div
         ref={modalRef}
@@ -92,30 +91,33 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
       >
         {/* Header */}
         <div style={{ padding: "32px 32px 0", textAlign: "center", position: "relative" }}>
-          {/* X button — only for dismissable triggers */}
-          {isDismissable && (
-            <button
-              onClick={onClose}
-              aria-label="Close upgrade modal"
-              style={{
-                position: "absolute",
-                top: "16px",
-                right: "16px",
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                color: "var(--text-secondary)",
-                fontSize: "20px",
-                lineHeight: 1,
-                padding: "4px",
-                borderRadius: "var(--radius-sm)",
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; }}
-            >
-              ✕
-            </button>
-          )}
+          {/* X button — always present (44px tap target). Quota-exhausted users still get a close affordance and fall back to read-only mode. */}
+          <button
+            onClick={onClose}
+            aria-label="Close upgrade modal"
+            style={{
+              position: "absolute",
+              top: "8px",
+              right: "8px",
+              width: "44px",
+              height: "44px",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "var(--text-secondary)",
+              fontSize: "20px",
+              lineHeight: 1,
+              padding: "0",
+              borderRadius: "var(--radius-md)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; (e.currentTarget as HTMLElement).style.background = "var(--surface-hover)"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; (e.currentTarget as HTMLElement).style.background = "none"; }}
+          >
+            ✕
+          </button>
 
           {/* Logomark */}
           <div style={{ fontSize: "32px", marginBottom: "12px" }}>✦</div>
@@ -130,7 +132,7 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
               margin: "0 0 8px",
             }}
           >
-            Your free trial is complete
+            {isLimitReached ? "Your free trial is complete" : "Upgrade DocuMindAI"}
           </h2>
           <p
             style={{
@@ -141,7 +143,9 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
               lineHeight: 1.5,
             }}
           >
-            You've experienced DocuMindAI fully. Ready to unlock unlimited access?
+            {isLimitReached
+              ? "You can still read past chats. Upgrade to ask new questions."
+              : "Unlock unlimited queries and all features."}
           </p>
         </div>
 

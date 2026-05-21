@@ -14,7 +14,10 @@ export function useOnboarding(): OnboardingState {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const complete = localStorage.getItem("onboarding_complete") === "true";
+    // Honour both legacy and BF5 dismissal keys.
+    const complete =
+      localStorage.getItem("onboarding_complete") === "true" ||
+      localStorage.getItem("dm.onboarding.dismissed") === "true";
     if (complete) {
       setIsComplete(true);
       setCurrentStep(0);

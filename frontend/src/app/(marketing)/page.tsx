@@ -62,8 +62,8 @@ const WORKSPACES = [
 const TRUST_STATS = [
   { icon: "📄", stat: "Answers only from your document", sub: "Zero hallucinations from outside your files" },
   { icon: "📍", stat: "Every answer shows exact page", sub: "See precisely where the answer came from" },
-  { icon: "🗂️", stat: "7 professional workspaces", sub: "HR · Finance · Legal · Research · Teaching · Study" },
-  { icon: "💳", stat: "UPI & Razorpay billing", sub: "Pay securely in ₹, no card required" },
+  { icon: "🗂️", stat: "7 professional workspaces", sub: "General · HR · Finance · Legal · Research · Study · Exam" },
+  { icon: "💳", stat: "Secure UPI & card payments", sub: "Pay in ₹ — UPI, cards, netbanking" },
 ];
 
 const HOW_IT_WORKS = [
@@ -95,7 +95,7 @@ const PRICING = [
     badge: null,
     description: "Perfect to explore the platform",
     features: [
-      "10 queries free",
+      "10 free queries to start",
       "All 7 workspaces unlocked",
       "Exact page citations",
       "Trust scores on every answer",
@@ -110,14 +110,14 @@ const PRICING = [
     price: "₹799",
     period: "/month",
     badge: "Most Popular",
-    description: "For working professionals",
+    description: "Billed annually · ₹999/mo monthly",
     features: [
       "200 queries per session",
       "All 7 workspaces",
       "Priority processing",
       "PDF audit reports",
       "Session export (PDF, DOCX)",
-      "UPI & Razorpay billing",
+      "UPI & card payments",
     ],
     cta: "Get Professional",
     href: "/register?plan=professional",
@@ -128,7 +128,7 @@ const PRICING = [
     price: "₹2,999",
     period: "/month",
     badge: null,
-    description: "For teams & organisations",
+    description: "Billed monthly · SLA included",
     features: [
       "Unlimited queries",
       "All 7 workspaces",
@@ -207,7 +207,7 @@ export default function LandingPage() {
         }}>
           Ask anything about your PDFs, contracts, or notes.<br />
           Get answers with <strong style={{ color: "var(--text-primary)" }}>exact page citations</strong>.<br />
-          Built for Indian CAs, Lawyers, Teachers, and HR professionals.
+          Built for Indian CAs, Lawyers, Teachers, and HR professionals — and more across 7 specialised workspaces.
         </p>
 
         {/* CTAs */}
@@ -232,7 +232,7 @@ export default function LandingPage() {
               boxShadow: "var(--shadow-brand)",
             }}
           >
-            Start Free — 10 Queries
+            Start free. No credit card.
           </Link>
           <a
             href="#how-it-works"
@@ -254,7 +254,7 @@ export default function LandingPage() {
 
         {/* Trust line */}
         <p style={{ fontSize: "var(--text-sm)", color: "var(--text-tertiary)" }}>
-          No credit card required · 10 queries free · Cancel anytime
+          No credit card required · Free trial included · Cancel anytime
         </p>
       </section>
 

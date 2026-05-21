@@ -4,7 +4,7 @@ from sqlalchemy import select, update
 
 from app.models.org import User
 
-TRIAL_QUERY_LIMIT = 5  # Change this one number to adjust trial length
+TRIAL_QUERY_LIMIT = 10  # Single source of truth — exposed via /billing/status and used everywhere
 
 
 async def check_and_increment_trial(user_id: str, db: AsyncSession) -> dict:

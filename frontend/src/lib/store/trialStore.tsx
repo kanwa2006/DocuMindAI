@@ -10,12 +10,13 @@ export interface TrialState {
   plan: PlanType;
   queriesUsed: number;
   queriesRemaining: number;
+  trialLimit: number | null;  // Backend authoritative; null until billing/status loads
   showUpgradeModal: boolean;
   upgradeTrigger: UpgradeTrigger;
 }
 
 interface TrialActions {
-  setTrialStatus: (queriesUsed: number, queriesRemaining: number) => void;
+  setTrialStatus: (queriesUsed: number, queriesRemaining: number, trialLimit?: number) => void;
   setPlan: (plan: PlanType) => void;
   openUpgradeModal: (trigger: UpgradeTrigger) => void;
   closeUpgradeModal: () => void;
@@ -27,13 +28,19 @@ export function TrialProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<TrialState>({
     plan: "trial",
     queriesUsed: 0,
-    queriesRemaining: 5,
+    queriesRemaining: 0,
+    trialLimit: null,
     showUpgradeModal: false,
     upgradeTrigger: "user_click",
   });
 
-  const setTrialStatus = useCallback((queriesUsed: number, queriesRemaining: number) => {
-    setState((s) => ({ ...s, queriesUsed, queriesRemaining }));
+  const setTrialStatus = useCallback((queriesUsed: number, queriesRemaining: number, trialLimit?: number) => {
+    setState((s) => ({
+      ...s,
+      queriesUsed,
+      queriesRemaining,
+      trialLimit: trialLimit ?? s.trialLimit,
+    }));
   }, []);
 
   const setPlan = useCallback((plan: PlanType) => {

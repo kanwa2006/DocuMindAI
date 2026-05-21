@@ -111,7 +111,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
 }
 
 function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
-  const { plan, queriesUsed, queriesRemaining, showUpgradeModal, upgradeTrigger, openUpgradeModal, closeUpgradeModal, setTrialStatus } = useTrialStore();
+  const { plan, queriesUsed, queriesRemaining, trialLimit, showUpgradeModal, upgradeTrigger, openUpgradeModal, closeUpgradeModal, setTrialStatus } = useTrialStore();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
   const [currentWorkspace, setCurrentWorkspace] = useState("general");
@@ -143,11 +143,15 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // Load billing status to initialise trial counter
+    // Load billing status to initialise trial counter (backend is authoritative source)
     import("@/lib/api").then(({ getBillingStatus }) => {
       getBillingStatus().then((status) => {
         if (status.plan === "trial" && typeof status.trial_queries_used === "number") {
-          setTrialStatus(status.trial_queries_used, status.queries_remaining ?? 0);
+          setTrialStatus(
+            status.trial_queries_used,
+            status.queries_remaining ?? 0,
+            status.trial_limit,
+          );
         }
       }).catch(() => {});
     });
@@ -330,7 +334,7 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
               <TrialPill
                 queriesUsed={queriesUsed}
                 queriesRemaining={queriesRemaining}
-                trialLimit={5}
+                trialLimit={trialLimit ?? undefined}
                 onClick={() => openUpgradeModal("user_click")}
               />
             )}
@@ -398,11 +402,11 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
         />
       )}
 
-      {/* Upgrade modal — shown after trial exhaustion or user click */}
+      {/* Upgrade modal — shown after trial exhaustion or user click. Always dismissable: user falls back to read-only mode if quota is exhausted. */}
       {showUpgradeModal && (
         <UpgradeModal
           trigger={upgradeTrigger}
-          onClose={upgradeTrigger !== "limit_reached" ? closeUpgradeModal : undefined}
+          onClose={closeUpgradeModal}
         />
       )}
 
