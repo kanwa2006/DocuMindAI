@@ -2,7 +2,19 @@
   "permissions": {
     "allow": [
       "Bash(Remove-Item \"C:\\\\Users\\\\acer\\\\.gemini\\\\antigravity\\\\scratch\\\\isolated_project\\\\frontend\\\\src\\\\app\\\\page.tsx\" -Force)",
-      "Bash(Remove-Item \"C:\\\\Users\\\\acer\\\\.gemini\\\\antigravity\\\\scratch\\\\isolated_project\\\\frontend\\\\src\\\\proxy.ts\" -Force)"
+      "Bash(Remove-Item \"C:\\\\Users\\\\acer\\\\.gemini\\\\antigravity\\\\scratch\\\\isolated_project\\\\frontend\\\\src\\\\proxy.ts\" -Force)",
+      "Bash(npx tsc *)",
+      "Bash(git -c gc.auto=0 status --short)",
+      "Bash(git -c gc.auto=0 add -- AUDIT_REPORT.md backend/app/core/trial_enforcement.py \"frontend/src/app/\\(marketing\\)/page.tsx\" frontend/src/app/login/page.tsx frontend/src/components/FeedbackModal.tsx frontend/src/components/LayoutWrapper.tsx frontend/src/components/OnboardingProgress.tsx frontend/src/components/TrialPill.tsx frontend/src/components/UpgradeModal.tsx frontend/src/components/WorkspaceUI.tsx frontend/src/hooks/useOnboarding.ts frontend/src/lib/store/trialStore.tsx)",
+      "Bash(git -c gc.auto=0 -C C:/Users/acer/.gemini/antigravity/scratch/isolated_project commit -m ' *)",
+      "Bash(git -c gc.auto=0 -C C:/Users/acer/.gemini/antigravity/scratch/isolated_project add -- AUDIT_REPORT.md backend/app/api/v1/endpoints/query.py frontend/src/lib/api.ts frontend/src/components/WorkspaceUI.tsx)",
+      "Bash(git -c gc.auto=0 -C C:/Users/acer/.gemini/antigravity/scratch/isolated_project add -- AUDIT_REPORT.md frontend/src/styles/tokens.css frontend/src/styles/typography.css frontend/src/components/LayoutWrapper.tsx frontend/src/components/WorkspaceDropdown.tsx)",
+      "Bash(git -c gc.auto=0 -C C:/Users/acer/.gemini/antigravity/scratch/isolated_project add -- AUDIT_REPORT.md frontend/src/app/sessions/page.tsx frontend/src/app/bookmarks/page.tsx frontend/src/components/WorkspaceUI.tsx \"frontend/src/app/\\(marketing\\)/layout.tsx\")",
+      "Bash(git -c gc.auto=0 -C C:/Users/acer/.gemini/antigravity/scratch/isolated_project add -- AUDIT_REPORT.md)",
+      "Bash(git -c gc.auto=0 -C C:/Users/acer/.gemini/antigravity/scratch/isolated_project add -- AUDIT_REPORT.md backend/app/core/middleware.py backend/app/core/rate_limiter.py backend/app/core/json_logger.py backend/app/core/logging.py backend/app/main.py backend/app/api/v1/endpoints/auth.py frontend/src/app/verify-email/page.tsx frontend/src/components/LayoutWrapper.tsx)",
+      "Bash(git -c gc.auto=0 -C C:/Users/acer/.gemini/antigravity/scratch/isolated_project add -- AUDIT_REPORT.md KNOWN_REMAINING_ISSUES.md)",
+      "Bash(git -c gc.auto=0 -C C:/Users/acer/.gemini/antigravity/scratch/isolated_project tag audit-step-15-complete)",
+      "Bash(git -c gc.auto=0 -C C:/Users/acer/.gemini/antigravity/scratch/isolated_project log --oneline -10)"
     ]
   }
 }
