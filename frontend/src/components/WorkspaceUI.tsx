@@ -1037,16 +1037,36 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const lastAiMsgIdx = history.map((m) => m.role).lastIndexOf("assistant");
 
   // ── Handle workspace action button clicks ─────────────────────────────────
+  // Every chip in WORKSPACE_ACTIONS gets a real onClick: either a panel
+  // toggle, a CSV/DOCX export, or a prompt that drops into the input. Nothing
+  // should be a dead button.
+  const fillPrompt = useCallback((p: string) => {
+    handleQueryChange(p);
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [chatId]);
+
   const handleWorkspaceAction = useCallback(async (label: string) => {
     if (workspaceType === "finance") {
-      if (label === "Ratios" || label === "Verify") {
-        setShowRatioPanel((v) => !v);
+      if (label === "Ratios" || label === "Verify") { setShowRatioPanel((v) => !v); return; }
+      if (label === "Extraction Mode") {
+        fillPrompt("Extract every key financial figure (revenue, profit, totals, ratios) with the exact page and source row. Cite each number.");
+        return;
+      }
+      if (label === "Table Mode") {
+        // Reuse the exam-workspace table extractor — works on any uploaded PDF.
+        setTablePanelDocId(activeDoc?.id ?? null);
+        setShowTablePanel((v) => !v);
         return;
       }
     }
     if (workspaceType === "legal") {
-      if (label === "Risk Report" || label === "Risk Mode") {
-        setShowLegalRisk((v) => !v);
+      if (label === "Risk Report" || label === "Risk Mode") { setShowLegalRisk((v) => !v); return; }
+      if (label === "Contract Mode") {
+        fillPrompt("Extract and categorize every key clause in this contract with page references and a one-line summary of each.");
+        return;
+      }
+      if (label === "Clause Library") {
+        fillPrompt("List every clause type present in this contract grouped by category (payment, IP, termination, liability, confidentiality). For each, quote the clause and give its page.");
         return;
       }
     }
@@ -1058,18 +1078,55 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         setShowTablePanel((v) => !v);
         return;
       }
+      if (label === "Question Bank") {
+        fillPrompt("Create a question bank of 50 varied questions covering every topic in this document. Mix MCQ, short and long-answer formats. Tag each question with its Bloom's level.");
+        return;
+      }
+      if (label === "Export DOCX") {
+        if (!generatedPaper?.paper) {
+          toast("Generate a paper first, then click Export DOCX.", { icon: "💡" });
+          return;
+        }
+        try {
+          const res = await fetch(`${API_BASE}/exams/${generatedPaper.exam_id ?? "latest"}/export/docx`, {
+            credentials: "include",
+          });
+          if (!res.ok) throw new Error("Export failed");
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `exam_paper_${new Date().toISOString().slice(0, 10)}.docx`;
+          a.click();
+          URL.revokeObjectURL(url);
+        } catch {
+          toast.error("Export failed. The paper isn't saved yet — save it first.");
+        }
+        return;
+      }
     }
     if (workspaceType === "hr") {
       if (label === "View Rankings") { setShowRankings(true); return; }
       if (label === "Batch Upload") { batchFileInputRef.current?.click(); return; }
-    }
-    if (workspaceType === "research") {
-      if (label === "Citation Mode" || label === "Export Citations") {
-        setShowCitationModal((v) => !v);
+      if (label === "Set JD Context") {
+        fillPrompt("[Paste the job description below this line]\n\nUse the JD above to score every uploaded resume against each required skill.");
         return;
       }
-      if (label === "Find Gaps") {
-        setShowGapsPanel((v) => !v);
+      if (label === "Export Candidates") {
+        setShowRankings(true);
+        toast("Rankings panel open — use its export button to download the CSV.", { icon: "💡" });
+        return;
+      }
+    }
+    if (workspaceType === "research") {
+      if (label === "Citation Mode" || label === "Export Citations") { setShowCitationModal((v) => !v); return; }
+      if (label === "Find Gaps") { setShowGapsPanel((v) => !v); return; }
+      if (label === "Review Mode") {
+        fillPrompt("Provide a structured synthesis of every uploaded paper. Group by theme, contrast methodologies, and highlight where authors disagree. Cite the paper for each claim.");
+        return;
+      }
+      if (label === "Import Papers") {
+        fileInputRef.current?.click();
         return;
       }
     }
@@ -1077,12 +1134,10 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       if (label === "Pomodoro Timer") { setShowPomodoro((v) => !v); return; }
       if (label === "Flashcard Mode") {
         if (!flashcardMode) {
-          // Load decks from API
           try {
             const res = await fetch(`${API_BASE}/study/decks`, { credentials: "include" });
             if (res.ok) {
               const deckList = await res.json();
-              // Load cards per deck
               const decksWithCards = await Promise.all(
                 deckList.map(async (d: any) => {
                   const cr = await fetch(`${API_BASE}/study/decks/${d.id}/flashcards`, { credentials: "include" });
@@ -1097,8 +1152,19 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         setFlashcardMode((v) => !v);
         return;
       }
+      if (label === "Study Mode") {
+        fillPrompt("Walk me through this material as if you were tutoring me. Start with the core concepts, then add examples, then test my understanding with a short question.");
+        return;
+      }
+      if (label === "My Progress") {
+        fillPrompt("Based on our chat history in this workspace, summarise which topics I've covered, where my answers were strongest, and what I should review next.");
+        return;
+      }
     }
-  }, [workspaceType, flashcardMode]);
+
+    // Final fallback — never let a chip click do nothing.
+    toast("This action isn't wired up yet — try a quick-action chip above.", { icon: "💡" });
+  }, [workspaceType, flashcardMode, activeDoc, generatedPaper, fillPrompt]);
 
   const handleFlashcardReview = useCallback(async (cardId: string, quality: number) => {
     try {
@@ -1244,8 +1310,8 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         />
       )}
 
-      {/* ── Phase 11: Table Extraction Panel (Teacher/Exam workspace) ── */}
-      {workspaceType === "exam" && showTablePanel && (
+      {/* ── Phase 11: Table Extraction Panel (Exam + Finance workspaces) ── */}
+      {(workspaceType === "exam" || workspaceType === "finance") && showTablePanel && (
         <TableExtractionPanel
           documentId={tablePanelDocId}
           documentName={activeDoc?.filename}
