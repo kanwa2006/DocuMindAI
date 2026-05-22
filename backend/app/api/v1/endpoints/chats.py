@@ -13,6 +13,7 @@ from app.core.auth import get_current_user
 from app.core.workspace import resolve_workspace_id
 from app.models.chat import ChatSession, ChatMessage
 from app.models.document import Document
+from uuid import UUID
 from pydantic import BaseModel, UUID4
 
 router = APIRouter()
@@ -28,7 +29,7 @@ class ChatSessionResponse(BaseModel):
     is_pinned: bool
     is_archived: bool
     created_at: Optional[datetime] = None
-    workspace_id: Optional[UUID4] = None
+    workspace_id: Optional[UUID] = None
     tags: Optional[List[str]] = []
     class Config:
         orm_mode = True
