@@ -84,7 +84,15 @@ export default function RootLayout({
       </head>
       <body>
         <a href="#main" className="skip-link">Skip to content</a>
-        <Toaster position="top-center" toastOptions={{ duration: 4000 }} />
+        <Toaster
+          position="top-center"
+          toastOptions={{
+            duration: 4000,
+            className: "dark:bg-black dark:text-white border dark:border-white/10 shadow-lg rounded-md text-sm",
+            error: { duration: 5000 },
+          }}
+          gutter={6}
+        />
         <PWAInstaller />
         <AnalyticsProvider />
         <ErrorBoundary>

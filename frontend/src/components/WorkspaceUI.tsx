@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, memo, useMemo } from "react";
-import { Toaster, toast } from "react-hot-toast";
+import { toast } from "react-hot-toast";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -1205,7 +1205,9 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
 
   return (
     <div className="h-full flex flex-col px-4 md:px-8 py-6 pb-0 w-full max-w-6xl mx-auto" style={{ position: "relative" }}>
-      <Toaster position="top-center" toastOptions={{ className: "dark:bg-black dark:text-white border dark:border-white/10 shadow-lg rounded-md text-sm" }} />
+      {/* Toaster is mounted globally in app/layout.tsx. Rendering a second
+          one here doubled every toast (e.g. 6 stacked 'Failed to fetch'
+          banners from a single failure). */}
 
       {/* ── Phase 28: Selection Clip Bar ── */}
       {clipBarState && (
