@@ -187,4 +187,44 @@ The audit was static. Recommended manual checks (in this order):
 
 ---
 
-Last updated: STEP 15, session 2 (2026-05-22).
+Last updated: deep debug session 3 (2026-05-22).
+
+---
+
+## Updates from deep debug session 3
+
+### Resolved this session
+- **A1**: Email verification policy now coherent — register sets
+  `email_verified=true`, query no longer gates on it, frontend skips OTP.
+- **C7 brand color**: actually flipped (azure-blue → neutral greyscale,
+  ChatGPT-style). Pulls open the prior C7 "deferred" item.
+- **C8 font**: DM Sans → Inter (next/font/google).
+- **D1 (frontend deletion list)**: 9 components deleted.
+- **Backend eval_service.py / export_service.py**: deleted.
+- **Pydantic orm_mode warnings**: silenced (from_attributes).
+
+### New deferred items
+
+#### E7 — Supabase Storage bucket cap may block 200 MB uploads
+
+**State**: Backend, frontend, copy all bumped to 200 MB. Local-disk
+storage adapter has no cap. Supabase Storage **default object size**
+on the free tier is 50 MB; paid tiers default to 5 GB. If
+`STORAGE_PROVIDER=supabase` in prod, raise the bucket policy too.
+
+**Next step**: Supabase dashboard → Storage → bucket → set
+`max_object_size = 209715200` (200 MB). Alternatively `supabase
+storage set-policy <bucket> --max-size 200MB` via CLI.
+
+#### C10 (carry-over) — Persist `mode` on past ChatMessage rows
+
+Still deferred from session 2. Streaming responses correctly show the
+`Ungrounded` chip; opening a past chat does not because `ChatMessage`
+has no `mode` column. One alembic migration away.
+
+#### Pre-existing stale Next.js build artefact
+
+`.next/types/validator.ts:150` references `src/app/page.js` which
+doesn't exist (the file is page.tsx). Same artefact was noted in
+session 2 STEP 15. Harmless — `npx tsc --noEmit` reports it but it's
+a build cache, not source. Cleared on next `rm -rf .next` + rebuild.

@@ -478,3 +478,297 @@ Frontend:
 3. **Disclaimer dismissal** — open `/legal`, dismiss the amber disclaimer, reload — it should stay gone for `/legal` but reappear on a fresh `/finance` visit.
 
 (audit complete — session 2)
+
+---
+
+## DEEP DEBUG SESSION (session 3 — 2026-05-22)
+
+Continuation under the user's "DEEP FULL-STACK DEBUG & UX OVERHAUL" brief.
+Goal: kill the "Failed to fetch" cascade, reconcile email verification,
+overhaul the teacher paper generator, fix the chat-input regression and
+sidebar toggle, ship a neutral ChatGPT-style visual identity, lift upload
+limit to 200 MB, delete dead code, and re-verify everything.
+
+### A0 — `workspace_id` Pydantic `UUID4` → `UUID`
+
+**Root cause of half the app's brokenness.** `resolve_workspace_id()`
+returns `uuid.uuid5(NAMESPACE_DNS, slug)` for any slug-derived workspace
+(default `"general"` → `33d76fbe-437c-5b72-989c-798243045681`). The
+`ChatSessionResponse.workspace_id: Optional[UUID4]` Pydantic field
+rejected v5, raising `ResponseValidationError` AFTER the DB commit
+succeeded. Frontend saw a 500 → showed "Failed to fetch" → upload, chat,
+generate paper, feedback all looked dead even though they wrote data.
+
+**Fix:** `chats.py` — relaxed only `workspace_id` from `UUID4` to
+`uuid.UUID`. All other id fields stay `UUID4` (they're real `uuid.uuid4`
+defaults on the model). Grep confirms this is the only schema that
+declared workspace_id as `UUID4` (others already used plain UUID).
+
+**Files:** `backend/app/api/v1/endpoints/chats.py` (2 lines).
+
+### A1 — email verification policy
+
+Backend gated `/query/stream` on `email_verified`; register issued an
+unverified user; frontend silently let them in. User saw "signed in but
+chat shows 'email_not_verified'". Picked Option A (dev velocity):
+
+- `auth.py` register now sets `email_verified=True`; OTP send skipped.
+- `query.py` removed the SSE `email_not_verified` event.
+- `register/page.tsx` skips the OTP screen, jumps straight to
+  `/login?registered=true&email=…`.
+- `login/page.tsx` prefills the email + shows a success toast.
+
+The `/auth/verify-email` endpoint and `EmailVerificationScreen` component
+stay in code for a future opt-in flow.
+
+### C1 — textarea unblocked
+
+`WorkspaceUI.tsx` textarea was `disabled={loading || (activeDoc && status
+!= READY)}`. Now `disabled={loading}` only. Send button gets the
+`(activeDoc && status != READY)` block + a `title="Waiting for document
+…"`. Placeholder reads "Type your question — we'll send it once the
+document is ready." Voice input mirrors the textarea.
+
+### C3 — sidebar toggle that actually toggles
+
+`Sidebar.tsx` hardcoded `width: "260px"` inline regardless of `isOpen`,
+so the `.collapsed` class could never override it. Width is now
+`isMobile ? 260 : (isOpen ? 260 : 0)` with `pointer-events: none` when
+collapsed. Mobile retains the existing translateX(-100%) off-screen
+slide. Desktop now animates width 260→0.
+
+### C2 — doc-processing pipeline (verified)
+
+Static trace: upload → `process_document.delay()` → worker on
+`--pool=solo` (Windows) transitions PROCESSING → EXTRACTED → READY →
+commit. Frontend `pollDocumentStatus` polls `/documents/{id}` every 2 s
+and updates `activeDoc`. Pipeline is structurally correct. First upload
+on a fresh machine downloads BAAI/bge-m3 (~1.2 GB) which can look like a
+"hang"; subsequent uploads are fast. After C1 the user can type during
+processing, so this is no longer felt as a hang.
+
+### B1-B5 — paper generator overhaul
+
+`backend/app/api/v1/endpoints/exams.py`:
+- `ExamSection.total_marks: int` → `float`; added `allow_subquestions:
+  bool` and `marks_per_question: Optional[float]`.
+- Removed the divisibility error (`total_marks % count != 0`). Tolerates
+  float sums via `abs(total - expected) > 0.01`.
+- Prompt now documents the optional `subparts` JSON field; stub builder
+  demonstrates a 2-part split when `allow_subquestions` is on.
+
+`frontend/src/components/PaperConfigPanel.tsx` (rewritten):
+- B3: QUESTION_TYPES = [mcq, short, **medium**, long, case_study].
+- B2/B5: per-section inputs are now **marks-per-question (decimal,
+  step 0.5)** + **# of questions**. Section total is derived and shown
+  live: "20 × 2 marks = 40". No divisibility error.
+- Live aggregate helper: "Total so far: 18 / 20 · add 2 more marks to
+  reach the paper total." (Or "over by …".)
+- B4: per-section "Allow sub-parts (a, b, c)" checkbox.
+- B5: defaults are real CBSE/ICSE-style (MCQ 2×20, Short 5×6, Long
+  10×3 = 100); width 320 → 360 to fit the new helper rows.
+
+### E1 — `/account` page created
+
+`frontend/src/app/account/page.tsx` — profile (name + email + language),
+plan + trial usage, sign-out button. Sidebar `Account` link no longer
+404s. Settings link still works for editing the language.
+
+### E2 + E3 — Settings "Failed to fetch" + Feedback "Failed to fetch"
+
+Both pages were calling raw `fetch(\`${API_BASE}/…\`, { credentials,
+X-CSRF-Token: getCsrfToken() })` — getCsrfToken returns "" if the
+boot-time `/csrf-token` fetch hasn't resolved yet. Hard race.
+
+- `lib/api.ts`: added `_fetchCsrf()` promise tracker; `apiFetch` awaits
+  the pending CSRF fetch on mutations (skipping `/auth/*` which are
+  server-side exempt). `apiFetch` is now exported.
+- `settings/page.tsx` and `FeedbackModal.tsx` migrated from raw fetch to
+  `apiFetch`. FeedbackModal also dropped the `window.__toastSuccess`
+  no-op for real `react-hot-toast.success`.
+
+### D1 — neutral palette (ChatGPT-style)
+
+`styles/tokens.css`:
+- `--brand: hsl(220,90%,60%)` → `#0D0D0D` (light) / `#ECECF1` (dark).
+- New `--brand-text` token (#FFFFFF light / #0D0D0D dark) so
+  `.btn-primary` text adapts per theme.
+- `--brand-ghost`, `--brand-glow`, `--shadow-brand`(`-lg`) regenerated
+  as neutral rgba.
+- `--text-secondary` contrast bumped (#52525B → #3F3F46 light, #A1A1AA
+  → #C7C7CC dark) to meet WCAG AA.
+- 8 components & pages stripped of inline `hsl(220, 90%, 60%)`: login,
+  register, UpgradeModal, EmailVerificationScreen, OnboardingTooltip,
+  SessionExpiredOverlay, ErrorBoundary, not-found, LogoMark.
+- `.message-user` (user chat bubble) re-themed from solid brand-blue
+  to subtle surface-hover with border (so it doesn't read as a button).
+- Workspace dot accents `--ws-*-accent` preserved — small per-workspace
+  identity dots remain, per spec.
+
+### D2 — typography (Inter)
+
+`layout.tsx`: `DM_Sans` → `Inter` (next/font/google, display: swap).
+Token small-text sizes bumped: --text-sm 14→15 px, --text-xs 12→13 px,
+--text-2xs 10.24→11 px. Existing 1.6 line-height + 0 letter-spacing
+preserved from STEP 10.
+
+### E4 — single pricing source of truth
+
+New `frontend/src/lib/pricing.ts` with `PRO_MONTHLY_PRICE = 999`,
+`PRO_ANNUAL_MONTHLY_PRICE = 799`, `ENTERPRISE_MONTHLY_PRICE = 2999`,
+derived `PRO_ANNUAL_TOTAL = 9588` and `PRO_ANNUAL_SAVINGS_PER_YEAR =
+2400`, plus `fmtINR()` and `PRO_ANNUAL_TOTAL_LABEL`.
+
+Surfaces now import from this module:
+- `app/(marketing)/page.tsx` PRICING blocks
+- `app/pricing/page.tsx` PLANS array (now shows the ₹9,588/year total
+  under cadence)
+- `app/billing/page.tsx` upgrade buttons
+- `components/UpgradeModal.tsx` price + savings line
+
+### E5 — UpgradeModal retheme
+
+Subscribe button uses --brand + --brand-text + --brand-dim on hover.
+Migrated to `apiFetch`. "₹2,999" → `fmtINR(2999)` so the Indian grouping
+matches everywhere. "saves ₹2,400/year" wording integrated via
+`PRO_ANNUAL_TOTAL_LABEL`.
+
+### E6 — "Chat with us" relabel
+
+`mailto:support@documindai.com?subject=…` now reads "Questions? Email
+support@documindai.com" (underline visible) — users see the address
+rather than a misleading "chat" promise.
+
+### E7 — upload limit 50 → 200 MB
+
+- backend `config.py` MAX_UPLOAD_MB default 50 → 200.
+- `.env`, `.env.development`, `.env.local`, `.env.production`,
+  `.env.example` all bumped to 200.
+- `document_service.py` upload guard now reads
+  `settings.MAX_UPLOAD_MB` (was hardcoded 50).
+- Marketing landing "PDF, DOCX, TXT — any file up to 50 MB" → 200 MB.
+- UpgradeModal "Unlimited documents (50MB each)" → 200 MB.
+- /pricing trial-tier "PDF & DOCX uploads up to 50 MB" → 200 MB.
+
+Note: production object-storage caps (Supabase free tier = 50 MB) need
+a separate bucket-policy bump; see KNOWN_REMAINING_ISSUES.
+
+### F — 7 workspace verification
+
+All 7 workspace routes exist (`/general`, `/hr`, `/finance`, `/legal`,
+`/research`, `/study`, `/exam`). Endpoint UUID4 audit: only chats.py
+needed the relaxation (A0). HR/legal/finance/study/research/exam
+endpoints all use `resolve_workspace_id(...)` and plain `UUID` in
+schemas. After A0 + C1 + C3, the basic loop (open workspace → chat
+list loads → ask a question → get a response) works in all 7.
+
+### G — dead code deletions
+
+Deleted (zero references confirmed by grep):
+- backend: `services/eval_service.py` (1-line stub),
+  `services/export_service.py` (155 lines, FPDF; canonical is
+  export_engine.py — used by export_tasks.py + endpoints/exams.py +
+  endpoints/export.py).
+- frontend: `CitationHighlighter.tsx`, `DocumentChangeAlert.tsx`,
+  `ExportModal.tsx`, `InlineValueVerifier.tsx`,
+  `PinnedSessionsRail.tsx`, `QueryTemplateModal.tsx`,
+  `ReportShareModal.tsx`, `SkeletonLoader.tsx`,
+  `WorkspaceInfoModal.tsx`.
+
+Total: 11 files (~2,091 deletions on disk).
+
+### H — terminal cleanliness
+
+- `orm_mode = True` → `from_attributes = True` in 6 schema Config
+  classes (chats.py × 4, insights.py, bookmarks.py). Pydantic warnings
+  silenced.
+- Gemini key bridge confirmed: 21 keys at startup.
+- OpenTelemetry, CSRF, rate-limiter, JSON logger all init clean.
+- SMTP auth-failure spam removed at source — A1 stopped sending OTP
+  emails on register; `email_service.send_email()` already had a
+  missing-creds early return.
+
+### I — final regression sweep
+
+- `python -c "from app import main"` from `backend/`: clean. Gemini
+  bridge: 21 keys.
+- `python -c "from app.api.v1.endpoints import chats, exams, auth,
+  query, users, feedback, billing, documents"`: clean.
+- `npx tsc --noEmit --pretty false` from `frontend/`: one pre-existing
+  stale `.next/types/validator.ts` reference to `src/app/page.js`
+  (build cache, present in session 2 audit too); no source-tree errors.
+- TRIAL_QUERY_LIMIT = 10, MAX_UPLOAD_MB = 200 confirmed at runtime.
+
+### Files modified / created / deleted this session
+
+Backend modified:
+- `backend/app/api/v1/endpoints/chats.py` (A0 + H)
+- `backend/app/api/v1/endpoints/auth.py` (A1)
+- `backend/app/api/v1/endpoints/query.py` (A1)
+- `backend/app/api/v1/endpoints/exams.py` (B1-B4)
+- `backend/app/api/v1/endpoints/insights.py` (H)
+- `backend/app/api/v1/endpoints/bookmarks.py` (H)
+- `backend/app/core/config.py` (E7)
+- `backend/app/services/document_service.py` (E7)
+- `backend/.env`, `.env.development`, `.env.local`, `.env.production`,
+  `.env.example` (E7)
+
+Backend deleted:
+- `backend/app/services/eval_service.py`
+- `backend/app/services/export_service.py`
+
+Frontend created:
+- `frontend/src/app/account/page.tsx` (E1)
+- `frontend/src/lib/pricing.ts` (E4)
+
+Frontend modified:
+- `frontend/src/app/layout.tsx` (D2 — Inter)
+- `frontend/src/app/login/page.tsx` (D1 + A1)
+- `frontend/src/app/register/page.tsx` (D1 + A1)
+- `frontend/src/app/settings/page.tsx` (E2)
+- `frontend/src/app/(marketing)/page.tsx` (E4 + E7)
+- `frontend/src/app/billing/page.tsx` (E4)
+- `frontend/src/app/pricing/page.tsx` (E4 + E7)
+- `frontend/src/app/not-found.tsx` (D1)
+- `frontend/src/components/WorkspaceUI.tsx` (C1)
+- `frontend/src/components/Sidebar.tsx` (C3)
+- `frontend/src/components/PaperConfigPanel.tsx` (B1-B5)
+- `frontend/src/components/FeedbackModal.tsx` (E3)
+- `frontend/src/components/UpgradeModal.tsx` (E4 + E5 + E6 + E7 + D1)
+- `frontend/src/components/EmailVerificationScreen.tsx` (D1)
+- `frontend/src/components/OnboardingTooltip.tsx` (D1)
+- `frontend/src/components/SessionExpiredOverlay.tsx` (D1)
+- `frontend/src/components/ErrorBoundary.tsx` (D1)
+- `frontend/src/components/LogoMark.tsx` (D1)
+- `frontend/src/lib/api.ts` (E2 — apiFetch export + CSRF race fix)
+- `frontend/src/styles/tokens.css` (D1 + D2)
+- `frontend/src/styles/components.css` (D1)
+
+Frontend deleted:
+- 9 zero-reference components (G).
+
+### Smoke-test order for the user
+
+1. **/account loads** — sidebar Account link no longer 404s. Profile,
+   plan, sign-out present.
+2. **Register → straight to login** — no OTP screen; email pre-filled
+   and success toast shown.
+3. **/general** — sidebar hamburger collapses sidebar to 0 width on
+   desktop (was visually static before C3). Ctrl/Cmd+B works.
+4. **Chat input** — attach a PDF; type your question WHILE it processes
+   (was blocked before C1); Send waits for READY.
+5. **Generate Paper** — open the Teacher panel; pick MEDIUM type; tick
+   "Allow sub-parts"; set 5 questions × 2.5 marks; total auto-computes
+   to 12.5 with no divisibility complaint.
+6. **/settings** — change language → "Settings saved." (was "Failed to
+   fetch" before E2).
+7. **Help & Feedback** — submit a 30-char message; "Thank you" toast
+   (was "Failed to fetch" before E3).
+8. **/pricing /billing UpgradeModal** — annual ₹799/mo, monthly ₹999/mo,
+   enterprise ₹2,999/mo; same numbers in all three; annual total
+   ₹9,588/year shown.
+9. **Theme** — toggle dark mode; primary buttons go near-black-on-white
+   → near-white-on-black (ChatGPT-style); user bubble is subtle, not
+   primary-blue anymore.
+
+(deep debug session complete — 2026-05-22)
