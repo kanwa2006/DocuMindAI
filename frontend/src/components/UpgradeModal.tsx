@@ -2,13 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { UpgradeTrigger } from "@/lib/store/trialStore";
-import {
-  PRO_MONTHLY_PRICE,
-  PRO_ANNUAL_MONTHLY_PRICE,
-  PRO_ANNUAL_SAVINGS_PER_YEAR,
-  PRO_ANNUAL_TOTAL_LABEL,
-  fmtINR,
-} from "@/lib/pricing";
+import { PLANS, fmtINR, type PlanId } from "@/lib/pricing";
 import { apiFetch } from "@/lib/api";
 
 interface UpgradeModalProps {
@@ -17,15 +11,16 @@ interface UpgradeModalProps {
 }
 
 export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
-  const [billingCycle, setBillingCycle] = useState<"annual" | "monthly">("annual");
+  // W1: three simple monthly tiers — Go / Plus / Pro. Default-select the
+  // featured plan (Plus). No annual/monthly cycle toggle anymore.
+  const featured = PLANS.find((p) => p.featured) ?? PLANS[0];
+  const [selected, setSelected] = useState<PlanId>(featured.id);
   const [upgrading, setUpgrading] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
 
-  // Per audit C3: never trap the user. Modal is always dismissable; quota-exhausted users fall back to read-only mode.
-  const isDismissable = true;
   const isLimitReached = trigger === "limit_reached";
+  const selectedPlan = PLANS.find((p) => p.id === selected) ?? featured;
 
-  // ESC key
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose?.();
@@ -34,7 +29,6 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  // Focus trap into modal on mount
   useEffect(() => {
     modalRef.current?.focus();
   }, []);
@@ -45,7 +39,7 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
       const res = await apiFetch("/billing/upgrade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: "professional", billing_cycle: billingCycle }),
+        body: JSON.stringify({ plan: selected, billing_cycle: "monthly" }),
       });
       if (res.ok) {
         window.location.reload();
@@ -56,12 +50,6 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
       setUpgrading(false);
     }
   };
-
-  // E4: pricing constants live in lib/pricing.ts. Identical numbers + wording
-  // are rendered in /pricing, /billing, and the marketing page.
-  const monthlyPrice = PRO_MONTHLY_PRICE;
-  const annualMonthlyPrice = PRO_ANNUAL_MONTHLY_PRICE;
-  const annualSavings = PRO_ANNUAL_SAVINGS_PER_YEAR;
 
   return (
     /* Backdrop */
@@ -130,14 +118,14 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
           <h2
             id="upgrade-modal-title"
             style={{
-              fontFamily: "Georgia, 'Instrument Serif', serif",
-              fontSize: "24px",
+              fontFamily: "var(--font-display, var(--font-body))",
+              fontSize: "22px",
               fontWeight: 600,
               color: "var(--text-primary)",
-              margin: "0 0 8px",
+              margin: "0 0 6px",
             }}
           >
-            {isLimitReached ? "Your free trial is complete" : "Upgrade DocuMindAI"}
+            {isLimitReached ? "Your free trial is complete" : "Upgrade your plan"}
           </h2>
           <p
             style={{
@@ -149,119 +137,87 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
             }}
           >
             {isLimitReached
-              ? "You can still read past chats. Upgrade to ask new questions."
-              : "Unlock unlimited queries and all features."}
+              ? "You can still read past chats. Pick a plan to keep asking."
+              : "Pick the plan that fits how you work."}
           </p>
         </div>
 
-        {/* What you got */}
+        {/* Plan selector */}
         <div style={{ padding: "20px 32px 0" }}>
-          <div
-            style={{
-              background: "hsl(40, 90%, 95%)",
-              color: "hsl(40, 70%, 30%)",
-              borderRadius: "var(--radius-md, 8px)",
-              padding: "10px 16px",
-              fontSize: "12px",
-              fontWeight: 500,
-              textAlign: "center",
-            }}
-          >
-            ✓ All 7 workspaces · All features · Export · Preview · Citations
-          </div>
-        </div>
-
-        {/* Plan card */}
-        <div style={{ padding: "20px 32px 0" }}>
-          <div
-            style={{
-              border: "2px solid var(--brand, #0D0D0D)",
-              borderRadius: "var(--radius-lg, 12px)",
-              padding: "20px",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "4px" }}>
-              <span style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "0.1em", color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                Professional Plan
-              </span>
-              <span style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-primary)" }}>
-                {fmtINR(billingCycle === "annual" ? annualMonthlyPrice : monthlyPrice)}
-                <span style={{ fontSize: "13px", fontWeight: 400, color: "var(--text-secondary)" }}> / month</span>
-              </span>
-            </div>
-
-            {billingCycle === "annual" && (
-              <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "0 0 12px" }}>
-                {PRO_ANNUAL_TOTAL_LABEL}. Saves {fmtINR(annualSavings)}/year.
-              </p>
-            )}
-
-            {/* Billing cycle toggle */}
-            <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
-              {(["annual", "monthly"] as const).map((cycle) => (
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${PLANS.length}, 1fr)`, gap: "8px", marginBottom: "16px" }}>
+            {PLANS.map((p) => {
+              const isSelected = selected === p.id;
+              return (
                 <button
-                  key={cycle}
-                  onClick={() => setBillingCycle(cycle)}
+                  key={p.id}
+                  onClick={() => setSelected(p.id)}
+                  aria-pressed={isSelected}
                   style={{
-                    flex: 1,
-                    padding: "6px 12px",
-                    borderRadius: "var(--radius-sm, 6px)",
-                    border: `1px solid ${billingCycle === cycle ? "var(--brand, #0D0D0D)" : "var(--border)"}`,
-                    background: billingCycle === cycle ? "var(--brand-ghost, rgba(13,13,13,0.05))" : "transparent",
-                    color: billingCycle === cycle ? "var(--brand, #0D0D0D)" : "var(--text-secondary)",
-                    fontSize: "13px",
-                    fontWeight: billingCycle === cycle ? 600 : 400,
+                    padding: "12px 8px",
+                    borderRadius: "10px",
+                    border: `1.5px solid ${isSelected ? "var(--brand, #0D0D0D)" : "var(--border)"}`,
+                    background: isSelected ? "var(--brand-ghost, rgba(13,13,13,0.05))" : "var(--surface-base)",
                     cursor: "pointer",
+                    textAlign: "center",
                     fontFamily: "var(--font-body)",
+                    transition: "border-color 120ms, background 120ms",
                   }}
                 >
-                  {cycle === "annual" ? "Annual — Best Value ✓" : "Monthly"}
+                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>{p.name}</div>
+                  <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-primary)", marginTop: "2px" }}>
+                    {fmtINR(p.price)}
+                  </div>
+                  <div style={{ fontSize: "10px", color: "var(--text-tertiary)" }}>/month</div>
                 </button>
-              ))}
+              );
+            })}
+          </div>
+
+          {/* Features for the selected plan */}
+          <div
+            style={{
+              padding: "16px 18px",
+              borderRadius: "var(--radius-lg, 12px)",
+              background: "var(--surface-raised)",
+              border: "1px solid var(--border-subtle)",
+            }}
+          >
+            <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "10px" }}>
+              {selectedPlan.tagline}
             </div>
-
-            <div style={{ height: "1px", background: "var(--border-subtle, #e5e7eb)", marginBottom: "16px" }} />
-
-            {/* Features */}
-            <ul style={{ listStyle: "none", padding: 0, margin: "0 0 16px", display: "flex", flexDirection: "column", gap: "8px" }}>
-              {[
-                "Unlimited queries",
-                "All 7 workspaces",
-                "Unlimited documents (uploads up to 200 MB each)",
-                "PDF, DOCX, Markdown export",
-                "Session sharing + API access",
-                "GST & Tax auto-updates",
-              ].map((feature) => (
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "6px" }}>
+              {selectedPlan.features.map((feature) => (
                 <li key={feature} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
                   <span style={{ color: "var(--brand, #0D0D0D)", fontWeight: 600 }}>✓</span>
                   {feature}
                 </li>
               ))}
             </ul>
-
-            <button
-              onClick={handleSubscribe}
-              disabled={upgrading}
-              style={{
-                width: "100%",
-                height: "44px",
-                borderRadius: "var(--radius-md, 8px)",
-                background: "var(--brand, #0D0D0D)",
-                color: "var(--brand-text, #fff)",
-                border: "none",
-                fontSize: "15px",
-                fontWeight: 600,
-                cursor: upgrading ? "not-allowed" : "pointer",
-                opacity: upgrading ? 0.7 : 1,
-                fontFamily: "var(--font-body)",
-                transition: "background 0.15s",
-              }}
-              onMouseEnter={(e) => { if (!upgrading) (e.currentTarget as HTMLElement).style.background = "var(--brand-dim, #2A2A2A)"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--brand, #0D0D0D)"; }}
-            >
-              {upgrading ? "Activating…" : "Subscribe Now →"}
-            </button>
           </div>
+
+          <button
+            onClick={handleSubscribe}
+            disabled={upgrading}
+            style={{
+              width: "100%",
+              height: "44px",
+              marginTop: "16px",
+              borderRadius: "var(--radius-md, 8px)",
+              background: "var(--brand, #0D0D0D)",
+              color: "var(--brand-text, #fff)",
+              border: "none",
+              fontSize: "15px",
+              fontWeight: 600,
+              cursor: upgrading ? "not-allowed" : "pointer",
+              opacity: upgrading ? 0.7 : 1,
+              fontFamily: "var(--font-body)",
+              transition: "background 0.15s",
+            }}
+            onMouseEnter={(e) => { if (!upgrading) (e.currentTarget as HTMLElement).style.background = "var(--brand-dim, #2A2A2A)"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--brand, #0D0D0D)"; }}
+          >
+            {upgrading ? "Activating…" : `Upgrade to ${selectedPlan.name} → ${fmtINR(selectedPlan.price)}/mo`}
+          </button>
         </div>
 
         {/* Footer */}

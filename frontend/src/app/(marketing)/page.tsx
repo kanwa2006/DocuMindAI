@@ -1,10 +1,5 @@
 import Link from "next/link";
-import {
-  fmtINR,
-  PRO_MONTHLY_PRICE,
-  PRO_ANNUAL_MONTHLY_PRICE,
-  ENTERPRISE_MONTHLY_PRICE,
-} from "@/lib/pricing";
+import { fmtINR, PLANS } from "@/lib/pricing";
 
 /* ── DATA ─────────────────────────────────────────────────────────────────── */
 
@@ -93,60 +88,37 @@ const HOW_IT_WORKS = [
   },
 ];
 
+// W1: marketing pricing cards render from the same PLANS source of truth used
+// by /pricing, /billing, and the UpgradeModal. Three monthly tiers — Go /
+// Plus / Pro — plus a free-trial card pinned in front.
 const PRICING = [
   {
-    name: "Free Trial",
+    name: "Free",
     price: "₹0",
     period: "",
     badge: null,
-    description: "Perfect to explore the platform",
+    description: "Try DocuMindAI with no card",
     features: [
-      "10 free queries to start",
-      "All 7 workspaces unlocked",
-      "Exact page citations",
-      "Trust scores on every answer",
-      "No credit card required",
+      "10 free queries",
+      "All 7 workspaces",
+      "Page-cited answers",
+      "Trust scores on every reply",
     ],
-    cta: "Start Free Trial",
+    cta: "Start free",
     href: "/register",
     highlighted: false,
   },
-  {
-    name: "Professional",
-    price: fmtINR(PRO_ANNUAL_MONTHLY_PRICE),
+  ...PLANS.map((p) => ({
+    name: p.name,
+    price: fmtINR(p.price),
     period: "/month",
-    badge: "Most Popular",
-    description: `Billed annually · ${fmtINR(PRO_MONTHLY_PRICE)}/mo monthly`,
-    features: [
-      "200 queries per session",
-      "All 7 workspaces",
-      "Priority processing",
-      "PDF audit reports",
-      "Session export (PDF, DOCX)",
-      "UPI & card payments",
-    ],
-    cta: "Get Professional",
-    href: "/register?plan=professional",
-    highlighted: true,
-  },
-  {
-    name: "Enterprise",
-    price: fmtINR(ENTERPRISE_MONTHLY_PRICE),
-    period: "/month",
-    badge: null,
-    description: "Billed monthly · SLA included",
-    features: [
-      "Unlimited queries",
-      "All 7 workspaces",
-      "PDF + DOCX audit reports",
-      "Email report delivery",
-      "Multi-user access",
-      "Priority support",
-    ],
-    cta: "Contact Sales",
-    href: "/register?plan=enterprise",
-    highlighted: false,
-  },
+    badge: p.featured ? "Most Popular" : null,
+    description: p.tagline,
+    features: p.features,
+    cta: p.featured ? `Get ${p.name}` : `Choose ${p.name}`,
+    href: `/register?plan=${p.id}`,
+    highlighted: !!p.featured,
+  })),
 ];
 
 /* ── PAGE ─────────────────────────────────────────────────────────────────── */

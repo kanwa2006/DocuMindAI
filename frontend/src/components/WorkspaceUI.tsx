@@ -41,79 +41,79 @@ const WORKSPACE_CONFIG: Record<string, {
   featureHighlights?: string[];
 }> = {
   general: {
-    icon: "💬", title: "Ask anything about your documents",
-    subtitle: "Upload a PDF or DOCX and get instant, cited answers from its content.",
+    icon: "", title: "What can I help with?",
+    subtitle: "Attach a document for grounded answers, or just ask.",
     quickActions: [
-      { icon: "📋", label: "Summarize this document", prompt: "Please provide a comprehensive executive summary with key points highlighted." },
-      { icon: "🔍", label: "Extract key points", prompt: "What are the 5 most important points in this document? List them clearly." },
-      { icon: "⚖", label: "Compare documents", prompt: "Compare the uploaded documents and highlight the key differences and similarities." },
+      { icon: "", label: "Summarize", prompt: "Give me a concise executive summary of this document, with the key points highlighted." },
+      { icon: "", label: "Extract key points", prompt: "List the five most important points in this document." },
+      { icon: "", label: "Compare", prompt: "Compare the attached documents and highlight differences and similarities." },
     ],
   },
   exam: {
-    icon: "📋", title: "Generate Professional Question Papers",
-    subtitle: "Upload your syllabus or textbook. AI generates structured, exam-ready papers.",
-    badge: { text: "OCR Extraction Available", color: "var(--ws-exam-accent)" },
+    icon: "", title: "Build an exam paper",
+    subtitle: "Attach a syllabus or textbook. Generate structured, exam-ready papers.",
+    badge: { text: "OCR ready", color: "var(--ws-exam-accent)" },
     quickActions: [
-      { icon: "📝", label: "Generate Question Paper", prompt: "Generate a 100-mark CBSE-style paper from this syllabus with sections A, B, C." },
-      { icon: "🗂", label: "Build Question Bank", prompt: "Create a question bank of 50 varied questions covering all topics in this document." },
-      { icon: "🔑", label: "Create Answer Key", prompt: "Generate a detailed answer key with marking scheme for all sections." },
+      { icon: "", label: "Generate paper", prompt: "Generate a 100-mark CBSE-style paper from this syllabus with sections A, B, C." },
+      { icon: "", label: "Question bank", prompt: "Create a question bank of 50 varied questions covering every topic in this document." },
+      { icon: "", label: "Answer key", prompt: "Generate a detailed answer key with marking scheme for all sections." },
     ],
-    featureHighlights: ["📊 Bloom's Taxonomy tagging", "✅ Mark validation", "🎯 Board templates"],
+    featureHighlights: ["Bloom's tagging", "Mark validation", "Board templates"],
   },
   hr: {
-    icon: "👥", title: "Intelligent Candidate Analysis Pipeline",
-    subtitle: "Upload resumes + a job description. AI ranks, scores, and extracts insights.",
-    badge: { text: "Batch Processing — up to 1,000 resumes", color: "var(--ws-hr-accent)" },
+    icon: "", title: "Analyse candidates",
+    subtitle: "Attach resumes and a job description. Rank, score, and extract insights.",
+    badge: { text: "Up to 1,000 resumes per batch", color: "var(--ws-hr-accent)" },
     quickActions: [
-      { icon: "🏆", label: "Rank All Candidates", prompt: "Rank all uploaded candidates for this role with numerical scores and justifications." },
-      { icon: "🎯", label: "Match JD to Resumes", prompt: "Compare all resumes against the job description and identify the top 3 matches." },
-      { icon: "🗓", label: "Generate Interview Kit", prompt: "Create role-specific interview questions and a scoring rubric for the top candidates." },
+      { icon: "", label: "Rank candidates", prompt: "Rank every uploaded candidate for this role with numerical scores and short justifications." },
+      { icon: "", label: "Match JD to resumes", prompt: "Compare all resumes against the job description and identify the top three matches." },
+      { icon: "", label: "Interview kit", prompt: "Create role-specific interview questions and a scoring rubric for the top candidates." },
     ],
-    featureHighlights: ["🔍 ATS scoring", "📊 Skills extraction", "📋 Interview kits"],
+    featureHighlights: ["ATS scoring", "Skills extraction", "Interview kits"],
   },
   study: {
-    icon: "📚", title: "Your Personal AI Study Partner",
-    subtitle: "Upload textbooks and notes. Study smarter, not harder.",
-    badge: { text: "Supports 30+ PDFs simultaneously", color: "var(--ws-study-accent)" },
+    icon: "", title: "Study smarter",
+    subtitle: "Attach textbooks and notes. Generate plans, flashcards, and quizzes.",
+    badge: { text: "30+ PDFs at once", color: "var(--ws-study-accent)" },
     quickActions: [
-      { icon: "🗓", label: "Create My Study Plan", prompt: "Create a personalized study plan for the next 30 days based on this material." },
-      { icon: "🃏", label: "Generate Flashcards", prompt: "Generate 20 flashcards for the key concepts in this document." },
-      { icon: "🎯", label: "Quiz Me", prompt: "Quiz me with 10 MCQ questions on the material in this document." },
+      { icon: "", label: "Study plan", prompt: "Create a personalised 30-day study plan based on this material." },
+      { icon: "", label: "Flashcards", prompt: "Generate 20 flashcards for the key concepts in this document." },
+      { icon: "", label: "Quiz me", prompt: "Quiz me with 10 MCQ questions on the material in this document." },
     ],
-    featureHighlights: ["⏱ Spaced repetition", "📊 Progress tracking", "📝 Formula sheets"],
+    featureHighlights: ["Spaced repetition", "Progress tracking", "Formula sheets"],
   },
   research: {
-    icon: "🔬", title: "Systematic Literature Review & Analysis",
-    subtitle: "Upload research papers. AI synthesizes, finds gaps, and formats citations.",
-    badge: { text: "Citation-grounded — every claim traced to source", color: "var(--ws-research-accent)" },
+    icon: "", title: "Review the literature",
+    subtitle: "Attach papers. Synthesize, find gaps, format citations.",
+    badge: { text: "Every claim traced to source", color: "var(--ws-research-accent)" },
     quickActions: [
-      { icon: "📑", label: "Synthesize All Papers", prompt: "Provide a synthesis of all uploaded research papers, highlighting consensus and divergence." },
-      { icon: "🔍", label: "Find Research Gaps", prompt: "Identify research gaps and unexplored areas across all uploaded papers." },
-      { icon: "📚", label: "Export All Citations", prompt: "List all citations from these papers in APA 7th edition format." },
+      { icon: "", label: "Synthesize", prompt: "Provide a synthesis of all uploaded research papers, highlighting consensus and divergence." },
+      { icon: "", label: "Find gaps", prompt: "Identify research gaps and unexplored areas across all uploaded papers." },
+      { icon: "", label: "Export citations", prompt: "List every citation from these papers in APA 7th edition format." },
     ],
-    featureHighlights: ["📖 PRISMA support", "🔗 DOI extraction", "⚡ Multi-paper reasoning"],
+    featureHighlights: ["PRISMA support", "DOI extraction", "Multi-paper reasoning"],
   },
   legal: {
-    icon: "⚖", title: "Contract Analysis & Risk Assessment",
-    subtitle: "Upload contracts. AI extracts clauses, flags risks, and maps obligations.",
-    disclaimer: "⚠ For informational use only — Not legal advice. Always consult a lawyer.",
+    icon: "", title: "Review contracts",
+    subtitle: "Attach a contract. Extract clauses, flag risks, map obligations.",
+    disclaimer: "Informational use only. Not legal advice — consult a lawyer.",
     quickActions: [
-      { icon: "📋", label: "Extract All Clauses", prompt: "Extract and categorize all key clauses from this contract with page references." },
-      { icon: "🚨", label: "Risk Analysis", prompt: "Identify high-risk clauses. Rate each as Critical/High/Medium/Low with justification." },
-      { icon: "📊", label: "Map Obligations", prompt: "Create a complete obligation map for each party with deadlines and conditions." },
+      { icon: "", label: "Extract clauses", prompt: "Extract and categorize all key clauses from this contract with page references." },
+      { icon: "", label: "Risk analysis", prompt: "Identify high-risk clauses. Rate each Critical/High/Medium/Low with justification." },
+      { icon: "", label: "Map obligations", prompt: "Create a complete obligation map for each party with deadlines and conditions." },
     ],
-    featureHighlights: ["🔴 Risk scoring", "⏰ Deadline extraction", "📋 Clause library"],
+    featureHighlights: ["Risk scoring", "Deadline extraction", "Clause library"],
   },
   finance: {
-    icon: "📊", title: "Financial Document Intelligence",
-    subtitle: "Upload P&L, balance sheets, invoices. AI extracts, analyzes, and verifies.",
-    disclaimer: "⚠ Verify all figures with source documents. Not financial advice.",
+    icon: "", title: "Read financial documents",
+    subtitle: "Attach a P&L, balance sheet, or invoice. Extract, analyse, verify.",
+    disclaimer: "Verify all figures with the source. Not financial advice.",
     quickActions: [
-      { icon: "💰", label: "Extract Key Figures", prompt: "Extract all key financial figures with exact page citations and context." },
-      { icon: "📈", label: "Calculate Ratios", prompt: "Calculate liquidity, profitability, and solvency ratios using the uploaded statements." },
-      { icon: "📅", label: "Year-on-Year Analysis", prompt: "Compare financial performance across all uploaded years with percentage changes." },
+      { icon: "", label: "Extract figures", prompt: "Extract every key financial figure with exact page citations and context." },
+      { icon: "", label: "Compute ratios", prompt: "Calculate liquidity, profitability, and solvency ratios using the uploaded statements." },
+      { icon: "", label: "Year-on-year", prompt: "Compare financial performance across all uploaded years with percentage changes." },
     ],
-    featureHighlights: ["🔢 Numerical validation", "📊 Ratio computation", "🔍 OCR extraction"],
+    featureHighlights: ["Numerical validation", "Ratio computation", "OCR extraction"],
   },
 };
 
@@ -297,8 +297,10 @@ function WorkspaceWelcome({ workspaceType, onQuickAction }: { workspaceType: str
   return (
     <div className="message-enter" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", padding: "40px 16px", textAlign: "center" }}>
       <div style={{ maxWidth: "560px", width: "100%" }}>
-        <div style={{ fontSize: "64px", marginBottom: "16px", lineHeight: 1 }}>{cfg.icon}</div>
-        <h1 style={{ fontFamily: "var(--font-display)", fontSize: "var(--text-2xl)", color: "var(--text-primary)", margin: "0 0 8px", fontWeight: 400 }}>{cfg.title}</h1>
+        {cfg.icon && (
+          <div style={{ fontSize: "48px", marginBottom: "16px", lineHeight: 1 }}>{cfg.icon}</div>
+        )}
+        <h1 style={{ fontFamily: "var(--font-display, var(--font-body))", fontSize: "var(--text-2xl)", color: "var(--text-primary)", margin: "0 0 8px", fontWeight: 500 }}>{cfg.title}</h1>
         <p style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px", lineHeight: "var(--leading-relaxed)" }}>{cfg.subtitle}</p>
         {cfg.badge && (
           <div style={{ display: "flex", justifyContent: "center", marginBottom: "12px" }}>
@@ -310,11 +312,11 @@ function WorkspaceWelcome({ workspaceType, onQuickAction }: { workspaceType: str
             <span style={{ background: "var(--warning-bg)", color: "var(--warning-text)", border: "1px solid var(--warning-border)", borderRadius: "var(--radius-full)", padding: "5px 14px", fontSize: "13px" }}>{cfg.disclaimer}</span>
           </div>
         )}
-        <div style={{ display: "flex", gap: "10px", justifyContent: "center", flexWrap: "wrap", marginTop: "24px" }}>
+        <div style={{ display: "flex", gap: "8px", justifyContent: "center", flexWrap: "wrap", marginTop: "24px" }}>
           {cfg.quickActions.map((a) => (
             <button key={a.label} onClick={() => onQuickAction(a.prompt)} className="btn btn-secondary"
-              style={{ borderRadius: "20px", height: "36px", padding: "0 16px", fontSize: "13px", gap: "6px" }}>
-              <span>{a.icon}</span>{a.label}
+              style={{ borderRadius: "999px", height: "34px", padding: "0 14px", fontSize: "13px", gap: a.icon ? "6px" : 0 }}>
+              {a.icon && <span>{a.icon}</span>}{a.label}
             </button>
           ))}
         </div>

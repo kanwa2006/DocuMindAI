@@ -868,7 +868,7 @@ export const getBillingStatus = async (): Promise<BillingStatus> => {
 };
 
 export const upgradePlan = async (
-  plan: "professional" | "business" | "enterprise" = "professional",
+  plan: "go" | "plus" | "pro" | "professional" | "business" | "enterprise" = "plus",
   billing_cycle: "monthly" | "annual" = "monthly"
 ): Promise<{ success: boolean; plan: string; message: string }> => {
   const res = await apiFetch("/billing/upgrade", {

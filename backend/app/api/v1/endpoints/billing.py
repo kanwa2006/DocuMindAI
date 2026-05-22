@@ -16,7 +16,11 @@ router = APIRouter()
 
 
 class UpgradeRequest(BaseModel):
-    plan: Literal["professional", "business", "enterprise"] = "professional"
+    # W1 (deep-debug session 4): three new ChatGPT-style tiers — "go" / "plus" /
+    # "pro" — added alongside the legacy {professional,business,enterprise}
+    # names. The DB still stores whatever string we set; old plans remain
+    # readable so we don't break existing subscriptions.
+    plan: Literal["go", "plus", "pro", "professional", "business", "enterprise"] = "plus"
     billing_cycle: Literal["monthly", "annual"] = "monthly"
 
 

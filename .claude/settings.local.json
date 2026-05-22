@@ -28,7 +28,12 @@
       "Bash(git commit -m 'deep-debug E1+E2+E3: account page, settings save, feedback submit *)",
       "Bash(git commit -m 'deep-debug E4-E7: pricing source of truth, modal retheme, upload to 200 MB *)",
       "Bash(python -c \"from app import main as _main; print\\('backend imports ok'\\)\")",
-      "Bash(python -c \"from app import main as _main\")"
+      "Bash(python -c \"from app import main as _main\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"from app.api.v1.endpoints import query; print\\('query.py imports clean'\\)\")",
+      "Bash(python -c \"from app.core.config import settings; print\\(f'STORAGE_PATH={settings.STORAGE_PATH!r}, PROVIDER={settings.STORAGE_PROVIDER!r}'\\)\")",
+      "Bash(python -c \"from app.api.v1.endpoints import documents; print\\('documents.py imports clean'\\)\")",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
