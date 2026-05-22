@@ -5,22 +5,29 @@
 
 :root {
   /* ── BRAND ─────────────────────────────────────── */
-  --brand-hue: 220;
-  --brand-sat: 90%;
-  --brand:       hsl(var(--brand-hue), var(--brand-sat), 60%);
-  --brand-dim:   hsl(var(--brand-hue), 60%, 45%);
-  --brand-ghost: hsl(var(--brand-hue), var(--brand-sat), 60%, 0.08);
-  --brand-glow:  hsl(var(--brand-hue), var(--brand-sat), 60%, 0.15);
+  /* D1: neutral greyscale system (ChatGPT-style). Light-mode primary buttons
+     are near-black with white text; dark-mode primaries flip to off-white
+     with near-black text. The hue formula stays defined so legacy callers
+     do not break, but ALL --brand-* tokens are overridden below per theme. */
+  --brand-hue: 0;
+  --brand-sat: 0%;
+  --brand:        #0D0D0D;
+  --brand-dim:    #2A2A2A;
+  --brand-text:   #FFFFFF;
+  --brand-ghost:  rgba(13, 13, 13, 0.05);
+  --brand-glow:   rgba(13, 13, 13, 0.15);
 
   /* ── TYPOGRAPHY ─────────────────────────────────── */
   --font-display: var(--font-display-loaded, "Instrument Serif", Georgia, serif);
-  --font-body:    var(--font-body-loaded, "DM Sans", "Helvetica Neue", sans-serif);
+  /* D2: Inter is the ChatGPT-style UI font. system-ui ends the fallback chain. */
+  --font-body:    var(--font-body-loaded, "Inter", system-ui, "Helvetica Neue", sans-serif);
   --font-mono:    var(--font-mono-loaded, "JetBrains Mono", "Fira Code", monospace);
 
   /* Scale — major third (1.250) ratio */
-  --text-2xs: 0.64rem;   /* 10.24px */
-  --text-xs:  0.75rem;   /* 12px */
-  --text-sm:  0.875rem;  /* 14px */
+  /* D2: small text bumped from 14px → 15px for ChatGPT-style readability. */
+  --text-2xs: 0.6875rem; /* 11px */
+  --text-xs:  0.8125rem; /* 13px */
+  --text-sm:  0.9375rem; /* 15px */
   --text-base: 1rem;     /* 16px */
   --text-lg:  1.125rem;  /* 18px */
   --text-xl:  1.25rem;   /* 20px */
@@ -104,8 +111,8 @@
   --shadow-lg:  0 10px 15px -3px rgb(0 0 0 / 0.10), 0 4px 6px -4px rgb(0 0 0 / 0.10);
   --shadow-xl:  0 20px 25px -5px rgb(0 0 0 / 0.10), 0 8px 10px -6px rgb(0 0 0 / 0.10);
   --shadow-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
-  --shadow-brand:    0 0 0 3px hsl(var(--brand-hue) var(--brand-sat) 60% / 0.20);
-  --shadow-brand-lg: 0 0 0 4px hsl(var(--brand-hue) var(--brand-sat) 60% / 0.30);
+  --shadow-brand:    0 0 0 3px rgba(13, 13, 13, 0.18);
+  --shadow-brand-lg: 0 0 0 4px rgba(13, 13, 13, 0.24);
 }
 
 /* LIGHT MODE SURFACES (default / :root) */
@@ -118,10 +125,11 @@
   --surface-active:  #E8E8EC;
 
   --text-primary:   #0A0A0B;
-  --text-secondary: #52525B;
-  --text-tertiary:  #71717A;
+  /* D2: bump secondary contrast to meet WCAG AA on white (light mode). */
+  --text-secondary: #3F3F46;
+  --text-tertiary:  #52525B;
   --text-disabled:  #A1A1AA;
-  --text-brand:     hsl(var(--brand-hue), var(--brand-sat), 50%);
+  --text-brand:     #0D0D0D;
 
   --border-subtle:  rgb(0 0 0 / 0.06);
   --border-default: rgb(0 0 0 / 0.12);
@@ -159,11 +167,21 @@
   --surface-hover:   #1E1E22;
   --surface-active:  #27272A;
 
-  --text-primary:   #FAFAFA;
-  --text-secondary: #A1A1AA;
-  --text-tertiary:  #71717A;
+  /* D1: dark-mode brand flips to off-white (ChatGPT-style). */
+  --brand:        #ECECF1;
+  --brand-dim:    #D4D4D8;
+  --brand-text:   #0D0D0D;
+  --brand-ghost:  rgba(236, 236, 241, 0.08);
+  --brand-glow:   rgba(236, 236, 241, 0.18);
+  --shadow-brand:    0 0 0 3px rgba(236, 236, 241, 0.20);
+  --shadow-brand-lg: 0 0 0 4px rgba(236, 236, 241, 0.30);
+
+  --text-primary:   #ECECF1;
+  /* D2: bump secondary contrast in dark mode too. */
+  --text-secondary: #C7C7CC;
+  --text-tertiary:  #A1A1AA;
   --text-disabled:  #52525B;
-  --text-brand:     hsl(var(--brand-hue), var(--brand-sat), 70%);
+  --text-brand:     #ECECF1;
 
   --border-subtle:  rgb(255 255 255 / 0.05);
   --border-default: rgb(255 255 255 / 0.10);

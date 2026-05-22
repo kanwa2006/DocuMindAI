@@ -28,7 +28,7 @@ export default function OnboardingTooltip({ step, targetSelector, onNext, onDism
     setPos({ top: rect.bottom + 12, left: rect.left + rect.width / 2 });
 
     // Add pulsing ring overlay
-    el.style.boxShadow = "0 0 0 3px hsl(220,90%,60%), 0 0 0 6px hsl(220,90%,60%/0.25)";
+    el.style.boxShadow = "0 0 0 3px var(--brand, #0D0D0D), 0 0 0 6px rgba(13,13,13,0.25)";
     el.style.borderRadius = "10px";
     el.style.transition = "box-shadow 200ms";
 

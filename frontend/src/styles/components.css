@@ -12,8 +12,8 @@
   line-height: 1; cursor: pointer; border: none;
   transition: all var(--dur-fast) var(--ease-standard);
 }
-.btn-primary  { background: var(--brand); color: #fff; }
-.btn-primary:hover { filter: brightness(1.08); }
+.btn-primary  { background: var(--brand); color: var(--brand-text, #fff); }
+.btn-primary:hover { background: var(--brand-dim); }
 .btn-secondary { background: var(--surface-raised); color: var(--text-primary);
   border: 1px solid var(--border-default); }
 .btn-secondary:hover { background: var(--surface-hover); border-color: var(--border-strong); }
@@ -114,7 +114,10 @@
 
 /* ── CHAT MESSAGES ───────────────────────────────── */
 .message-user {
-  align-self: flex-end; max-width: 75%; background: var(--brand); color: #fff;
+  align-self: flex-end; max-width: 75%;
+  /* D1: user bubble keeps subtle accent — surface-hover so light/dark adapt */
+  background: var(--surface-hover); color: var(--text-primary);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl);
   padding: var(--space-3) var(--space-4); font-size: var(--text-sm);
   line-height: var(--leading-relaxed);

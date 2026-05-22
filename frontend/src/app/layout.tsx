@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Suspense } from 'react'
-import { Instrument_Serif, DM_Sans, JetBrains_Mono } from 'next/font/google'
+// D2: switched body font from DM_Sans to Inter (ChatGPT-style readable sans).
+import { Instrument_Serif, Inter, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
 import LayoutWrapper from '@/components/LayoutWrapper'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -16,10 +17,11 @@ const instrumentSerif = Instrument_Serif({
   subsets: ['latin'],
 })
 
-const dmSans = DM_Sans({
+const inter = Inter({
   weight: ['400', '500', '600', '700'],
   variable: '--font-body-loaded',
   subsets: ['latin'],
+  display: 'swap',
 })
 
 const jetbrainsMono = JetBrains_Mono({
@@ -57,7 +59,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${instrumentSerif.variable} ${dmSans.variable} ${jetbrainsMono.variable}`}
+      className={`${instrumentSerif.variable} ${inter.variable} ${jetbrainsMono.variable}`}
     >
       <head>
         {/* PWA */}

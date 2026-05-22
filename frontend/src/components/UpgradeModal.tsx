@@ -202,7 +202,7 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
                     padding: "6px 12px",
                     borderRadius: "var(--radius-sm, 6px)",
                     border: `1px solid ${billingCycle === cycle ? "var(--brand, hsl(220,90%,60%))" : "var(--border)"}`,
-                    background: billingCycle === cycle ? "var(--brand-ghost, hsl(220,90%,95%))" : "transparent",
+                    background: billingCycle === cycle ? "var(--brand-ghost, rgba(13,13,13,0.05))" : "transparent",
                     color: billingCycle === cycle ? "var(--brand, hsl(220,90%,60%))" : "var(--text-secondary)",
                     fontSize: "13px",
                     fontWeight: billingCycle === cycle ? 600 : 400,

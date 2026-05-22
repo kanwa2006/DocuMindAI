@@ -95,7 +95,7 @@ export default function EmailVerificationScreen({ email, onVerified }: EmailVeri
     color: "var(--text-primary)",
     outline: "none",
     fontFamily: "var(--font-mono, monospace)",
-    caretColor: "var(--brand, hsl(220,90%,60%))",
+    caretColor: "var(--brand, #0D0D0D)",
     transition: "border-color 0.15s",
   };
 
@@ -141,11 +141,11 @@ export default function EmailVerificationScreen({ email, onVerified }: EmailVeri
                   borderColor: error
                     ? "var(--red-500, #ef4444)"
                     : digit
-                    ? "var(--brand, hsl(220,90%,60%))"
+                    ? "var(--brand, #0D0D0D)"
                     : "var(--border, #e5e7eb)",
                 }}
                 onFocus={(e) => {
-                  if (!error) (e.currentTarget as HTMLElement).style.borderColor = "var(--brand, hsl(220,90%,60%))";
+                  if (!error) (e.currentTarget as HTMLElement).style.borderColor = "var(--brand, #0D0D0D)";
                 }}
                 onBlur={(e) => {
                   if (!digit && !error) (e.currentTarget as HTMLElement).style.borderColor = "var(--border, #e5e7eb)";
@@ -173,7 +173,7 @@ export default function EmailVerificationScreen({ email, onVerified }: EmailVeri
               width: "100%",
               height: "44px",
               borderRadius: "var(--radius-md, 8px)",
-              background: "var(--brand, hsl(220,90%,60%))",
+              background: "var(--brand, #0D0D0D)",
               color: "#fff",
               border: "none",
               fontSize: "15px",
@@ -197,7 +197,7 @@ export default function EmailVerificationScreen({ email, onVerified }: EmailVeri
               background: "none",
               border: "none",
               cursor: resending ? "not-allowed" : "pointer",
-              color: "var(--brand, hsl(220,90%,60%))",
+              color: "var(--brand, #0D0D0D)",
               fontSize: "13px",
               fontWeight: 500,
               padding: 0,

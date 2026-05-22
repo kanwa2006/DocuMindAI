@@ -58,7 +58,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex flex-col lg:flex-row">
       {/* LEFT COLUMN — Brand Panel (hidden on mobile) */}
       <div className="hidden lg:flex lg:w-1/2 flex-col items-center justify-center relative overflow-hidden"
-           style={{ background: 'linear-gradient(135deg, hsl(220, 90%, 60%), hsl(220, 70%, 45%))' }}>
+           style={{ background: 'linear-gradient(135deg, #1a1a1a 0%, #050505 100%)' }}>
         <div className="max-w-md px-8 text-center">
           <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">
             DocuMind<span className="italic">AI</span>
@@ -135,7 +135,7 @@ export default function LoginPage() {
                 required
                 className="block w-full h-[44px] px-3 text-sm bg-transparent border rounded-lg transition-all
                            border-gray-200 dark:border-gray-700
-                           focus:outline-none focus:border-[hsl(220,90%,60%)] focus:shadow-[0_0_0_3px_hsl(220,90%,60%,0.2)]
+                           focus:outline-none focus:border-[#0D0D0D] focus:shadow-[0_0_0_3px_rgba(13,13,13,0.18)]
                            text-black dark:text-white placeholder-gray-400 dark:placeholder-gray-600"
                 placeholder="you@company.com"
                 value={email}
@@ -147,7 +147,7 @@ export default function LoginPage() {
                 <label className="block text-xs font-medium tracking-[0.1em] uppercase text-gray-500 dark:text-gray-400" htmlFor="login-password">
                   PASSWORD
                 </label>
-                <Link href="/forgot-password" className="text-[13px] font-medium" style={{ color: 'hsl(220, 90%, 60%)' }}>
+                <Link href="/forgot-password" className="text-[13px] font-medium" style={{ color: 'var(--brand, #0D0D0D)' }}>
                   Forgot password?
                 </Link>
               </div>
@@ -158,7 +158,7 @@ export default function LoginPage() {
                   required
                   className="block w-full h-[44px] px-3 pr-11 text-sm bg-transparent border rounded-lg transition-all
                              border-gray-200 dark:border-gray-700
-                             focus:outline-none focus:border-[hsl(220,90%,60%)] focus:shadow-[0_0_0_3px_hsl(220,90%,60%,0.2)]
+                             focus:outline-none focus:border-[#0D0D0D] focus:shadow-[0_0_0_3px_rgba(13,13,13,0.18)]
                              text-black dark:text-white placeholder-gray-400 dark:placeholder-gray-600"
                   placeholder="••••••••"
                   value={password}
@@ -182,7 +182,7 @@ export default function LoginPage() {
               type="submit"
               disabled={loading}
               className="w-full h-[44px] rounded-lg text-[15px] font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ backgroundColor: 'hsl(220, 90%, 60%)' }}
+              style={{ backgroundColor: 'var(--brand, #0D0D0D)' }}
               onMouseEnter={e => { if (!loading) (e.target as HTMLButtonElement).style.filter = 'brightness(1.08)'; }}
               onMouseLeave={e => { (e.target as HTMLButtonElement).style.filter = 'none'; }}
             >
@@ -199,7 +199,7 @@ export default function LoginPage() {
 
           <p className="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">
             Don&apos;t have an account?{' '}
-            <Link href="/register" className="font-medium" style={{ color: 'hsl(220, 90%, 60%)' }}>
+            <Link href="/register" className="font-medium" style={{ color: 'var(--brand, #0D0D0D)' }}>
               Create one →
             </Link>
           </p>
