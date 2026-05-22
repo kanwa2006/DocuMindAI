@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { API_BASE, getCsrfToken } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 
 const LANGUAGE_OPTIONS = [
   { value: "auto",      label: "Auto-detect" },
@@ -33,7 +33,7 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/users/me`, { credentials: "include" })
+    apiFetch("/users/me")
       .then((r) => {
         if (r.status === 401) { router.push("/login"); return null; }
         return r.json();
@@ -51,13 +51,9 @@ export default function SettingsPage() {
     setSaved(false);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/users/me`, {
+      const res = await apiFetch("/users/me", {
         method: "PATCH",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": getCsrfToken(),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preferred_language: language }),
       });
       if (!res.ok) {

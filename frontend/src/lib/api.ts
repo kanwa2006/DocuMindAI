@@ -49,13 +49,21 @@ if (!API_BASE) {
 
 let csrfToken = '';
 let deviceFingerprint = '';
+let _csrfPromise: Promise<void> | null = null;
 
-// Fetch CSRF on boot
-if (typeof window !== 'undefined') {
-  fetch(`${API_BASE}/csrf-token`, { credentials: 'include' })
+function _fetchCsrf(): Promise<void> {
+  if (_csrfPromise) return _csrfPromise;
+  _csrfPromise = fetch(`${API_BASE}/csrf-token`, { credentials: 'include' })
     .then(res => res.json())
     .then(data => { csrfToken = data.csrf_token; })
-    .catch(() => { });
+    .catch(() => { /* will retry on next mutation */ })
+    .finally(() => { _csrfPromise = null; });
+  return _csrfPromise;
+}
+
+// Fetch CSRF on boot (best-effort; apiFetch also awaits before first mutation)
+if (typeof window !== 'undefined') {
+  _fetchCsrf();
 }
 
 async function initDeviceFingerprint(): Promise<void> {
@@ -99,8 +107,14 @@ async function doRefreshToken(): Promise<boolean> {
   } catch { return false; }
 }
 
-const apiFetch = async (endpoint: string, options: RequestInit = {}, _retried = false): Promise<Response> => {
+export const apiFetch = async (endpoint: string, options: RequestInit = {}, _retried = false): Promise<Response> => {
   const isMutation = ['POST', 'PUT', 'DELETE', 'PATCH'].includes(options.method?.toUpperCase() || 'GET');
+  // E2 fix: if the boot-time CSRF fetch hasn't resolved yet, wait for it
+  // (or refetch) before sending the mutation. Otherwise CSRFMiddleware 403s.
+  // /auth/* are CSRF-exempt server-side, so we skip the wait for them.
+  if (isMutation && !csrfToken && !endpoint.startsWith('/auth/')) {
+    await _fetchCsrf();
+  }
   const headers = new Headers(options.headers || {});
   if (isMutation && csrfToken) headers.set('X-CSRF-Token', csrfToken);
   if (deviceFingerprint) headers.set('X-Device-ID', deviceFingerprint);

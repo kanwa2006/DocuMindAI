@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { apiFetch } from "@/lib/api";
+import toast from "react-hot-toast";
 
 type FeedbackType = "Bug Report" | "Feature Request" | "General Feedback" | "Payment Issue";
 
@@ -48,11 +50,9 @@ export default function FeedbackModal({ onClose }: FeedbackModalProps) {
     setSubmitting(true);
     setError(null);
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL;
-      const res = await fetch(`${API_BASE}/feedback`, {
+      const res = await apiFetch("/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({
           type,
           message: message.trim(),
@@ -64,9 +64,7 @@ export default function FeedbackModal({ onClose }: FeedbackModalProps) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.detail || "Failed to submit feedback.");
       }
-      if (typeof window !== "undefined" && (window as any).__toastSuccess) {
-        (window as any).__toastSuccess("Thank you! We'll review within 24 hours.");
-      }
+      toast.success("Thank you! We'll review within 24 hours.");
       onClose();
     } catch (err: any) {
       setError(err.message || "Failed to submit feedback. Please try again.");
