@@ -163,6 +163,18 @@ async def ask_question_stream(
             # optional. Backend may still flip email_verified on /verify-email, but unverified
             # users are not blocked from asking questions.
 
+            # Load the User row once — needed for email-notification preferences and
+            # preferred_language. Tolerates a missing row (DummyDB / deleted user) by
+            # leaving user_obj as None; downstream getattr() calls fall back to defaults.
+            user_obj = None
+            try:
+                _u_result = await db.execute(
+                    select(User).where(User.id == uuid.UUID(user_id))
+                )
+                user_obj = _u_result.scalar_one_or_none()
+            except Exception as _u_exc:
+                logger.warning(f"[query/stream] Could not load User {user_id}: {_u_exc}")
+
             # Phase 10 — trial quota check (raises HTTP 402 if exhausted)
             trial_status = await check_and_increment_trial(user_id=user_id, db=db)
 
