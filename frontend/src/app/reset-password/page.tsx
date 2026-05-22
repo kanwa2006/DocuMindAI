@@ -41,7 +41,7 @@ function ResetForm() {
     return (
       <p style={{ color: "var(--text-secondary)" }}>
         This link is missing a reset token.{" "}
-        <Link href="/forgot-password" style={{ color: "var(--accent, #4f46e5)" }}>
+        <Link href="/forgot-password" style={{ color: "var(--brand)" }}>
           Request a new one →
         </Link>
       </p>
@@ -80,8 +80,8 @@ function ResetForm() {
           padding: "0.75rem",
           border: "none",
           borderRadius: 10,
-          background: "var(--accent, #4f46e5)",
-          color: "white",
+          background: "var(--brand)",
+          color: "var(--brand-text, #fff)",
           fontWeight: 500,
           cursor: loading ? "wait" : "pointer",
         }}

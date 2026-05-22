@@ -43,14 +43,17 @@ const VALID_STAGES = [
   "applied", "screened", "shortlisted", "interviewed", "offered", "hired", "rejected",
 ] as const;
 
+// V2: pipeline stage colors routed through tokens / warm-cool semantics
+// so the kanban stripe still reads at a glance without dropping a
+// hardcoded indigo/azure into the otherwise neutral ChatGPT-style UI.
 const STAGE_COLORS: Record<string, string> = {
   applied:     "var(--text-tertiary)",
-  screened:    "#6366f1",
-  shortlisted: "#2563eb",
-  interviewed: "#d97706",
-  offered:     "#059669",
-  hired:       "#16a34a",
-  rejected:    "#dc2626",
+  screened:    "var(--text-secondary)",
+  shortlisted: "var(--text-primary)",
+  interviewed: "var(--warning-text, #d97706)",
+  offered:     "var(--success-text, #059669)",
+  hired:       "var(--success-text, #16a34a)",
+  rejected:    "var(--error-text, #dc2626)",
 };
 
 // ── Score pill ────────────────────────────────────────────────────────────────
@@ -504,7 +507,7 @@ export default function CandidateRankingsPanel({ onClose }: Props) {
                             title={hasSemanticScore ? "Re-score semantically" : "Compute semantic score"}
                             onClick={() => triggerScore(row)}
                             disabled={isScoring}
-                            style={{ width: "28px", height: "28px", border: `1px solid ${hasSemanticScore ? "#2563eb" : "var(--border-default)"}`, borderRadius: "6px", background: "none", cursor: isScoring ? "wait" : "pointer", fontSize: "12px", display: "flex", alignItems: "center", justifyContent: "center", transition: "border-color 100ms", opacity: isScoring ? 0.5 : 1 }}
+                            style={{ width: "28px", height: "28px", border: `1px solid ${hasSemanticScore ? "var(--brand)" : "var(--border-default)"}`, borderRadius: "6px", background: "none", cursor: isScoring ? "wait" : "pointer", fontSize: "12px", display: "flex", alignItems: "center", justifyContent: "center", transition: "border-color 100ms", opacity: isScoring ? 0.5 : 1 }}
                           >{isScoring ? "…" : "🎯"}</button>
                           <button
                             title="View Profile"

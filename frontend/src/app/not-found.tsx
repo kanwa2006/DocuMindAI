@@ -23,7 +23,7 @@ export default function NotFound() {
           fontSize: 96,
           fontWeight: 400,
           lineHeight: 1,
-          color: "hsl(220, 90%, 60%, 0.15)",
+          color: "var(--text-disabled, #A1A1AA)",
           userSelect: "none",
         }}
       >

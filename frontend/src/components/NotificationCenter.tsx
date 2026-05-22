@@ -277,7 +277,7 @@ export default function NotificationCenter({ onNavigate }: NotificationCenterPro
                       <span
                         style={{
                           fontSize: 11,
-                          color: "var(--brand, #6366f1)",
+                          color: "var(--brand, #0D0D0D)",
                           marginTop: 2,
                           display: "block",
                         }}

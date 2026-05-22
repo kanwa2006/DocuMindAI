@@ -32,7 +32,7 @@ export default function ForgotPasswordPage() {
           <div style={{ padding: "1rem", border: "1px solid var(--border)", borderRadius: 10, color: "var(--text-secondary)" }}>
             If an account exists for <strong>{email}</strong>, a reset link is on its way. The link expires in 30 minutes.
             <div style={{ marginTop: "1rem" }}>
-              <Link href="/login" style={{ color: "var(--accent, #4f46e5)" }}>
+              <Link href="/login" style={{ color: "var(--brand)" }}>
                 Back to sign in
               </Link>
             </div>
@@ -60,8 +60,8 @@ export default function ForgotPasswordPage() {
                 padding: "0.75rem",
                 border: "none",
                 borderRadius: 10,
-                background: "var(--accent, #4f46e5)",
-                color: "white",
+                background: "var(--brand)",
+                color: "var(--brand-text, #fff)",
                 fontWeight: 500,
                 cursor: loading ? "wait" : "pointer",
               }}

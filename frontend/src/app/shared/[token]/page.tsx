@@ -224,7 +224,7 @@ export default function SharedSessionPage() {
               disabled={asking || !question.trim()}
               style={{
                 padding: "10px 20px", height: "42px",
-                background: "var(--brand, #6366f1)", color: "#fff",
+                background: "var(--brand, #0D0D0D)", color: "#fff",
                 border: "none", borderRadius: "var(--radius-lg, 12px)",
                 cursor: asking || !question.trim() ? "not-allowed" : "pointer",
                 fontWeight: 600, fontSize: "var(--text-sm, 14px)",
@@ -260,7 +260,7 @@ function MessageBubble({ message }: { message: SharedSessionMessage }) {
       <div
         style={{
           width: "32px", height: "32px", borderRadius: "50%", flexShrink: 0,
-          background: isUser ? "var(--brand, #6366f1)" : "var(--surface-overlay, #1e2030)",
+          background: isUser ? "var(--brand, #0D0D0D)" : "var(--surface-overlay, #1e2030)",
           border: isUser ? "none" : "1px solid var(--border-default, rgba(255,255,255,0.12))",
           display: "flex", alignItems: "center", justifyContent: "center",
           fontSize: "14px",
@@ -276,7 +276,7 @@ function MessageBubble({ message }: { message: SharedSessionMessage }) {
           padding: "10px 14px",
           borderRadius: isUser ? "16px 4px 16px 16px" : "4px 16px 16px 16px",
           background: isUser
-            ? "var(--brand, #6366f1)"
+            ? "var(--brand, #0D0D0D)"
             : "var(--surface-overlay, #1e2030)",
           border: isUser ? "none" : "1px solid var(--border-default, rgba(255,255,255,0.08))",
           color: "var(--text-primary, #f1f5f9)",
