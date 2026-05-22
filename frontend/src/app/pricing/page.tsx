@@ -1,4 +1,11 @@
 import Link from "next/link";
+import {
+  fmtINR,
+  PRO_MONTHLY_PRICE,
+  PRO_ANNUAL_MONTHLY_PRICE,
+  ENTERPRISE_MONTHLY_PRICE,
+  PRO_ANNUAL_TOTAL_LABEL,
+} from "@/lib/pricing";
 
 const PLANS = [
   {
@@ -8,15 +15,16 @@ const PLANS = [
     features: [
       "Up to 10 grounded queries",
       "All 7 workspaces (General, HR, Legal, Finance, Research, Study, Exam)",
-      "PDF & DOCX uploads up to 50 MB",
+      "PDF & DOCX uploads up to 200 MB",
       "Inline citations with page numbers",
     ],
     cta: { label: "Start free", href: "/register" },
   },
   {
     name: "Professional",
-    price: "₹799 /mo",
-    cadence: "billed annually · ₹999 /mo billed monthly",
+    price: `${fmtINR(PRO_ANNUAL_MONTHLY_PRICE)} /mo`,
+    cadence: `billed annually · ${fmtINR(PRO_MONTHLY_PRICE)} /mo billed monthly`,
+    annualNote: PRO_ANNUAL_TOTAL_LABEL,
     features: [
       "Unlimited queries",
       "All workspaces + Veritas trust reports",
@@ -28,7 +36,7 @@ const PLANS = [
   },
   {
     name: "Enterprise",
-    price: "₹2,999 /mo",
+    price: `${fmtINR(ENTERPRISE_MONTHLY_PRICE)} /mo`,
     cadence: "billed monthly · SLA included",
     features: [
       "Everything in Professional",
@@ -74,9 +82,14 @@ export default function PricingPage() {
           >
             <h2 style={{ fontSize: "1.15rem", fontWeight: 600, marginBottom: "0.5rem" }}>{p.name}</h2>
             <div style={{ fontSize: "1.75rem", fontWeight: 600, marginBottom: "0.25rem" }}>{p.price}</div>
-            <div style={{ color: "var(--text-tertiary)", fontSize: "0.875rem", marginBottom: "1.25rem" }}>
+            <div style={{ color: "var(--text-tertiary)", fontSize: "0.875rem", marginBottom: p.annualNote ? "0.25rem" : "1.25rem" }}>
               {p.cadence}
             </div>
+            {p.annualNote && (
+              <div style={{ color: "var(--text-tertiary)", fontSize: "0.8125rem", marginBottom: "1.25rem" }}>
+                {p.annualNote}
+              </div>
+            )}
             <ul style={{ listStyle: "none", padding: 0, margin: "0 0 1.5rem", display: "grid", gap: "0.5rem" }}>
               {p.features.map((f) => (
                 <li key={f} style={{ color: "var(--text-secondary)", fontSize: "0.95rem" }}>

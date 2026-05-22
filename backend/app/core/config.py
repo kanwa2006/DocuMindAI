@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1800
     CHUNK_OVERLAP: int = 300
     OCR_CONFIDENCE_THRESHOLD: float = 0.80
-    MAX_UPLOAD_MB: int = 50
+    MAX_UPLOAD_MB: int = 200
 
     # Gemini / LLM
     # Phase 12: keys are now sourced via GEMINI_API_KEY_1, _2, _3, ... by GeminiKeyRotator.

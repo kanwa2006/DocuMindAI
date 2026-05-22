@@ -2,6 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { UpgradeTrigger } from "@/lib/store/trialStore";
+import {
+  PRO_MONTHLY_PRICE,
+  PRO_ANNUAL_MONTHLY_PRICE,
+  PRO_ANNUAL_SAVINGS_PER_YEAR,
+  PRO_ANNUAL_TOTAL_LABEL,
+  fmtINR,
+} from "@/lib/pricing";
+import { apiFetch } from "@/lib/api";
 
 interface UpgradeModalProps {
   trigger: UpgradeTrigger;
@@ -34,14 +42,9 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
   const handleSubscribe = async () => {
     setUpgrading(true);
     try {
-      const { API_BASE, getCsrfToken } = await import("@/lib/api");
-      const res = await fetch(`${API_BASE}/billing/upgrade`, {
+      const res = await apiFetch("/billing/upgrade", {
         method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": getCsrfToken(),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ plan: "professional", billing_cycle: billingCycle }),
       });
       if (res.ok) {
@@ -54,9 +57,11 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
     }
   };
 
-  const monthlyPrice = 999;
-  const annualMonthlyPrice = 799;
-  const annualSavings = (monthlyPrice - annualMonthlyPrice) * 12;
+  // E4: pricing constants live in lib/pricing.ts. Identical numbers + wording
+  // are rendered in /pricing, /billing, and the marketing page.
+  const monthlyPrice = PRO_MONTHLY_PRICE;
+  const annualMonthlyPrice = PRO_ANNUAL_MONTHLY_PRICE;
+  const annualSavings = PRO_ANNUAL_SAVINGS_PER_YEAR;
 
   return (
     /* Backdrop */
@@ -170,7 +175,7 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
         <div style={{ padding: "20px 32px 0" }}>
           <div
             style={{
-              border: "2px solid var(--brand, hsl(220,90%,60%))",
+              border: "2px solid var(--brand, #0D0D0D)",
               borderRadius: "var(--radius-lg, 12px)",
               padding: "20px",
             }}
@@ -180,14 +185,14 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
                 Professional Plan
               </span>
               <span style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-primary)" }}>
-                ₹{billingCycle === "annual" ? annualMonthlyPrice : monthlyPrice}
+                {fmtINR(billingCycle === "annual" ? annualMonthlyPrice : monthlyPrice)}
                 <span style={{ fontSize: "13px", fontWeight: 400, color: "var(--text-secondary)" }}> / month</span>
               </span>
             </div>
 
             {billingCycle === "annual" && (
               <p style={{ fontSize: "11px", color: "var(--text-secondary)", margin: "0 0 12px" }}>
-                Billed annually — saves ₹{annualSavings.toLocaleString("en-IN")}/year
+                {PRO_ANNUAL_TOTAL_LABEL}. Saves {fmtINR(annualSavings)}/year.
               </p>
             )}
 
@@ -201,9 +206,9 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
                     flex: 1,
                     padding: "6px 12px",
                     borderRadius: "var(--radius-sm, 6px)",
-                    border: `1px solid ${billingCycle === cycle ? "var(--brand, hsl(220,90%,60%))" : "var(--border)"}`,
+                    border: `1px solid ${billingCycle === cycle ? "var(--brand, #0D0D0D)" : "var(--border)"}`,
                     background: billingCycle === cycle ? "var(--brand-ghost, rgba(13,13,13,0.05))" : "transparent",
-                    color: billingCycle === cycle ? "var(--brand, hsl(220,90%,60%))" : "var(--text-secondary)",
+                    color: billingCycle === cycle ? "var(--brand, #0D0D0D)" : "var(--text-secondary)",
                     fontSize: "13px",
                     fontWeight: billingCycle === cycle ? 600 : 400,
                     cursor: "pointer",
@@ -222,13 +227,13 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
               {[
                 "Unlimited queries",
                 "All 7 workspaces",
-                "Unlimited documents (50MB each)",
+                "Unlimited documents (uploads up to 200 MB each)",
                 "PDF, DOCX, Markdown export",
                 "Session sharing + API access",
                 "GST & Tax auto-updates",
               ].map((feature) => (
                 <li key={feature} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-secondary)" }}>
-                  <span style={{ color: "var(--brand, hsl(220,90%,60%))", fontWeight: 600 }}>✓</span>
+                  <span style={{ color: "var(--brand, #0D0D0D)", fontWeight: 600 }}>✓</span>
                   {feature}
                 </li>
               ))}
@@ -241,18 +246,18 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
                 width: "100%",
                 height: "44px",
                 borderRadius: "var(--radius-md, 8px)",
-                background: "var(--brand, hsl(220,90%,60%))",
-                color: "#fff",
+                background: "var(--brand, #0D0D0D)",
+                color: "var(--brand-text, #fff)",
                 border: "none",
                 fontSize: "15px",
                 fontWeight: 600,
                 cursor: upgrading ? "not-allowed" : "pointer",
                 opacity: upgrading ? 0.7 : 1,
                 fontFamily: "var(--font-body)",
-                transition: "filter 0.15s",
+                transition: "background 0.15s",
               }}
-              onMouseEnter={(e) => { if (!upgrading) (e.currentTarget as HTMLElement).style.filter = "brightness(1.08)"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.filter = "none"; }}
+              onMouseEnter={(e) => { if (!upgrading) (e.currentTarget as HTMLElement).style.background = "var(--brand-dim, #2A2A2A)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--brand, #0D0D0D)"; }}
             >
               {upgrading ? "Activating…" : "Subscribe Now →"}
             </button>
@@ -262,10 +267,10 @@ export default function UpgradeModal({ trigger, onClose }: UpgradeModalProps) {
         {/* Footer */}
         <div style={{ padding: "16px 32px 28px", textAlign: "center" }}>
           <a
-            href="mailto:support@documindai.com"
-            style={{ fontSize: "13px", color: "var(--brand, hsl(220,90%,60%))", textDecoration: "none" }}
+            href="mailto:support@documindai.com?subject=DocuMindAI%20support"
+            style={{ fontSize: "13px", color: "var(--brand, #0D0D0D)", textDecoration: "underline" }}
           >
-            Questions? Chat with us →
+            Questions? Email support@documindai.com
           </a>
           <p style={{ fontSize: "11px", color: "var(--text-tertiary)", margin: "6px 0 0" }}>
             Cancel anytime. No lock-in.

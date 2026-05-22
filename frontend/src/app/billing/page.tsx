@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getBillingStatus, upgradePlan, type BillingStatus } from "@/lib/api";
+import { fmtINR, PRO_MONTHLY_PRICE, PRO_ANNUAL_MONTHLY_PRICE, ENTERPRISE_MONTHLY_PRICE } from "@/lib/pricing";
 import toast from "react-hot-toast";
 
 export default function BillingPage() {
@@ -82,21 +83,21 @@ export default function BillingPage() {
               disabled={upgrading}
               style={planBtn}
             >
-              Professional — ₹799/mo (annual)
+              Professional — {fmtINR(PRO_ANNUAL_MONTHLY_PRICE)}/mo (annual)
             </button>
             <button
               onClick={() => handleUpgrade("professional", "monthly")}
               disabled={upgrading}
               style={planBtn}
             >
-              Professional — ₹999/mo (monthly)
+              Professional — {fmtINR(PRO_MONTHLY_PRICE)}/mo (monthly)
             </button>
             <button
               onClick={() => handleUpgrade("enterprise", "monthly")}
               disabled={upgrading}
               style={planBtn}
             >
-              Enterprise — ₹2,999/mo
+              Enterprise — {fmtINR(ENTERPRISE_MONTHLY_PRICE)}/mo
             </button>
           </div>
 

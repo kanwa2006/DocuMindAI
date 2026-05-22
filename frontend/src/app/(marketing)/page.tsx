@@ -1,4 +1,10 @@
 import Link from "next/link";
+import {
+  fmtINR,
+  PRO_MONTHLY_PRICE,
+  PRO_ANNUAL_MONTHLY_PRICE,
+  ENTERPRISE_MONTHLY_PRICE,
+} from "@/lib/pricing";
 
 /* ── DATA ─────────────────────────────────────────────────────────────────── */
 
@@ -71,7 +77,7 @@ const HOW_IT_WORKS = [
     step: "01",
     icon: "⬆️",
     title: "Upload Your Document",
-    desc: "PDF, DOCX, TXT — any file up to 50 MB",
+    desc: "PDF, DOCX, TXT — any file up to 200 MB",
   },
   {
     step: "02",
@@ -107,10 +113,10 @@ const PRICING = [
   },
   {
     name: "Professional",
-    price: "₹799",
+    price: fmtINR(PRO_ANNUAL_MONTHLY_PRICE),
     period: "/month",
     badge: "Most Popular",
-    description: "Billed annually · ₹999/mo monthly",
+    description: `Billed annually · ${fmtINR(PRO_MONTHLY_PRICE)}/mo monthly`,
     features: [
       "200 queries per session",
       "All 7 workspaces",
@@ -125,7 +131,7 @@ const PRICING = [
   },
   {
     name: "Enterprise",
-    price: "₹2,999",
+    price: fmtINR(ENTERPRISE_MONTHLY_PRICE),
     period: "/month",
     badge: null,
     description: "Billed monthly · SLA included",

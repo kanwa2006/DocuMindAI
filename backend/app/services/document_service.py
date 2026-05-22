@@ -42,10 +42,12 @@ class DocumentService:
             file_hash_obj.update(chunk)
             md5_obj.update(chunk)
             size_bytes += len(chunk)
-            # Enforce 50MB Max File Size to prevent denial of service
-            if size_bytes > 50 * 1024 * 1024:
+            # E7: enforce MAX_UPLOAD_MB limit (default 200 MB) — config-driven, no hardcoded 50.
+            from app.core.config import settings as _settings
+            _max_bytes = _settings.MAX_UPLOAD_MB * 1024 * 1024
+            if size_bytes > _max_bytes:
                 logger.warning(f"[Security Audit] Denial of Service attempt blocked. File too large from user {owner_id}")
-                raise HTTPException(status_code=413, detail="File too large. Maximum size is 50MB.")
+                raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {_settings.MAX_UPLOAD_MB}MB.")
 
         await file.seek(0)
         file_hash = file_hash_obj.hexdigest()
