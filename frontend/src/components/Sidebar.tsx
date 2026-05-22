@@ -516,20 +516,27 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean; setIsO
       <nav
         aria-label="Chat history"
         className={`sidebar ${isOpen ? "" : "collapsed"}`}
+        aria-hidden={!isOpen && !isMobile}
         style={{
           position: isMobile ? "fixed" : "sticky",
           top: isMobile ? 0 : "52px",
           left: 0,
           zIndex: isMobile ? 60 : undefined,
           height: "100vh",
+          // Mobile: slide off-screen with translateX; keeps width so internal layout doesn't reflow.
+          // Desktop: collapse width to 0 so the main content reclaims the space.
           transform: isMobile && !isOpen ? "translateX(-100%)" : "translateX(0)",
+          width: isMobile ? "260px" : isOpen ? "260px" : "0px",
+          minWidth: 0,
+          flexShrink: 0,
           transition: isMobile
             ? "transform 300ms var(--ease-decel)"
             : "width var(--dur-slow) var(--ease-standard)",
-          width: "260px",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
+          // When collapsed, prevent clicks/tab focus landing on now-invisible children.
+          pointerEvents: !isOpen ? "none" : "auto",
         }}
       >
         {/* ── TOP SECTION ── */}

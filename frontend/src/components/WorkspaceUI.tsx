@@ -1658,12 +1658,12 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                   sendMessage(voiceInterim || query);
                 }
               }}
-              disabled={loading || (activeDoc != null && activeDoc.status !== "READY")}
+              disabled={loading}
               placeholder={
                 loading
                   ? "Thinking…"
                   : activeDoc && activeDoc.status !== "READY"
-                  ? "Processing document..."
+                  ? "Type your question — we'll send it once the document is ready."
                   : docs.length === 0
                   ? "Ask anything, or attach a document for grounded answers... (Shift+Enter for new line)"
                   : "Ask anything about your documents... (Shift+Enter for new line)"
@@ -1684,7 +1684,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                   onLangChange={handleVoiceLangChange}
                   onTranscript={handleVoiceTranscript}
                   onInterimText={handleInterimText}
-                  disabled={loading || (activeDoc != null && activeDoc.status !== "READY")}
+                  disabled={loading}
                 />
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -1696,7 +1696,14 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                     <span aria-hidden="true">⏹</span> Stop
                   </button>
                 ) : (
-                  <button type="submit" disabled={!query.trim() || loading} className="btn btn-primary" aria-label="Send message" style={{ height: "36px", minWidth: "64px" }}>Send</button>
+                  <button
+                    type="submit"
+                    disabled={!query.trim() || loading || (activeDoc != null && activeDoc.status !== "READY")}
+                    className="btn btn-primary"
+                    aria-label="Send message"
+                    title={activeDoc != null && activeDoc.status !== "READY" ? "Waiting for document to finish processing…" : undefined}
+                    style={{ height: "36px", minWidth: "64px" }}
+                  >Send</button>
                 )}
               </div>
             </div>
