@@ -366,7 +366,9 @@ async def register(
     client_ip = client_ip.split(",")[0].strip()
     await _check_ip_rate_limit(client_ip)
 
-    # 4. Create user
+    # 4. Create user — deep-debug A1: email verification is now optional, so
+    # users start with email_verified=True. The /auth/verify-email endpoint
+    # remains for users who want to re-verify, but it no longer gates queries.
     new_user = User(
         email=email,
         hashed_password=hash_password(body.password),
@@ -376,16 +378,14 @@ async def register(
         plan="trial",
         trial_queries_used=0,
         trial_started_at=datetime.utcnow(),
-        email_verified=False,
+        email_verified=True,
     )
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
 
-    # 5. Generate OTP, store in Redis, send email
-    otp = "".join(random.choices(string.digits, k=6))
-    await _store_email_otp(str(new_user.id), otp)
-    _send_otp_email(email, otp)
+    # 5. OTP generation/email skipped (A1). Kept the helpers in case verification
+    # is re-enabled later.
 
     # 6. Persist device fingerprint (no TTL = permanent trial lock per device)
     device_id = request.headers.get("X-Device-ID", "").strip()
@@ -401,7 +401,7 @@ async def register(
     return {
         "success": True,
         "user_id": str(new_user.id),
-        "message": "Account created. Check your email for the verification code.",
+        "message": "Account created. Sign in to get started.",
     }
 
 

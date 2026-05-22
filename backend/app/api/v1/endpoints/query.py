@@ -158,13 +158,10 @@ async def ask_question_stream(
 
     async def event_generator():
         try:
-            # Phase 10 — email verification gate
             user_id = str(current_user["id"])
-            user_row = await db.execute(select(User).where(User.id == user_id))
-            user_obj = user_row.scalar_one_or_none()
-            if user_obj and not user_obj.email_verified:
-                yield f"event: error\ndata: {json.dumps({'detail': 'email_not_verified', 'message': 'Please verify your email first.'})}\n\n"
-                return
+            # Phase 10 email-verification gate removed (deep-debug A1): verification is now
+            # optional. Backend may still flip email_verified on /verify-email, but unverified
+            # users are not blocked from asking questions.
 
             # Phase 10 — trial quota check (raises HTTP 402 if exhausted)
             trial_status = await check_and_increment_trial(user_id=user_id, db=db)

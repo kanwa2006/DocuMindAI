@@ -17,6 +17,13 @@ export default function LoginPage() {
     if (searchParams.get('expired') === 'true') {
       toast.error('Your session expired. Please sign in again.');
     }
+    if (searchParams.get('registered') === 'true') {
+      toast.success('Account created — sign in to continue.');
+    }
+    const prefillEmail = searchParams.get('email');
+    if (prefillEmail) {
+      setEmail(prefillEmail);
+    }
   }, []);
 
 

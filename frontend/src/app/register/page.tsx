@@ -3,7 +3,6 @@
 import { useState } from "react";
 import Link from "next/link";
 import { register } from "@/lib/api";
-import EmailVerificationScreen from "@/components/EmailVerificationScreen";
 
 export default function RegisterPage() {
   const [email, setEmail] = useState("");
@@ -12,7 +11,6 @@ export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [step, setStep] = useState<"form" | "verify">("form");
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,23 +30,14 @@ export default function RegisterPage() {
 
     try {
       await register({ email, password, full_name: fullName || undefined });
-      setStep("verify");
+      // A1: skip OTP — go straight to /login with the email pre-filled.
+      window.location.href = `/login?registered=true&email=${encodeURIComponent(email)}`;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Registration failed.";
       setError(message);
-    } finally {
       setLoading(false);
     }
   };
-
-  const handleVerified = () => {
-    // After email verification, send to login so user gets a fresh JWT
-    window.location.href = "/login?registered=true";
-  };
-
-  if (step === "verify") {
-    return <EmailVerificationScreen email={email} onVerified={handleVerified} />;
-  }
 
   return (
     <div className="min-h-screen flex flex-col lg:flex-row">
