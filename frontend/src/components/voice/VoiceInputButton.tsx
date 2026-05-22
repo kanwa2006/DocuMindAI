@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "react-hot-toast";
 import { useVoiceInput } from "../../hooks/useVoiceInput";
 
@@ -31,6 +31,15 @@ export default function VoiceInputButton({
 }: VoiceInputButtonProps) {
   const { state, interimText, errorMessage, isSupported, startListening } =
     useVoiceInput(onTranscript, voiceLang);
+
+  // Mount flag — the <select> below renders the *browser-resolved* voiceLang
+  // (parent reads it from localStorage in a useEffect, so the value can differ
+  // from the server-rendered HTML). Render the select only after hydration to
+  // sidestep "Hydration failed... server rendered HTML didn't match client".
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const startListeningRef = useRef(startListening);
   startListeningRef.current = startListening;
@@ -94,34 +103,44 @@ export default function VoiceInputButton({
     ? "Processing…"
     : "Ask with voice (Ctrl+Shift+V)";
 
+  const selectStyle: React.CSSProperties = {
+    height: "28px",
+    padding: "0 4px",
+    fontSize: "11px",
+    fontFamily: "var(--font-body)",
+    background: "var(--surface-sunken)",
+    border: "1px solid var(--border-default)",
+    borderRadius: "6px",
+    color: "var(--text-secondary)",
+    cursor: "pointer",
+    flexShrink: 0,
+    maxWidth: "84px",
+  };
+
   return (
     <>
-      {/* Language selector */}
-      <select
-        value={voiceLang}
-        onChange={(e) => onLangChange(e.target.value)}
-        aria-label="Voice input language"
-        title="Voice language"
-        style={{
-          height: "28px",
-          padding: "0 4px",
-          fontSize: "11px",
-          fontFamily: "var(--font-body)",
-          background: "var(--surface-sunken)",
-          border: "1px solid var(--border-default)",
-          borderRadius: "6px",
-          color: "var(--text-secondary)",
-          cursor: "pointer",
-          flexShrink: 0,
-          maxWidth: "84px",
-        }}
-      >
-        {LANGUAGES.map((l) => (
-          <option key={l.code} value={l.code}>
-            {l.label}
-          </option>
-        ))}
-      </select>
+      {/* Language selector — rendered client-only to avoid hydration mismatch
+          on the `value` attribute when localStorage overrides the default. */}
+      {mounted ? (
+        <select
+          value={voiceLang}
+          onChange={(e) => onLangChange(e.target.value)}
+          aria-label="Voice input language"
+          title="Voice language"
+          style={selectStyle}
+        >
+          {LANGUAGES.map((l) => (
+            <option key={l.code} value={l.code}>
+              {l.label}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <span
+          aria-hidden="true"
+          style={{ ...selectStyle, display: "inline-block", width: "60px" }}
+        />
+      )}
 
       {/* Mic button */}
       <button
