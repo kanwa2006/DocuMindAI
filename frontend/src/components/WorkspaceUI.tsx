@@ -793,10 +793,11 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const sendMessage = useCallback(async (queryText: string) => {
     if (!queryText.trim()) return;
     window.speechSynthesis?.cancel?.();
-    // C10 — no-document mode: allow asking without an attached doc. If a doc *is*
-    // attached but still processing, gate.
+    // C10 — no-document mode: allow asking without an attached doc. If a doc IS
+    // attached but still processing, silently bail. The Send button is already
+    // disabled in this state and there's an inline hint below the input — no
+    // need to stack a blocking toast on every Enter keypress.
     if (activeDoc && activeDoc.status !== "READY") {
-      toast.error("Please wait for document to be ready.");
       return;
     }
 
@@ -1688,6 +1689,32 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                 />
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {activeDoc != null && activeDoc.status !== "READY" && !loading && (
+                  <span
+                    aria-live="polite"
+                    style={{
+                      fontFamily: "var(--font-body)",
+                      fontSize: "12px",
+                      color: "var(--text-tertiary)",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: "8px",
+                        height: "8px",
+                        borderRadius: "50%",
+                        background: "var(--warning, #f59e0b)",
+                        animation: "pulse 1.4s ease-in-out infinite",
+                        display: "inline-block",
+                      }}
+                    />
+                    Document processing…
+                  </span>
+                )}
                 {query.length > 3200 && (
                   <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-tertiary)" }}>{query.length} / 4000</span>
                 )}
