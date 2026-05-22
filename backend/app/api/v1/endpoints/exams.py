@@ -28,15 +28,22 @@ router = APIRouter()
 
 class ExamSection(BaseModel):
     label: str           # "A", "B", "C"
-    question_type: str   # "mcq", "short", "long", "case_study"
-    total_marks: int
+    question_type: str   # "mcq", "short", "medium", "long", "case_study"
+    total_marks: float   # decimal-friendly (e.g. 2.5 marks/question)
     count: int
+    # deep-debug B4: optional flag — if true, the LLM is asked to break some
+    # questions in this section into (a)/(b)/(c) sub-parts whose marks sum to
+    # the parent mark. Default false keeps current behaviour for existing UIs.
+    allow_subquestions: bool = False
+    # Optional per-question marks override. If unset, parent marks_per_question
+    # = total_marks / count (so sub-questions get computed marks from there).
+    marks_per_question: Optional[float] = None
 
 class ExamGenerationRequest(BaseModel):
     sections: List[ExamSection]
     subject: str
     board: str = "CBSE"
-    total_marks: int = 100
+    total_marks: float = 100   # decimal-friendly
     duration_minutes: int = 180
     instructions: str = ""
     difficulty: str = "mixed"
@@ -46,7 +53,8 @@ class ExamGenerationRequest(BaseModel):
     @model_validator(mode="after")
     def validate_marks(self):
         total = sum(s.total_marks for s in self.sections)
-        if total != self.total_marks:
+        # tolerate float arithmetic noise: 1.0 + 1.0 + … == 3.0000000004 etc.
+        if abs(total - self.total_marks) > 0.01:
             raise ValueError(
                 f"Section marks total ({total}) != paper total ({self.total_marks})"
             )
@@ -54,12 +62,12 @@ class ExamGenerationRequest(BaseModel):
 
 # ─── Task 6-T4: Marks Validation Engine ──────────────────────────────────────
 
-def validate_marks_allocation(sections: List[ExamSection], total_marks: int, bloom_distribution: Dict[str, int]) -> List[str]:
+def validate_marks_allocation(sections: List[ExamSection], total_marks: float, bloom_distribution: Dict[str, int]) -> List[str]:
     """Returns empty list if valid, list of error strings if invalid."""
     errors = []
 
     section_total = sum(s.total_marks for s in sections)
-    if section_total != total_marks:
+    if abs(section_total - total_marks) > 0.01:
         errors.append(f"Section marks total ({section_total}) does not equal paper total ({total_marks}).")
 
     for s in sections:
@@ -67,10 +75,9 @@ def validate_marks_allocation(sections: List[ExamSection], total_marks: int, blo
             errors.append(f"Section {s.label}: total_marks must be > 0.")
         if s.count <= 0:
             errors.append(f"Section {s.label}: count must be > 0.")
-        if s.total_marks > 0 and s.count > 0 and s.total_marks % s.count != 0:
-            errors.append(
-                f"Section {s.label}: total_marks ({s.total_marks}) is not evenly divisible by count ({s.count})."
-            )
+        # deep-debug B2: removed the divisibility error. Marks-per-question now
+        # comes from marks_per_question override OR total/count (which can be a
+        # fraction — totally legitimate, e.g. 2.5 marks/question).
 
     if bloom_distribution:
         bd_total = sum(bloom_distribution.values())
@@ -95,9 +102,14 @@ async def generate_paper(
     if errors:
         raise HTTPException(status_code=400, detail={"validation_errors": errors})
 
+    def _fmt(n: float) -> str:
+        return f"{n:.1f}".rstrip("0").rstrip(".") if n != int(n) else f"{int(n)}"
+
     sections_desc = "\n".join(
         f"  Section {s.label}: {s.count} {s.question_type.upper()} questions, "
-        f"{s.total_marks // s.count} marks each (total {s.total_marks})"
+        f"{_fmt(s.marks_per_question if s.marks_per_question is not None else s.total_marks / s.count)} marks each "
+        f"(total {_fmt(s.total_marks)})"
+        + (". Some questions in this section may be split into sub-parts (a), (b), (c) whose marks sum to the parent question's marks." if s.allow_subquestions else "")
         for s in request.sections
     )
 
@@ -127,12 +139,16 @@ For short/long: provide model answers and step-wise marking schemes.
 
     prompt = (
         f"Generate a complete {request.board} {request.subject} exam paper with {len(request.sections)} sections "
-        f"totaling {request.total_marks} marks and duration {request.duration_minutes} minutes. "
+        f"totaling {_fmt(request.total_marks)} marks and duration {request.duration_minutes} minutes. "
         f"Return ONLY valid JSON with exactly this structure: "
         '{"paper":{"sections":[{"label":"A","questions":[{"num":1,"text":"...","marks":2,'
-        '"bloom_level":"Remember","difficulty":"easy","options":["..."],"correct_index":0}]}]},'
+        '"bloom_level":"Remember","difficulty":"easy","options":["..."],"correct_index":0,'
+        '"subparts":[{"label":"a","text":"...","marks":1},{"label":"b","text":"...","marks":1}]}]}]},'
         '"answer_key":[{"question_number":1,"correct_answer":"...","marking_scheme":"...",'
-        '"bloom_level":"Remember","difficulty":"easy"}]}'
+        '"bloom_level":"Remember","difficulty":"easy"}]}. '
+        "The `subparts` field is OPTIONAL and only present when a question is split; "
+        "if present, the marks must sum to the parent question's marks. "
+        "Marks may be fractional (e.g. 2.5)."
     )
 
     raw = await llm_service.provider.generate(
@@ -172,15 +188,19 @@ For short/long: provide model answers and step-wise marking schemes.
 
 
 def _build_stub_paper(request: ExamGenerationRequest) -> dict:
-    """Build a deterministic stub when LLM JSON parse fails."""
+    """Build a deterministic stub when LLM JSON parse fails. Honours fractional marks."""
     sections = []
     answer_key = []
     q_num = 1
     for s in request.sections:
-        marks_each = s.total_marks // s.count
+        marks_each = (
+            s.marks_per_question
+            if s.marks_per_question is not None
+            else (s.total_marks / s.count if s.count else 0.0)
+        )
         questions = []
         for i in range(s.count):
-            questions.append({
+            q_record = {
                 "num": q_num,
                 "text": f"[{request.subject}] {s.question_type.upper()} question {i+1} on {request.subject}.",
                 "marks": marks_each,
@@ -188,7 +208,16 @@ def _build_stub_paper(request: ExamGenerationRequest) -> dict:
                 "difficulty": request.difficulty,
                 "options": ["Option A", "Option B", "Option C", "Option D"] if s.question_type == "mcq" else [],
                 "correct_index": 0 if s.question_type == "mcq" else None,
-            })
+            }
+            # B4: if allow_subquestions, give the first question in the section a 2-part split
+            # so the user sees the structure rendered.
+            if s.allow_subquestions and i == 0 and marks_each >= 2:
+                half = marks_each / 2
+                q_record["subparts"] = [
+                    {"label": "a", "text": "First sub-part.", "marks": half},
+                    {"label": "b", "text": "Second sub-part.", "marks": marks_each - half},
+                ]
+            questions.append(q_record)
             answer_key.append({
                 "question_number": q_num,
                 "correct_answer": "Option A" if s.question_type == "mcq" else "Model answer.",
