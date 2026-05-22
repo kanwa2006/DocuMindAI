@@ -10,7 +10,7 @@
  * - Legal disclaimer — always visible (Task 6-L1)
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { toast } from "react-hot-toast";
 import { API_BASE } from "../lib/api";
 
@@ -251,8 +251,13 @@ export default function LegalRiskPanel({
     }
   }, [resolvedContractId, activeDocumentId, onFetchContracts]);
 
-  // Auto-fetch on mount
-  useState(() => { fetchReport(); });
+  // Auto-fetch on mount. Previously called `useState(() => fetchReport())`,
+  // which runs the initializer during render and triggers
+  // "Cannot update a component while rendering a different component".
+  useEffect(() => {
+    fetchReport();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const panelStyle: React.CSSProperties = {
     position: "fixed", top: 0, right: 0, bottom: 0,

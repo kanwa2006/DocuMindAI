@@ -7,7 +7,7 @@
  * - Multi-period comparison table with sparkline trend
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { toast } from "react-hot-toast";
 import { API_BASE } from "../lib/api";
 
@@ -303,8 +303,13 @@ export default function FinanceRatioPanel({ documentIds, onClose }: Props) {
     }
   }, [documentIds]);
 
-  // Auto-fetch on mount
-  useState(() => { fetchRatios(); });
+  // Auto-fetch on mount. Was `useState(() => fetchRatios())`, which runs the
+  // initializer during render and triggers React's
+  // "Cannot update a component while rendering a different component" warning.
+  useEffect(() => {
+    fetchRatios();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const panelStyle: React.CSSProperties = {
     position: "fixed", top: 0, right: 0, bottom: 0,

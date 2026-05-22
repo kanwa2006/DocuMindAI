@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { TrustReport, TrustFactor, TrustContradiction, TRUST_LEVEL_CFG } from "./TrustScoreBadge";
 
 interface TrustScorePanelProps {
@@ -217,8 +217,10 @@ export function TrustScorePanel({
 
   const hasContradictions = trust.contradictions?.length > 0;
 
-  // Track analytics on mount
-  useState(() => {
+  // Track analytics on mount. Was `useState(() => { trackEvent(...) })`,
+  // which fires the analytics call during every render and contributes to the
+  // "Cannot update a component while rendering a different component" warning.
+  useEffect(() => {
     trackEvent("trust_score_expanded", {
       trust_level: trust.level,
       score: trust.final_score,
@@ -228,7 +230,8 @@ export function TrustScorePanel({
         num_contradictions: trust.contradictions.length,
       });
     }
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSecondOpinion = useCallback(async () => {
     if (secondOpinionState !== "idle") return;
