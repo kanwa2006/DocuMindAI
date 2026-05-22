@@ -180,29 +180,28 @@ async def verify_upload(
     await db.commit()
     await db.refresh(new_doc)
 
-    # TASK 3.7: Route via extraction_router before OCR queue
-    # Only attempt extraction for local files (S3 paths start with "workspaces/")
-    if not storage_path.startswith("workspaces/") and mime_type == "application/pdf":
-        try:
-            extraction = await route_extraction(storage_path)
-            if not extraction["needs_ocr"]:
-                # Native PDF — text extracted; skip OCR, set INDEXING status
-                new_doc.status = DocumentStatus.INDEXING
-                await db.commit()
-                await db.refresh(new_doc)
-                logger.info(
-                    f"[verify_upload] pymupdf4llm extraction OK for {request.filename} "
-                    f"({len(extraction.get('text', '') or '')} chars) — OCR skipped"
-                )
-            else:
-                # Scanned PDF — dispatch to Celery OCR task
-                process_document.delay(str(new_doc.id))
-        except Exception as exc:
-            logger.warning(f"[verify_upload] extraction_router error: {exc} — falling back to OCR")
-            process_document.delay(str(new_doc.id))
-    else:
-        # S3 path or non-PDF — dispatch OCR as before
+    # Always dispatch the Celery worker. It chunks, embeds, and flips status to READY.
+    # The previous "extraction_router skip OCR" optimization marked native PDFs as
+    # INDEXING but never enqueued the task — documents stayed in INDEXING forever
+    # with no chunks/embeddings, blocking every grounded query. The worker uses
+    # PyMuPDF internally and handles native PDFs efficiently.
+    try:
         process_document.delay(str(new_doc.id))
+        logger.info(
+            f"[verify_upload] dispatched process_document for {request.filename} "
+            f"(id={new_doc.id}, size={size_bytes} bytes)"
+        )
+    except Exception as exc:
+        # Worker/broker down — surface a real failure instead of leaving the doc
+        # stuck in PROCESSING forever.
+        logger.error(f"[verify_upload] Could not enqueue process_document: {exc}")
+        new_doc.status = DocumentStatus.FAILED
+        await db.commit()
+        await db.refresh(new_doc)
+        raise HTTPException(
+            status_code=503,
+            detail="Document queue unavailable. Try again in a moment.",
+        )
 
     return new_doc
 
@@ -273,9 +272,12 @@ async def upload_local(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    FIX 0.8: Local file upload endpoint for development.
-    Saves PDF to ./storage/{workspace_id}/ and returns metadata
-    needed by the verify endpoint.
+    Local file upload endpoint for development.
+
+    Writes the file UNDER settings.STORAGE_PATH so the Celery worker's
+    LocalStorageProvider.download_file (which does `base_dir / object_key`)
+    finds it. Returns an absolute storage_path so verify_upload, the worker,
+    and any serve-file endpoint all agree on the filesystem location.
     """
     if file.content_type not in ALLOWED_MIMES:
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
@@ -292,16 +294,19 @@ async def upload_local(
 
     # Sanitise filename to prevent path traversal
     safe_name = re.sub(r'[^\w.\-]', '_', file.filename or "upload.pdf")
+    safe_workspace = re.sub(r'[^\w.\-]', '_', workspace_id or "general")
     file_hash = hashlib.sha256(content).hexdigest()
     unique_name = f"{uuid.uuid4().hex}_{safe_name}"
 
-    storage_dir = Path(f"./storage/{workspace_id}")
+    storage_base = Path(settings.STORAGE_PATH).resolve()
+    storage_dir = storage_base / safe_workspace
     storage_dir.mkdir(parents=True, exist_ok=True)
-    storage_path = str(storage_dir / unique_name)
+    abs_path = storage_dir / unique_name
 
-    with open(storage_path, "wb") as f:
+    with open(abs_path, "wb") as f:
         f.write(content)
 
+    storage_path = str(abs_path)
     logger.info(f"[upload_local] Saved {safe_name} → {storage_path} ({size} bytes)")
 
     return {
