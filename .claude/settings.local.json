@@ -26,7 +26,9 @@
       "Bash(python -c \"from app.api.v1.endpoints.exams import ExamSection, ExamGenerationRequest, validate_marks_allocation, _build_stub_paper; req = ExamGenerationRequest\\(sections=[ExamSection\\(label='A', question_type='medium', total_marks=5.0, count=2, allow_subquestions=True\\)], subject='Math', total_marks=5.0\\); print\\('errors:', validate_marks_allocation\\(req.sections, req.total_marks, {}\\)\\); print\\('stub paper subparts:', _build_stub_paper\\(req\\)['paper']['sections'][0]['questions'][0].get\\('subparts'\\)\\)\")",
       "Bash(python -c \"from app.api.v1.endpoints.exams import ExamSection, ExamGenerationRequest, validate_marks_allocation; req = ExamGenerationRequest\\(sections=[ExamSection\\(label='A', question_type='medium', total_marks=2.5, count=1, allow_subquestions=False\\)], subject='M', total_marks=2.5\\); print\\('ok marks_per_q implied:', req.sections[0].marks_per_question\\)\")",
       "Bash(git commit -m 'deep-debug E1+E2+E3: account page, settings save, feedback submit *)",
-      "Bash(git commit -m 'deep-debug E4-E7: pricing source of truth, modal retheme, upload to 200 MB *)"
+      "Bash(git commit -m 'deep-debug E4-E7: pricing source of truth, modal retheme, upload to 200 MB *)",
+      "Bash(python -c \"from app import main as _main; print\\('backend imports ok'\\)\")",
+      "Bash(python -c \"from app import main as _main\")"
     ]
   }
 }

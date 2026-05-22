@@ -32,7 +32,7 @@ class ChatSessionResponse(BaseModel):
     workspace_id: Optional[UUID] = None
     tags: Optional[List[str]] = []
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class RenameRequest(BaseModel):
     title: str
@@ -55,7 +55,7 @@ class ChatMessageResponse(BaseModel):
     role: str
     content: str
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 @router.post("", response_model=ChatSessionResponse)
 async def create_chat_session(
@@ -285,7 +285,7 @@ class SharedSessionMessageResponse(BaseModel):
     content: str
     created_at: Optional[datetime] = None
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class SharedSessionResponse(BaseModel):
@@ -296,7 +296,7 @@ class SharedSessionResponse(BaseModel):
     owner_id: UUID4
     messages: List[SharedSessionMessageResponse] = []
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 @router.post("/{session_id}/share")
