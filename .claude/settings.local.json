@@ -33,7 +33,8 @@
       "Bash(python -c \"from app.api.v1.endpoints import query; print\\('query.py imports clean'\\)\")",
       "Bash(python -c \"from app.core.config import settings; print\\(f'STORAGE_PATH={settings.STORAGE_PATH!r}, PROVIDER={settings.STORAGE_PROVIDER!r}'\\)\")",
       "Bash(python -c \"from app.api.v1.endpoints import documents; print\\('documents.py imports clean'\\)\")",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(python -W error -c ' *)"
     ]
   }
 }

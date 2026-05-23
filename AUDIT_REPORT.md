@@ -772,3 +772,296 @@ Frontend deleted:
    primary-blue anymore.
 
 (deep debug session complete — 2026-05-22)
+
+---
+
+## CRITICAL BUG SWEEP (session 4 — 2026-05-23)
+
+The user's "DocuMind AI Critical Bug Sweep + ChatGPT-style Polish" pass.
+Priority order followed strictly: P1 → P3 → P4 → P2 → P5 → P6 → P7 →
+P8 → P9 → W1 → W2 → V1 → V2 → V3 → V4 → S1 → S2.
+
+### P1 — backend NameError `user_obj` in query/stream
+
+**Root cause:** `backend/app/api/v1/endpoints/query.py` `event_generator()`
+referenced `user_obj` at lines 176, 182, 187, 305 but never defined it.
+Every single chat message failed with `NameError: name 'user_obj' is
+not defined`, surfacing as a red toast on Send. This was the blocking
+P1 bug behind every chat failure in the demo.
+
+**Fix:** Load the `User` row once via `SELECT(User).where(User.id == uuid)`
+right after `user_id = str(current_user["id"])`. Tolerate a missing row
+by leaving `user_obj = None` — downstream `getattr(user_obj, "...",
+default)` calls then fall back safely.
+
+**Files:** `backend/app/api/v1/endpoints/query.py`.
+
+### P3 — documents never reached READY
+
+**Two combining bugs:**
+
+1. `verify_upload` (documents.py) short-circuited *native* PDFs (the
+   common case) to status `INDEXING` and never enqueued
+   `process_document.delay()`. Chunks/embeddings were never created;
+   the doc was stuck in INDEXING forever.
+2. `upload/local` wrote files to `./storage/{ws}/HEX_name.pdf`
+   (relative to FastAPI CWD), but the worker's
+   `LocalStorageProvider.download_file` resolves
+   `base_dir / object_key` → `./storage/storage/{ws}/HEX_name.pdf`.
+   Result: `FileNotFoundError` on every worker run, retries exhaust,
+   doc marked FAILED.
+
+**Fix:** Always enqueue `process_document.delay()` on verify. Catch
+broker-unavailable cases and mark FAILED + return 503 instead of
+silently leaving the doc PROCESSING. `upload_local` now writes under
+`settings.STORAGE_PATH` and stores an absolute storage_path so the
+worker resolves correctly (Path / abs_path returns abs_path on Python).
+
+**Files:** `backend/app/api/v1/endpoints/documents.py`.
+
+### P4 — toast spam on Send while doc still processing
+
+`sendMessage` showed `toast.error("Please wait for document to be
+ready.")` on every Enter even though the Send button was already
+disabled in that state. With double-Toaster (see P7) this stacked.
+
+**Fix:** Silently bail from `sendMessage` when the gate is active.
+Add a subtle pulsing-dot "Document processing…" hint inline next to
+Send so the user still gets feedback without a blocking toast.
+
+**Files:** `frontend/src/components/WorkspaceUI.tsx`.
+
+### P2 — `updateChat` Network error
+
+Downstream of P1. The backend was 500-ing on chat operations because
+the streaming endpoint NameError aborted the request mid-flight in
+some traces. No additional fix needed after P1 + P3 landed. Confirmed
+PATCH `/chats/{id}` returns 200 with the existing
+`ChatSessionUpdate(title?, is_pinned?, is_archived?, workspace_type?)`
+contract.
+
+### P5 — setState during render in panels
+
+Three panels called `useState(() => fetchOnMount())` where `useEffect`
+was intended. `useState`'s initializer runs *during* render, so the
+fetch and its `.finally(setLoading(false))` triggered React's
+"Cannot update a component while rendering a different component"
+on every panel mount.
+
+**Files fixed:**
+- `frontend/src/components/LegalRiskPanel.tsx`
+- `frontend/src/components/FinanceRatioPanel.tsx`
+- `frontend/src/components/veritas/TrustScorePanel.tsx`
+
+Switched each to `useEffect(..., [])`. `CandidateRankingsPanel` already
+used `useEffect`; `ResearchGapsPanel` is button-triggered (no auto-fetch).
+
+### P6 — VoiceInputButton hydration mismatch
+
+`<select value={voiceLang}>` in `voice/VoiceInputButton.tsx` mismatched
+server-rendered HTML vs first client render because the parent reads
+`voiceLang` from localStorage in a `useEffect`. The first client
+render painted a different value than the SSR pass.
+
+**Fix:** Added a `mounted` flag (set inside `useEffect`) and render an
+empty same-size placeholder during SSR / first paint. The real
+`<select>` swaps in post-mount, so hydration sees identical HTML.
+
+**Files:** `frontend/src/components/voice/VoiceInputButton.tsx`.
+
+### P7 — stacked "Failed to fetch" toasts + paper generator
+
+Found the real cause of stacked toasts: **two `<Toaster>` instances
+were mounted** — one in `app/layout.tsx` (global), one in
+`WorkspaceUI.tsx`. react-hot-toast renders each toast in every
+Toaster, so a single failure produced two stacked banners.
+
+Paper generator backend (B1-B5) was already correct from session 3
+(float marks, no divisibility error, subparts support). Frontend
+already used `toast({id: toastId})` for dedupe. The doubling was
+purely the second Toaster.
+
+**Fix:** Drop the WorkspaceUI Toaster, fold its dark-mode className
+into the global one in `app/layout.tsx`, add `gutter: 6` and per-error
+`duration: 5000`.
+
+**Files:** `frontend/src/app/layout.tsx`,
+`frontend/src/components/WorkspaceUI.tsx`.
+
+### P8 — upgrade CTAs
+
+All paths already wired (confirmed by trace):
+- TrialPill → opens UpgradeModal (`onClick={() => openUpgradeModal('user_click')}`)
+- UpgradeModal Subscribe → POST `/billing/upgrade` → window.location.reload
+- `/billing` plan buttons → `upgradePlan()` → toast + refresh
+- Account "Manage billing →" → /billing
+- Marketing pricing cards → /register
+
+No dead clicks. The dev-mode "Subscribe Now" flips the plan in the DB
+(no real payment); for production a Razorpay/Stripe webhook would
+replace the direct call — `billing.py:upgrade_plan` already notes this.
+
+### P9 — dead workspace mode buttons
+
+`WORKSPACE_ACTIONS` had 11 labels with no `onClick`: exam→{Question
+Bank, Export DOCX}, hr→{Set JD Context, Export Candidates}, study→
+{Study Mode, My Progress}, finance→{Extraction Mode, Table Mode},
+research→{Review Mode, Import Papers}, legal→{Contract Mode, Clause
+Library}.
+
+**Fix:** Every chip now does one of:
+- open the relevant panel (Finance Table Mode → reuses
+  TableExtractionPanel, gate broadened to also render in finance),
+- trigger the file picker (Research Import Papers),
+- download a real export (Exam Export DOCX → GET
+  /exams/{id}/export/docx + blob download),
+- drop a concrete grounded prompt into the input so the user can Send
+  immediately.
+
+A final fallback toast ("This action isn't wired up yet") catches any
+unexpected label.
+
+**Files:** `frontend/src/components/WorkspaceUI.tsx`.
+
+### W1 — Go / Plus / Pro tier rename
+
+Single source of truth in `frontend/src/lib/pricing.ts`:
+- `PLANS = [Go ₹799, Plus ₹999 (featured), Pro ₹2999]`
+- Each plan has id, name, price, tagline, features, featured flag.
+- Old `PRO_MONTHLY_PRICE` / `PRO_ANNUAL_MONTHLY_PRICE` /
+  `ENTERPRISE_MONTHLY_PRICE` kept as derived re-exports so legacy
+  callers don't break.
+
+Surfaces rendering from `PLANS`:
+- `frontend/src/app/pricing/page.tsx` — clean 4-column grid (Free +
+  Go + Plus + Pro), greyscale CTAs, featured plan gets a darker
+  border.
+- `frontend/src/app/billing/page.tsx` — per-tier card grid with single
+  "Choose <plan>" button. `PLAN_LABEL` maps legacy DB values
+  (`professional`/`enterprise`) to the new vocabulary so old
+  subscriptions surface as "Plus"/"Pro" not "Professional"/
+  "Enterprise".
+- `frontend/src/app/(marketing)/page.tsx` PRICING array now spreads
+  PLANS.
+- `frontend/src/components/UpgradeModal.tsx` — three-tier selector
+  replaces the annual/monthly toggle. Default picks the featured
+  plan; CTA reads `Upgrade to <Plan> → ₹<price>/mo`.
+
+Backend extended to accept the new vocabulary alongside legacy:
+- `backend/app/api/v1/endpoints/billing.py` `UpgradeRequest.plan`
+  Literal now includes `go|plus|pro` in addition to
+  `professional|business|enterprise`. DB still stores whatever string
+  we set — no migration.
+- `frontend/src/lib/api.ts` `upgradePlan()` signature widened to
+  match.
+
+### W2 — ChatGPT-style copy
+
+`WORKSPACE_CONFIG` titles and quick-action chips rewritten:
+- general "Ask anything about your documents" → "What can I help with?"
+- exam "Generate Professional Question Papers" → "Build an exam paper"
+- legal "Contract Analysis & Risk Assessment" → "Review contracts"
+- finance "Financial Document Intelligence" → "Read financial documents"
+- hr, study, research similarly compressed to single short
+  imperatives.
+- Quick actions lost their emoji prefixes and shrunk to short verbs
+  ("Summarize", "Compare", "Extract clauses", "Rank candidates").
+- Welcome panel's 64-px emoji is hidden when icon is empty; rounded-
+  pill chips updated.
+
+### V1-V4 — visual polish
+
+V1 (Inter), V2 (neutral palette), V3 (rounded input bar), V4
+(sidebar toggle) already landed in session 3. This pass cleaned the
+straggler hardcoded blues a grep turned up:
+- `/forgot-password` + `/reset-password` primary buttons (`#4f46e5`
+  fallback) → `var(--brand)` + `var(--brand-text)`.
+- `/not-found` 404 numeral azure → `--text-disabled`.
+- `CandidateRankingsPanel.STAGE_COLORS.screened/shortlisted` from raw
+  indigo/azure to text-token greyscale; inline `#2563eb` → `var(--brand)`.
+- `shared/[token]` page + `NotificationCenter` fallback `#6366f1` →
+  `#0D0D0D`.
+
+Workspace identity dots (`--ws-*-accent`) intentionally retain hue —
+they're the only color cue distinguishing workspaces.
+
+### S1 — additional sweeps
+
+- `useState(() => fn())` grep: no further instances.
+- `setState during render / while rendering` grep: only my P5 comment
+  fixes match.
+- Empty `.catch {}` grep: only the documented "transient" fallbacks
+  in polling loops, intentional.
+
+### S2 — clean startup
+
+- `from app import main` from `backend/`: clean. Gemini bridge reports
+  **21 keys** at startup.
+- All 24 endpoint modules import without error.
+- Pydantic deprecation warnings: **0** (orm_mode → from_attributes
+  already done in session 3).
+- SMTP guard: `email_service.send_email()` returns early when
+  `BREVO_SMTP_USER` / `BREVO_SMTP_PASSWORD` are unset — no SMTP error
+  spam.
+- `.env`: `DATABASE_URL_SYNC` includes `sslmode=require`;
+  `GEMINI_API_KEY_1..21` all present.
+- Celery worker imports clean; 15 tasks registered.
+- `npx tsc --noEmit` on frontend: source tree clean (only the
+  pre-existing stale `.next/types/validator.ts` artefact remains).
+
+### Files modified / created this session
+
+Backend:
+- `backend/app/api/v1/endpoints/query.py` (P1)
+- `backend/app/api/v1/endpoints/documents.py` (P3)
+- `backend/app/api/v1/endpoints/billing.py` (W1)
+
+Frontend:
+- `frontend/src/components/WorkspaceUI.tsx` (P4, P7, P9, W2)
+- `frontend/src/components/LegalRiskPanel.tsx` (P5)
+- `frontend/src/components/FinanceRatioPanel.tsx` (P5)
+- `frontend/src/components/veritas/TrustScorePanel.tsx` (P5)
+- `frontend/src/components/voice/VoiceInputButton.tsx` (P6)
+- `frontend/src/components/UpgradeModal.tsx` (W1)
+- `frontend/src/components/CandidateRankingsPanel.tsx` (V2)
+- `frontend/src/components/NotificationCenter.tsx` (V2)
+- `frontend/src/app/layout.tsx` (P7)
+- `frontend/src/app/billing/page.tsx` (W1)
+- `frontend/src/app/pricing/page.tsx` (W1)
+- `frontend/src/app/(marketing)/page.tsx` (W1)
+- `frontend/src/app/forgot-password/page.tsx` (V2)
+- `frontend/src/app/reset-password/page.tsx` (V2)
+- `frontend/src/app/not-found.tsx` (V2)
+- `frontend/src/app/shared/[token]/page.tsx` (V2)
+- `frontend/src/lib/api.ts` (W1)
+- `frontend/src/lib/pricing.ts` (W1, full rewrite)
+
+### What works now (vs session-4 entry conditions)
+
+| Surface | Session-4 start | Now |
+|---|---|---|
+| Send any chat message | 500 `name 'user_obj' is not defined` | Streams a grounded answer |
+| Upload PDF → poll | Stuck PROCESSING/INDEXING forever | Reaches READY; FAILED surfaces on real errors |
+| Type while doc processing | Send toast spammed on every Enter | Silent gate + inline pulsing-dot hint |
+| LegalRiskPanel mount | React setState-in-render warning | Clean useEffect mount |
+| FinanceRatioPanel mount | Same warning | Clean useEffect mount |
+| TrustScorePanel expansion | Same warning | Clean useEffect mount |
+| Workspace pages | Hydration mismatch on VoiceInputButton | Clean hydration via mounted flag |
+| Single failure | 6 stacked toasts (two Toasters) | 1 toast |
+| Plan tiers | Professional ₹799/₹999 + Enterprise ₹2,999 | Go ₹799 / Plus ₹999 / Pro ₹2,999 — single source of truth |
+| Workspace welcome copy | "Generate Professional Question Papers…" | ChatGPT-style "Build an exam paper" |
+| WORKSPACE_ACTIONS dead buttons | 11 no-op clicks | Every chip wired (panel/picker/export/prompt) |
+| Hardcoded blue accents | 7 inline indigo/azure values | Routed through --brand or text tokens |
+
+### Smoke-test order for the user
+
+1. **Send works** — open `/general`, type "hello", click Send → streams an answer (no `user_obj` toast).
+2. **Upload reaches READY** — drag a PDF into `/general`, watch the chip; pulse stops, status flips to READY within a few seconds (first time may take longer while BAAI/bge-m3 downloads).
+3. **Type during processing** — upload + immediately start typing → input is enabled, Send disabled with a "Document processing…" dot.
+4. **Panel mounts** — click "Risk Report" on `/legal`, "Ratios" on `/finance`, expand a Trust Score badge → no React warning in console.
+5. **Voice select** — open any workspace, no "Hydration failed" error.
+6. **Single toast** — disconnect backend, click Send → exactly one error toast, not six.
+7. **Mode buttons** — click every chip in `WORKSPACE_ACTIONS` for each workspace → either opens a panel or fills the prompt; no dead clicks.
+8. **Pricing/Billing** — `/pricing`, `/billing`, and the UpgradeModal all show **Go ₹799 / Plus ₹999 / Pro ₹2,999**. Pick "Plus" in the modal, click Upgrade → flips plan + reloads.
+
+(critical bug sweep complete — 2026-05-23)

@@ -187,7 +187,7 @@ The audit was static. Recommended manual checks (in this order):
 
 ---
 
-Last updated: deep debug session 3 (2026-05-22).
+Last updated: critical-bug-sweep session 4 (2026-05-23).
 
 ---
 
@@ -228,3 +228,66 @@ has no `mode` column. One alembic migration away.
 doesn't exist (the file is page.tsx). Same artefact was noted in
 session 2 STEP 15. Harmless — `npx tsc --noEmit` reports it but it's
 a build cache, not source. Cleared on next `rm -rf .next` + rebuild.
+
+---
+
+## Updates from critical-bug-sweep session 4 (2026-05-23)
+
+### Resolved this session
+
+- **P1** — `user_obj` NameError in `query.py` event_generator fixed.
+- **P3** — Documents reach READY: always-dispatch +
+  STORAGE_PATH-relative absolute writes.
+- **P4** — Send toast spam silenced; inline "Document processing…" hint
+  added.
+- **P5** — three `useState(() => fn())` → `useEffect` conversions
+  (Legal, Finance, TrustScore).
+- **P6** — VoiceInputButton `<select>` rendered client-only via
+  `mounted` flag.
+- **P7** — duplicate `<Toaster>` removed; one global Toaster in
+  `app/layout.tsx`.
+- **P9** — every WORKSPACE_ACTIONS chip wired (11 ex-no-ops).
+- **W1** — `Go ₹799 / Plus ₹999 / Pro ₹2,999` rendered from single
+  `lib/pricing.ts` source; backend `/billing/upgrade` accepts new
+  vocabulary alongside legacy.
+- **W2** — workspace welcome titles + quick actions rewritten in
+  ChatGPT-style plain language.
+- **V2 stragglers** — hardcoded indigo / azure (#4f46e5, #6366f1,
+  #2563eb) removed from forgot/reset-password buttons, /not-found 404,
+  CandidateRankingsPanel STAGE_COLORS, shared/[token], NotificationCenter.
+
+### New deferred items
+
+#### Real Razorpay / Stripe checkout
+
+The `/billing/upgrade` endpoint flips the `User.plan` column to the
+requested string and reloads. There is no actual payment integration
+yet — clicking "Upgrade to Plus" in dev grants Plus access for free.
+For production, replace the direct DB write with a Razorpay/Stripe
+webhook handler that:
+1. Creates a payment order.
+2. Returns the checkout URL to the frontend (frontend redirects).
+3. Receives a webhook on success and *then* sets `User.plan` /
+   `subscribed_at` / `subscription_ends_at`.
+
+`billing.py:upgrade_plan`'s docstring already flags this ("In
+production: validate Razorpay/Stripe webhook instead of direct call.").
+
+#### Plan tier semantics in backend
+
+UI shows Go / Plus / Pro as distinct tiers, but the backend currently
+treats them identically (no per-plan quota differences, no per-plan
+feature gating). The trial gate is the only quota enforced
+(`TRIAL_QUERY_LIMIT = 10` for `plan == 'trial'`). When monetization
+matters, extend `core/trial_enforcement.py` (or a new
+`plan_enforcement.py`) with per-tier rules — e.g. Go = 200 queries/mo,
+Plus = unlimited, Pro = unlimited + multi-user.
+
+#### Worker first-upload latency (model download)
+
+First upload on a fresh machine downloads BAAI/bge-m3 (~1.2 GB) inside
+the worker. The user sees the doc stuck in PROCESSING for several
+minutes with no progress indicator. P4's "Document processing…" dot
+now keeps the input usable, but a small "first upload may take a
+moment — downloading the embedding model" hint would be friendlier.
+Could be inferred from the first call to `embedding_service.generate_embeddings`.
