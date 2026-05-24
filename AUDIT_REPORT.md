@@ -1965,4 +1965,109 @@ fix needed.
 Workspace response-schema and language-instruction layers from query.py
 still concatenate on top.
 
+### PHASE 4 — Proof template (PENDING the user)
+
+I cannot run the full stack from this session (no live backend/frontend
+spin-up). The proof requires the user to run the worker + backend +
+frontend and execute the steps below, then paste the outcomes back into
+this report. All modified Python files pass `ast.parse` (sanity check
+above).
+
+**Smoke tests in priority order:**
+
+1. **P1 — per-chat isolation.**
+   - Chat A: upload `Contract.pdf` → wait READY → ask "What are the
+     payment terms?" → cites `Contract.pdf, p.N`.
+   - Chat B (New Chat, same workspace, no upload): ask same question →
+     no-doc mode, NO citation of `Contract.pdf`.
+   - Chat C: upload `Financials.pdf` only → ask "What are the
+     payment terms?" → cites ONLY `Financials.pdf`, never
+     `Contract.pdf`.
+
+2. **PHASE 2 — full-document coverage.**
+   - Upload a >10-page PDF (textbook chapter or similar).
+   - Ask: "Explain everything in this document in detail."
+   - Backend log should show `Summary intent detected → map-reduce on
+     N docs` and `mapping_X_windows`.
+   - Answer should reference content from LATE pages (not just first
+     pages). Paste a quote from the answer + the page number it cites.
+   - Then ask a specific question about a fact on a late page;
+     confirm correct page citation.
+
+3. **P2 — chips don't auto-send.**
+   - Exam workspace: click "Generate paper" welcome chip → Paper
+     Configuration panel opens, network tab shows zero `/query/stream`
+     request.
+   - General workspace: click "Summarize" welcome chip → textarea
+     fills with the canned prompt; nothing fires until Send.
+
+4. **P3 — Gemini guard.**
+   - Attach 3+ large PDFs, ask a question that would push the model's
+     output to MAX_TOKENS. Confirm a real answer streams, OR the user
+     sees a friendly "The response was cut off…" line — never a red
+     "finish_reason is 1" toast.
+
+5. **P4 — settings + paper.**
+   - /settings: change AI Response Language → "Settings saved." (green).
+   - Exam workspace → Paper Config → click Generate → "Paper generated!"
+     toast → paper appears in chat.
+
+6. **P6 — doc status + Send lock.**
+   - Upload a PDF, observe the chip cycle Processing → READY; Send
+     stays disabled until READY then unlocks.
+   - Reload the page mid-processing; chip continues updating via the
+     new polling effect.
+
+7. **P7 — chat auto-name.**
+   - New chat → send "What does this contract require us to do?" →
+     Sidebar title updates from "New … chat" to "What does this
+     contract require us to do" (truncated to 37 chars + "…" if longer).
+
+8. **P8 — pptx upload.**
+   - Upload a `.pptx` → chip cycles to READY → ask about a specific
+     slide → answer cites the slide number.
+
+9. **P9 — OTP reset.**
+   - /forgot-password → email → backend log prints `OTP=NNNNNN` →
+     paste OTP into the verify step → set new password → land on
+     `/login?reset=true`. Resend button disabled with countdown.
+
+10. **P10 + misc — trust score + dup reply + trial pill.**
+    - Ask a grounded question → badge shows e.g. "✓ Trust Score 78%
+      · High" (number visible).
+    - After streaming finishes, only ONE AI message renders (no flash
+      of two).
+    - Trial pill in the header decrements by 1 immediately after each
+      Send.
+
+When proven, mark each `[ ]` above with `✅` and paste the supporting
+log line or screenshot caption.
+
+---
+
+## Files modified in this isolation + answer-quality session
+
+| File | What changed |
+|---|---|
+| `backend/app/schemas/document.py` | Added `chat_session_id` to create + response |
+| `backend/app/api/v1/endpoints/documents.py` | Persist + filter by `chat_session_id`; widen ALLOWED_MIMES for pptx |
+| `backend/app/api/v1/endpoints/query.py` | Look up chat's docs; pass to grounding; map-reduce branch for summary intents |
+| `backend/app/api/v1/endpoints/users.py` | Cast user_id to uuid; wrap update in try/except for clean 500 |
+| `backend/app/api/v1/endpoints/auth.py` | OTP-based forgot-password / verify-otp / reset-password |
+| `backend/app/core/config.py` | Higher top_k per workspace; new GROUNDING_TOKEN_BUDGET |
+| `backend/app/core/middleware.py` | `/auth/verify-otp` added to CSRF_EXEMPT_PATHS |
+| `backend/app/services/grounding_service.py` | Accept document_ids; sort by (file, page, chunk); honor settings budget |
+| `backend/app/services/llm_service.py` | `_safe_extract_text` guard + new layered system prompt |
+| `backend/app/services/ocr_service.py` | pptx dispatch via extension + ZIP magic |
+| `backend/app/services/summary_service.py` | NEW — map-reduce summary service |
+| `backend/requirements.txt` | Added python-pptx>=0.6.23 |
+| `frontend/src/lib/api.ts` | uploadDocument/listDocuments/ClipText now accept chat session id; OTP helpers |
+| `frontend/src/components/WorkspaceUI.tsx` | Per-chat doc rail; live polling; Send lock; auto-name; chip prefill; trial pill; ConfidenceBadge percentage |
+| `frontend/src/components/clips/ClipModal.tsx` | Forward chatSessionId in clip request |
+| `frontend/src/components/PaperConfigPanel.tsx` | Switch raw fetch → apiFetch (CSRF) |
+| `frontend/src/components/voice/VoiceInputButton.tsx` | Gate whole component on `mounted` (SSR fix) |
+| `frontend/src/app/forgot-password/page.tsx` | Rewrite as 3-step OTP UI |
+| `frontend/src/app/reset-password/page.tsx` | Soft fallback page |
+
+
 
