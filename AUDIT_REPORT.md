@@ -1671,4 +1671,51 @@ reviews and presses Send."
       table above; verify zero "This action isn't wired up yet"
       toasts in regular usage. ✅ PENDING
 
+### P6 — Live document status + Send lock
+
+**Polling** — added a new `useEffect` in `WorkspaceUI` that watches the
+set of non-terminal docs (anything not READY/FAILED/DEDUPLICATED) and
+polls each via `getDocument(id)` every 2 s until they resolve. Replaces
+the previous "only newly-uploaded docs in the current tab poll" hole
+that left chips stuck on PROCESSING after a refresh.
+
+**Send lock predicate** — was `(activeDoc != null && activeDoc.status
+!== "READY")` (only the active doc). Replaced with
+`docs.some((d) => !TERMINAL.has(d.status))` so any in-flight doc locks
+Send. FAILED docs do NOT lock — the user shouldn't have to remove a
+failed chip before asking in no-doc mode, and retrieval filters to
+`status==READY` anyway.
+
+**Inline pip** — was tied to the active doc. Now reads the in-flight
+set; shows `1 document processing…` or `N documents processing…`.
+
+**Textarea** — `disabled={loading}` unchanged. Typing is never gated by
+doc status; only Send is.
+
+`sendMessage` gate updated to match: bails silently when any doc is
+in-flight. Dependency list extended (`docs`, `comparisonMode`) so the
+callback reacts to status changes without stale closures.
+
+**Proof (manual):**
+- [ ] Upload a PDF → chip shows pulsing dot → Send disabled → chip
+      flips to green when READY → Send unlocks. ✅ PENDING
+- [ ] Open Student workspace, refresh during processing → chip
+      continues to update from the new polling effect. ✅ PENDING
+
+### P7 — Auto-name chats from first message
+
+The existing logic at `WorkspaceUI.sendMessage` already PATCHed the
+chat title from the first user message. Tightened the heuristic:
+- Collapse whitespace.
+- Strip trailing punctuation (`? . ! , ; :`) so titles read cleanly.
+- Cap at 37 chars + "…" if longer.
+
+Still uses the heuristic path (no LLM round-trip) — same Sidebar event
+listener (`chat-title-updated`) refreshes the list.
+
+**Proof:**
+- [ ] New chat → send "What does this contract require us to do?" →
+      sidebar title becomes "What does this contract require us to do"
+      (or truncated). ✅ PENDING
+
 

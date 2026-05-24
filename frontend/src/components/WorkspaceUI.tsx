@@ -803,6 +803,48 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     syncWorkspace();
   }, [workspaceType, chatId]);
 
+  // P6: live status polling for any doc that's still being processed.
+  // handleFileChange already polls newly-uploaded docs, but a user who
+  // reloads the page (or opens a chat where a doc was uploaded in another
+  // tab) needs the chip to keep updating. This effect picks up any
+  // non-terminal doc in the current chat and polls it every 2 s until it
+  // resolves to READY or FAILED.
+  useEffect(() => {
+    const TERMINAL = new Set(["READY", "FAILED", "DEDUPLICATED"]);
+    const inFlight = docs.filter((d) => !TERMINAL.has(d.status));
+    if (inFlight.length === 0) return;
+
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      if (cancelled) return;
+      const updates = await Promise.all(
+        inFlight.map(async (d) => {
+          try { return await getDocument(d.id); }
+          catch { return null; }
+        })
+      );
+      if (cancelled) return;
+      let anyChanged = false;
+      setDocs((prev) => prev.map((d) => {
+        const upd = updates.find((u) => u && u.id === d.id);
+        if (upd && upd.status !== d.status) { anyChanged = true; return upd; }
+        return d;
+      }));
+      if (anyChanged) {
+        setActiveDoc((cur) => {
+          if (!cur) return cur;
+          const fresh = updates.find((u) => u && u.id === cur.id);
+          return fresh || cur;
+        });
+      }
+    }, 2000);
+    pollingIntervalsRef.current.push(interval);
+    return () => { cancelled = true; clearInterval(interval); };
+    // We re-run when the SET of in-flight ids changes; depending on docs
+    // directly would restart every time the chip rerenders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docs.map((d) => `${d.id}:${d.status}`).join(",")]);
+
   const handleQueryChange = (val: string) => {
     setQuery(val);
     if (chatId) sessionStorage.setItem(`draft_${chatId}`, val);
@@ -812,12 +854,14 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const sendMessage = useCallback(async (queryText: string) => {
     if (!queryText.trim()) return;
     window.speechSynthesis?.cancel?.();
-    // C10 — no-document mode: allow asking without an attached doc. If a doc IS
-    // attached but still processing, silently bail. The Send button is already
-    // disabled in this state and there's an inline hint below the input — no
-    // need to stack a blocking toast on every Enter keypress.
-    if (activeDoc && activeDoc.status !== "READY") {
-      return;
+    // P6 — Send is locked whenever ANY attached doc is still processing.
+    // No-document mode is fine (docs.length === 0 → unlocked). All docs
+    // READY/FAILED/DEDUPLICATED → unlocked. A FAILED doc doesn't block
+    // because retrieval already filters to status==READY.
+    const TERMINAL = new Set(["READY", "FAILED", "DEDUPLICATED"]);
+    const anyProcessing = docs.some((d) => !TERMINAL.has(d.status));
+    if (anyProcessing) {
+      return; // Send button is disabled + inline hint visible; no toast spam.
     }
 
     setLoading(true);
@@ -829,8 +873,13 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       await createChatMessage(chatId, "user", queryText);
       setHistory((prev) => [...prev, { id: Date.now().toString(), role: "user", content: queryText }]);
 
+      // P7: auto-name the chat from the user's first message. A heuristic
+      // (truncate to ~40 chars, drop trailing punctuation) is plenty for
+      // the sidebar — no extra LLM round-trip needed. The Sidebar listens
+      // for 'chat-title-updated' and refreshes its list.
       if (history.length === 0) {
-        const newTitle = queryText.length > 40 ? queryText.substring(0, 37) + "..." : queryText;
+        const cleaned = queryText.trim().replace(/\s+/g, " ").replace(/[?.!,;:]+$/, "");
+        const newTitle = cleaned.length > 40 ? cleaned.substring(0, 37) + "..." : cleaned;
         updateChat(chatId, { title: newTitle }).then(() => {
           window.dispatchEvent(new CustomEvent("chat-title-updated", { detail: { id: chatId, title: newTitle } }));
         }).catch(console.error);
@@ -916,7 +965,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       toast.error(err.message || "Query failed.", { id: toastId });
       setLoading(false);
     }
-  }, [activeDoc, chatId, history.length, workspaceType]);
+  }, [activeDoc, chatId, history.length, workspaceType, docs, comparisonMode]);
 
   const handleAsk = (e: React.FormEvent) => { e.preventDefault(); sendMessage(query); };
 
@@ -1814,32 +1863,43 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                 />
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                {activeDoc != null && activeDoc.status !== "READY" && !loading && (
-                  <span
-                    aria-live="polite"
-                    style={{
-                      fontFamily: "var(--font-body)",
-                      fontSize: "12px",
-                      color: "var(--text-tertiary)",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "6px",
-                    }}
-                  >
+                {(() => {
+                  // P6: show the inline "Document processing…" pip whenever
+                  // ANY attached doc is still in flight, not just the
+                  // currently-selected one.
+                  const TERMINAL_STATUSES = new Set(["READY", "FAILED", "DEDUPLICATED"]);
+                  const processingDocs = docs.filter((d) => !TERMINAL_STATUSES.has(d.status));
+                  if (processingDocs.length === 0 || loading) return null;
+                  const label = processingDocs.length === 1
+                    ? "Document processing…"
+                    : `${processingDocs.length} documents processing…`;
+                  return (
                     <span
-                      aria-hidden="true"
+                      aria-live="polite"
                       style={{
-                        width: "8px",
-                        height: "8px",
-                        borderRadius: "50%",
-                        background: "var(--warning, #f59e0b)",
-                        animation: "pulse 1.4s ease-in-out infinite",
-                        display: "inline-block",
+                        fontFamily: "var(--font-body)",
+                        fontSize: "12px",
+                        color: "var(--text-tertiary)",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
                       }}
-                    />
-                    Document processing…
-                  </span>
-                )}
+                    >
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          width: "8px",
+                          height: "8px",
+                          borderRadius: "50%",
+                          background: "var(--warning, #f59e0b)",
+                          animation: "pulse 1.4s ease-in-out infinite",
+                          display: "inline-block",
+                        }}
+                      />
+                      {label}
+                    </span>
+                  );
+                })()}
                 {query.length > 3200 && (
                   <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-tertiary)" }}>{query.length} / 4000</span>
                 )}
@@ -1847,16 +1907,24 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                   <button type="button" onClick={handleStopGenerating} className="btn btn-secondary btn-sm" aria-label="Stop generating" style={{ height: "36px" }}>
                     <span aria-hidden="true">⏹</span> Stop
                   </button>
-                ) : (
-                  <button
-                    type="submit"
-                    disabled={!query.trim() || loading || (activeDoc != null && activeDoc.status !== "READY")}
-                    className="btn btn-primary"
-                    aria-label="Send message"
-                    title={activeDoc != null && activeDoc.status !== "READY" ? "Waiting for document to finish processing…" : undefined}
-                    style={{ height: "36px", minWidth: "64px" }}
-                  >Send</button>
-                )}
+                ) : (() => {
+                  // P6: lock Send when ANY attached doc is still processing.
+                  // FAILED docs no longer block (retrieval filters to READY
+                  // anyway, and the user should be able to ask in no-doc
+                  // mode without removing the failed chip first).
+                  const TERMINAL_STATUSES = new Set(["READY", "FAILED", "DEDUPLICATED"]);
+                  const anyProcessing = docs.some((d) => !TERMINAL_STATUSES.has(d.status));
+                  return (
+                    <button
+                      type="submit"
+                      disabled={!query.trim() || loading || anyProcessing}
+                      className="btn btn-primary"
+                      aria-label="Send message"
+                      title={anyProcessing ? "Waiting for documents to finish processing…" : undefined}
+                      style={{ height: "36px", minWidth: "64px" }}
+                    >Send</button>
+                  );
+                })()}
               </div>
             </div>
           </div>
