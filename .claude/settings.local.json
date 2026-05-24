@@ -34,7 +34,14 @@
       "Bash(python -c \"from app.core.config import settings; print\\(f'STORAGE_PATH={settings.STORAGE_PATH!r}, PROVIDER={settings.STORAGE_PROVIDER!r}'\\)\")",
       "Bash(python -c \"from app.api.v1.endpoints import documents; print\\('documents.py imports clean'\\)\")",
       "Bash(git commit -m ' *)",
-      "Bash(python -W error -c ' *)"
+      "Bash(python -W error -c ' *)",
+      "Bash(cd /c/Users/acer/.gemini/antigravity/scratch/isolated_project && wc -l AUDIT_REPORT.md)",
+      "Bash(python -c \"import sqlalchemy as sa; from app.core.config import settings; e=sa.create_engine\\(settings.sync_database_url\\); c=e.connect\\(\\); print\\('DB OK', c.execute\\(sa.text\\('select 1'\\)\\).scalar\\(\\)\\); c.close\\(\\)\")",
+      "Bash(curl -s http://localhost:8000/api/v1/health)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(tasklist)",
+      "Bash(python -m alembic upgrade head)",
+      "Bash(git commit *)"
     ]
   }
 }
