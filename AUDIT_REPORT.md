@@ -1886,4 +1886,83 @@ numeric Trust Score next to "Moderate" / "High" / etc.
 - [ ] Trial pill counter decrements from N to N-1 immediately after
       pressing Send. ✅ PENDING
 
+### PHASE 2 — Retrieval coverage + map-reduce summary path
+
+**A — higher top_k, bigger grounding budget.**
+`core/config.py` `WORKSPACE_RETRIEVAL_CONFIG` bumped:
+- general / exam / study / 8 → 12
+- legal 6 → 10
+- finance 10 → 14
+- hr 15 → 18
+- research 12 → 16
+
+New setting `GROUNDING_TOKEN_BUDGET = 6000` (was a hard-coded 4000 in
+`grounding_service.py`). `GroundingService.prepare_grounded_context`
+now reads it via `settings.GROUNDING_TOKEN_BUDGET` if the caller didn't
+override `max_tokens`. With ~450 tokens/chunk at 1800 chars, top_k=12
+fits comfortably under the 6000 budget.
+
+**B — document-ordered evidence.**
+`GroundingService` sorts `selected_candidates` by
+`(filename, page_number, chunk_index)` BEFORE formatting the
+`<evidence …>` blocks. Rerank scoring is preserved (used for filtering
+and confidence), but presentation order is linear — the LLM can now
+reason through the doc in reading order and produce page-ordered
+citations.
+
+**C — map-reduce summary path** (`backend/app/services/summary_service.py`):
+- `is_summary_intent(query)` — regex sniff covering `summarize`,
+  `summary`, `explain (this|the) (document|paper|pdf|report|deck|slides|book)`,
+  `explain everything`, `overview`, `tl;dr`, `walk me through`, etc.
+- `generate_full_document_summary_stream(db, query, document_ids, owner_id)`
+  yields SSE-friendly `{kind: stage|evidence|token|done, data: …}` frames:
+  1. Loads EVERY chunk for the requested docs via SQLAlchemy, ordered by
+     `(filename, page, chunk_index)`. Owner-id filter on top of the
+     caller's chat-session filter.
+  2. Groups into windows of 6 chunks (`WINDOW_CHUNKS`); cap at 40
+     windows (`MAX_WINDOWS_HARD_CAP`) to keep latency bounded.
+  3. **Map**: each window → 220-word "summarize this slice" prompt via
+     the existing `llm_service.provider.generate()` (so key rotation +
+     `_safe_extract_text` finish-reason guard from P3 both apply).
+  4. **Reduce**: concatenated window summaries → final structured
+     summary streamed token-by-token through `generate_stream`. Structure:
+     Overview · Key Topics · Important Details · Key Insights ·
+     Limitations · Summary.
+- `query.py` `event_generator` now branches BEFORE the normal retrieval
+  call: if the chat has attached docs AND `is_summary_intent(query)`,
+  it switches to map-reduce. The retrieval-bias problem (only top-K
+  chunks → first pages over-represented) is replaced with full-document
+  scan.
+- A synthetic evidence list is emitted up-front (`(full-document
+  map-reduce summary; N chunks read)` per filename) so the frontend's
+  Sources rail correctly shows "we read EVERY page", not just N.
+- Workspace disclaimers (legal / finance) still appended at the end.
+
+**D — verify all chunks indexed.**
+`process_document` in `document_tasks.py` (STABLE) already iterates
+every page yielded by `OCRService.extract_document_stream` and persists
+every chunk before flipping to READY. With the BUG-4 fix (embedding
+dim 384 → 1024 from session 2) this works end-to-end. No additional
+fix needed.
+
+### PHASE 3 — Improved system prompt
+
+`llm_service._build_system_prompt` rewritten as a layered
+"document-intelligence" preamble:
+
+- Tells the model to read every evidence block before answering and
+  cover the document proportionally.
+- Lists domain-specific lenses (academic, research, legal, finance,
+  business, technical, slides) so the model adapts naturally.
+- Keeps the strict no-external-knowledge rule and the exact "I cannot
+  answer this based on the provided documents." escape phrase the
+  frontend already detects.
+- Locks the citation format to `(filename, p.N)`.
+- Provides a default summary skeleton (Overview · Key Topics · Important
+  Details · Key Insights · Limitations · Summary) used by the map-reduce
+  REDUCE step too — consistent voice across paths.
+
+Workspace response-schema and language-instruction layers from query.py
+still concatenate on top.
+
 

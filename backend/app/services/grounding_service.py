@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.services.retrieval_service import RetrievalService
 from app.services.reranker_service import reranker_service
 
@@ -19,7 +20,7 @@ class GroundingService:
         final_top_k: int = 5,               # Selection Limit
         similarity_threshold: float = 0.0,
         rerank_threshold: float = 0.0,      # Low-confidence Filtering
-        max_tokens: int = 4000,             # Token Budget Strategy
+        max_tokens: Optional[int] = None,   # Token Budget Strategy (defaults to settings.GROUNDING_TOKEN_BUDGET)
         document_ids: Optional[List[UUID]] = None,  # P1: per-chat isolation
     ) -> Dict[str, Any]:
         """
@@ -32,6 +33,10 @@ class GroundingService:
         to the current chat session so other chats' docs don't bleed in.
         """
         start_time = time.time()
+
+        # PHASE 2: pick up the configured budget if the caller didn't override.
+        if max_tokens is None:
+            max_tokens = getattr(settings, "GROUNDING_TOKEN_BUDGET", 4000)
 
         # P1: empty document_ids list is meaningful — it means "this chat has
         # no attached docs", in which case retrieval would return nothing
@@ -85,12 +90,25 @@ class GroundingService:
         # 4. Low-Confidence Filtering & Top-N Selection
         filtered_candidates = [c for c in reranked_candidates if c["rerank_score"] >= rerank_threshold]
         selected_candidates = filtered_candidates[:final_top_k]
-        
+
+        # PHASE 2: present chunks to the LLM IN DOCUMENT ORDER so it can
+        # reason linearly across the doc and produce page-ordered citations.
+        # Sort key: (filename, page_number, chunk_index). This is purely a
+        # presentation reorder — the rerank_score is preserved for scoring.
+        selected_candidates = sorted(
+            selected_candidates,
+            key=lambda c: (
+                str(c.get("filename") or ""),
+                int(c.get("page_number") or 0),
+                int(c.get("chunk_index") or 0),
+            ),
+        )
+
         # 5. Token Budgeting & Grounded Context Formatting
         grounded_context = []
         current_token_estimate = 0
         accepted_evidence = []
-        
+
         for candidate in selected_candidates:
             # Heuristic: ~4 characters per token
             chunk_tokens = len(candidate["text_content"]) // 4 

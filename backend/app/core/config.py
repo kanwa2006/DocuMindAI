@@ -123,15 +123,25 @@ class Settings(BaseSettings):
     RERANKER_PROVIDER: str = "local"
 
     # Workspace-specific retrieval config (Task 4.8)
+    # PHASE 2: top_k bumped across the board to give the LLM more coverage of
+    # the document. The "answers only cover the first pages" symptom was
+    # mostly top_k=5–8 truncating the evidence set on multi-page docs. Each
+    # bump stays within the 6000-token grounding budget (chunk ≈ 1800 chars
+    # ≈ 450 tokens; top_k=12 = ~5400 tokens).
     WORKSPACE_RETRIEVAL_CONFIG: ClassVar[Dict[str, Any]] = {
-        "exam":     {"top_k": 8,  "rerank_n": 5,  "chunk_pref": "medium"},
-        "hr":       {"top_k": 15, "rerank_n": 10, "chunk_pref": "small"},
-        "legal":    {"top_k": 6,  "rerank_n": 4,  "chunk_pref": "large"},
-        "finance":  {"top_k": 10, "rerank_n": 6,  "chunk_pref": "small"},
-        "research": {"top_k": 12, "rerank_n": 8,  "chunk_pref": "large"},
-        "study":    {"top_k": 8,  "rerank_n": 5,  "chunk_pref": "medium"},
-        "general":  {"top_k": 8,  "rerank_n": 5,  "chunk_pref": "medium"},
+        "exam":     {"top_k": 12, "rerank_n": 8,  "chunk_pref": "medium"},
+        "hr":       {"top_k": 18, "rerank_n": 12, "chunk_pref": "small"},
+        "legal":    {"top_k": 10, "rerank_n": 6,  "chunk_pref": "large"},
+        "finance":  {"top_k": 14, "rerank_n": 8,  "chunk_pref": "small"},
+        "research": {"top_k": 16, "rerank_n": 10, "chunk_pref": "large"},
+        "study":    {"top_k": 12, "rerank_n": 8,  "chunk_pref": "medium"},
+        "general":  {"top_k": 12, "rerank_n": 8,  "chunk_pref": "medium"},
     }
+
+    # PHASE 2: grounding token budget. Was 4000 — bumped to fit the higher
+    # top_k values above. Still leaves ~2k tokens of headroom under the
+    # default 8192 max_output_tokens for the answer itself.
+    GROUNDING_TOKEN_BUDGET: int = 6000
 
     @property
     def async_database_url(self) -> str:

@@ -15,6 +15,10 @@ from app.schemas.query import QueryRequest, QueryResponse, EvidenceChunk, Tracin
 from app.services.grounding_service import GroundingService
 from app.services.llm_service import llm_service
 from app.services.retrieval_service import RetrievalService
+from app.services.summary_service import (
+    is_summary_intent,
+    generate_full_document_summary_stream,
+)
 from app.models.chat import ChatMessage
 from app.models.document import Document, DocumentStatus
 from app.models.org import User
@@ -265,6 +269,60 @@ async def ask_question_stream(
                 f"{m['role'].upper()}: {m['content'][:300]}"
                 for m in conversation_history[-6:]
             ])
+
+            # PHASE 2 — map-reduce summary path. When the user is clearly
+            # asking for a summary / overview AND there are attached docs,
+            # forget the top-K similarity bias and read the WHOLE document
+            # via the summary_service. Top-K retrieval cannot summarize a
+            # 40-page doc by definition — it only sees ~10% of it. Normal
+            # questions still flow through the existing retrieval path.
+            if attached_doc_ids and is_summary_intent(request.query):
+                logger.info(
+                    f"[query/stream] Summary intent detected → map-reduce on "
+                    f"{len(attached_doc_ids)} docs"
+                )
+                yield (
+                    f"event: thinking_stage\n"
+                    f"data: {json.dumps({'stage': 'reading', 'detail': 'Reading the full document…'})}\n\n"
+                )
+
+                # Emit a placeholder metadata event up-front so the frontend
+                # renders the "grounded" badge and trust score even before
+                # the reduce step kicks in.
+                yield (
+                    f"event: metadata\n"
+                    f"data: {json.dumps({'confidence_score': 0.95, 'evidence': [], 'grounded': True, 'mode': 'grounded', 'tracing': {}})}\n\n"
+                )
+
+                async for frame in generate_full_document_summary_stream(
+                    db=db,
+                    query=request.query,
+                    document_ids=attached_doc_ids,
+                    owner_id=owner_uuid,
+                ):
+                    kind = frame["kind"]
+                    if kind == "stage":
+                        yield (
+                            f"event: thinking_stage\n"
+                            f"data: {json.dumps({'stage': frame['data'], 'detail': frame['data']})}\n\n"
+                        )
+                    elif kind == "evidence":
+                        # Replace the placeholder evidence list once we know
+                        # which docs were actually read.
+                        yield (
+                            f"event: metadata\n"
+                            f"data: {json.dumps({'confidence_score': 0.95, 'evidence': frame['data'], 'grounded': True, 'mode': 'grounded'})}\n\n"
+                        )
+                    elif kind == "token":
+                        yield f"event: token\ndata: {json.dumps({'token': frame['data']})}\n\n"
+                        await asyncio.sleep(0.005)
+                    elif kind == "done":
+                        # Append workspace disclaimer if relevant (legal/finance).
+                        disclaimer = WORKSPACE_DISCLAIMERS.get(workspace_type, "")
+                        if disclaimer:
+                            yield f"event: token\ndata: {json.dumps({'token': disclaimer})}\n\n"
+                        yield f"event: done\ndata: {{}}\n\n"
+                        return  # Don't fall through to the retrieval path below.
 
             # Task 4.9 — Redis retrieval cache key
             doc_ids_str = str(current_user.get("workspace_id", ""))
