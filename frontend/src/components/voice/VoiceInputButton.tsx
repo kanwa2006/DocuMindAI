@@ -34,8 +34,12 @@ export default function VoiceInputButton({
 
   // Mount flag — the <select> below renders the *browser-resolved* voiceLang
   // (parent reads it from localStorage in a useEffect, so the value can differ
-  // from the server-rendered HTML). Render the select only after hydration to
-  // sidestep "Hydration failed... server rendered HTML didn't match client".
+  // from the server-rendered HTML). The whole component is gated on this
+  // flag: on SSR we render nothing (matches the `isSupported = false` branch
+  // since `window.SpeechRecognition` doesn't exist there). Once mounted on
+  // the client we render the real buttons. This eliminates the
+  // "Hydration failed because the server rendered HTML didn't match the
+  // client" error coming out of `useVoiceInput`.
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     setMounted(true);
@@ -68,6 +72,10 @@ export default function VoiceInputButton({
     return () => window.removeEventListener("keydown", handler);
   }, [disabled]);
 
+  // P-misc: gate the entire render on `mounted` so SSR emits NOTHING and the
+  // first client render also emits nothing — eliminating the "server rendered
+  // HTML didn't match the client" Next.js error.
+  if (!mounted) return null;
   if (!isSupported) return null;
 
   const isListening = state === "listening";
@@ -119,28 +127,21 @@ export default function VoiceInputButton({
 
   return (
     <>
-      {/* Language selector — rendered client-only to avoid hydration mismatch
-          on the `value` attribute when localStorage overrides the default. */}
-      {mounted ? (
-        <select
-          value={voiceLang}
-          onChange={(e) => onLangChange(e.target.value)}
-          aria-label="Voice input language"
-          title="Voice language"
-          style={selectStyle}
-        >
-          {LANGUAGES.map((l) => (
-            <option key={l.code} value={l.code}>
-              {l.label}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <span
-          aria-hidden="true"
-          style={{ ...selectStyle, display: "inline-block", width: "60px" }}
-        />
-      )}
+      {/* Language selector — the entire component is gated on `mounted`
+          above, so this only ever renders client-side. No SSR mismatch. */}
+      <select
+        value={voiceLang}
+        onChange={(e) => onLangChange(e.target.value)}
+        aria-label="Voice input language"
+        title="Voice language"
+        style={selectStyle}
+      >
+        {LANGUAGES.map((l) => (
+          <option key={l.code} value={l.code}>
+            {l.label}
+          </option>
+        ))}
+      </select>
 
       {/* Mic button */}
       <button

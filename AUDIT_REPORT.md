@@ -1587,4 +1587,53 @@ to contain a valid Part... finish_reason is 1`.
       `The response was cut off…` message; never a red crash toast.
       ✅ PENDING
 
+### P4 — Settings save + paper generate "Failed to fetch"
+
+**Settings — backend (`backend/app/api/v1/endpoints/users.py`):**
+- `User.id` is a postgres UUID column. Previously the handler did
+  `select(User).where(User.id == user_id)` with `user_id = str(...)`.
+  Depending on SQLAlchemy / asyncpg driver version this may fail to
+  implicit-cast string → UUID; the resulting 500 surfaced as
+  `Network error: server unreachable` to the frontend (fetch can't
+  parse the truncated/error body and the apiFetch wrapper rethrows the
+  generic "Network error").
+- Added `_coerce_user_id(raw)` helper: casts once at the top of each
+  handler. Bad ids → 400, not 500.
+- The PATCH path now wraps the `UPDATE users …` in try/except with
+  rollback + explicit 500 detail, so the frontend sees a real error
+  body instead of a closed connection.
+
+**Paper generate — frontend (`frontend/src/components/PaperConfigPanel.tsx`):**
+- Was using raw `fetch(`${API_BASE}/exams/generate/paper`, …)` with
+  `credentials: "include"` but **no `X-CSRF-Token` header**. The
+  backend's CSRF middleware rejects the request with 403 (or aborts the
+  connection on certain configs), which the browser surfaces as "Failed
+  to fetch."
+- Swapped to `apiFetch("/exams/generate/paper", …)` which:
+  - blocks-and-fetches a fresh CSRF token if needed,
+  - sets `X-CSRF-Token`,
+  - retries on 401 via the silent-refresh path,
+  - surfaces real HTTP status + JSON body errors via the normal toast.
+- Error parsing also hardened: `await res.json().catch(() => ({}))` so
+  a non-JSON body (e.g. nginx 502 HTML) still produces a readable toast.
+
+**Misc — VoiceInputButton SSR hydration error (screenshot 7):**
+- `voice/VoiceInputButton.tsx`: `useVoiceInput` returns
+  `isSupported = false` on the server (no `window.SpeechRecognition`)
+  but `true` on the client, so the server emitted nothing while the
+  client emitted `<select> + <button>`. Next.js diffed this as a
+  hydration mismatch and re-rendered the whole tree on the client.
+- Fix: the entire component is now gated on a `mounted` flag (set
+  inside `useEffect`). SSR renders `null`; the first client render
+  also renders `null`; after `setMounted(true)` the real buttons appear.
+  The previous `<span>` placeholder for the SELECT is no longer needed.
+
+**Proof (manual):**
+- [ ] /settings: change language → "Settings saved." (green). ✅ PENDING
+- [ ] /exam: open Paper Config → click Generate → toast says
+      "Paper generated!"; on validation failure shows the real message
+      from the backend. ✅ PENDING
+- [ ] Reload any workspace page → console has zero hydration errors.
+      ✅ PENDING
+
 

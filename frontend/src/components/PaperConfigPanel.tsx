@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "react-hot-toast";
-import { API_BASE } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 export interface ExamSectionConfig {
   label: string;
@@ -132,9 +132,14 @@ export default function PaperConfigPanel({ onClose, onGenerated }: Props) {
         allow_subquestions: s.allow_subquestions,
       }));
 
-      const res = await fetch(`${API_BASE}/exams/generate/paper`, {
+      // P4: switch from raw fetch() to apiFetch() so the CSRF token and
+      // auto-refresh logic are applied. The previous raw fetch was missing
+      // the X-CSRF-Token header — the backend middleware bounced it with a
+      // 403, and the browser surfaced "Failed to fetch" because the
+      // response body wasn't parseable as JSON. apiFetch handles all of
+      // that uniformly.
+      const res = await apiFetch(`/exams/generate/paper`, {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           subject,
@@ -152,8 +157,8 @@ export default function PaperConfigPanel({ onClose, onGenerated }: Props) {
         }),
       });
       if (!res.ok) {
-        const err = await res.json();
-        const msgs: string[] = err?.detail?.validation_errors || [err?.detail || "Generation failed"];
+        const err = await res.json().catch(() => ({}));
+        const msgs: string[] = err?.detail?.validation_errors || [err?.detail || `Generation failed (HTTP ${res.status})`];
         toast.error(msgs[0], { id: toastId });
         return;
       }
