@@ -14,11 +14,19 @@ export default function EmailVerificationScreen({ email, onVerified }: EmailVeri
   const [resending, setResending] = useState(false);
   const [error, setError] = useState("");
   const [resendMessage, setResendMessage] = useState("");
+  const [cooldown, setCooldown] = useState(0);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
     inputRefs.current[0]?.focus();
   }, []);
+
+  // 30s cooldown countdown after a resend.
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
 
   const otp = digits.join("");
 
@@ -69,12 +77,14 @@ export default function EmailVerificationScreen({ email, onVerified }: EmailVeri
   };
 
   const handleResend = async () => {
+    if (cooldown > 0 || resending) return;
     setResending(true);
     setResendMessage("");
     setError("");
     try {
       await resendVerificationEmail();
       setResendMessage("A new code was sent to your email.");
+      setCooldown(30);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to resend.";
       setError(msg);
@@ -174,7 +184,7 @@ export default function EmailVerificationScreen({ email, onVerified }: EmailVeri
               height: "44px",
               borderRadius: "var(--radius-md, 8px)",
               background: "var(--brand, #0D0D0D)",
-              color: "#fff",
+              color: "var(--brand-text, #fff)",
               border: "none",
               fontSize: "15px",
               fontWeight: 600,
@@ -192,19 +202,19 @@ export default function EmailVerificationScreen({ email, onVerified }: EmailVeri
           Didn&apos;t receive it?{" "}
           <button
             onClick={handleResend}
-            disabled={resending}
+            disabled={resending || cooldown > 0}
             style={{
               background: "none",
               border: "none",
-              cursor: resending ? "not-allowed" : "pointer",
-              color: "var(--brand, #0D0D0D)",
+              cursor: (resending || cooldown > 0) ? "not-allowed" : "pointer",
+              color: (resending || cooldown > 0) ? "var(--text-tertiary)" : "var(--brand, #0D0D0D)",
               fontSize: "13px",
               fontWeight: 500,
               padding: 0,
               fontFamily: "var(--font-body)",
             }}
           >
-            {resending ? "Sending…" : "Resend code"}
+            {resending ? "Sending…" : cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
           </button>
         </p>
         <p style={{ fontSize: "12px", color: "var(--text-tertiary)", marginTop: "8px" }}>
