@@ -112,7 +112,7 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
             style={{
               fontFamily: "var(--font-body)",
               fontSize: "var(--text-sm)",
-              color: "#fff",
+              color: "var(--brand-text)",
               background: "var(--brand)",
               textDecoration: "none",
               padding: "8px 20px",

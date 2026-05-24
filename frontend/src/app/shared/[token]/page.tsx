@@ -224,7 +224,7 @@ export default function SharedSessionPage() {
               disabled={asking || !question.trim()}
               style={{
                 padding: "10px 20px", height: "42px",
-                background: "var(--brand, #0D0D0D)", color: "#fff",
+                background: "var(--brand, #0D0D0D)", color: "var(--brand-text, #fff)",
                 border: "none", borderRadius: "var(--radius-lg, 12px)",
                 cursor: asking || !question.trim() ? "not-allowed" : "pointer",
                 fontWeight: 600, fontSize: "var(--text-sm, 14px)",

@@ -72,7 +72,7 @@ body {
   top: -48px;
   left: 0;
   background: var(--brand);
-  color: #fff;
+  color: var(--brand-text);
   padding: 8px 16px;
   z-index: 9999;
   font-family: var(--font-body);

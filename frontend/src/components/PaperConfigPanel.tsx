@@ -233,7 +233,7 @@ export default function PaperConfigPanel({ onClose, onGenerated }: Props) {
                 flex: 1, height: "36px", border: "none", cursor: "pointer", fontSize: "12px",
                 fontFamily: "var(--font-body)", fontWeight: difficulty === d ? 600 : 400,
                 background: difficulty === d ? "var(--accent, var(--brand))" : "transparent",
-                color: difficulty === d ? "#fff" : "var(--text-secondary)",
+                color: difficulty === d ? "var(--brand-text)" : "var(--text-secondary)",
                 textTransform: "capitalize", transition: "background 150ms, color 150ms",
               }}>{d}</button>
             ))}

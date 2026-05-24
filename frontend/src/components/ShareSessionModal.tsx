@@ -100,7 +100,7 @@ export default function ShareSessionModal({ sessionId, onClose }: ShareSessionMo
   };
 
   const btnPrimary: React.CSSProperties = {
-    padding: "9px 18px", background: "var(--brand)", color: "#fff",
+    padding: "9px 18px", background: "var(--brand)", color: "var(--brand-text)",
     border: "none", borderRadius: "var(--radius-md)", cursor: loading ? "not-allowed" : "pointer",
     fontSize: "var(--text-sm)", fontWeight: "var(--weight-semibold)",
     opacity: loading ? 0.6 : 1,

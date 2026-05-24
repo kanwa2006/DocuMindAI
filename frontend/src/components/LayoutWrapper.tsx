@@ -362,7 +362,7 @@ function LayoutWrapperInner({ children }: { children: React.ReactNode }) {
                 onClick={() => setShowProfile((p) => !p)}
                 style={{
                   width: "32px", height: "32px", borderRadius: "50%",
-                  background: "var(--brand)", color: "#fff",
+                  background: "var(--brand)", color: "var(--brand-text)",
                   border: "none", cursor: "pointer", fontFamily: "var(--font-body)",
                   fontSize: "var(--text-xs)", fontWeight: "var(--weight-semibold)",
                   display: "flex", alignItems: "center", justifyContent: "center",

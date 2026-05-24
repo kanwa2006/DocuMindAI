@@ -201,7 +201,7 @@ export default function LandingPage() {
             style={{
               display: "inline-block",
               background: "var(--brand)",
-              color: "#fff",
+              color: "var(--brand-text)",
               textDecoration: "none",
               padding: "14px 28px",
               borderRadius: "var(--radius-lg)",
@@ -769,8 +769,8 @@ export default function LandingPage() {
                   borderRadius: "var(--radius-lg)",
                   fontWeight: "var(--weight-semibold)",
                   fontSize: "var(--text-base)",
-                  background: plan.highlighted ? "#fff" : "var(--brand)",
-                  color: plan.highlighted ? "var(--brand)" : "#fff",
+                  background: plan.highlighted ? "var(--surface-raised)" : "var(--brand)",
+                  color: plan.highlighted ? "var(--brand)" : "var(--brand-text)",
                 }}
               >
                 {plan.cta}
@@ -786,7 +786,7 @@ export default function LandingPage() {
             style={{
               display: "inline-block",
               background: "var(--brand)",
-              color: "#fff",
+              color: "var(--brand-text)",
               textDecoration: "none",
               padding: "16px 40px",
               borderRadius: "var(--radius-lg)",

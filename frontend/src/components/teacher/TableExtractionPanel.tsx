@@ -323,7 +323,7 @@ function TableView({ table }: { table: ExtractedTable }) {
               style={{
                 ...btnChip,
                 background: "var(--brand)",
-                color: "#fff",
+                color: "var(--brand-text)",
                 borderColor: "var(--brand)",
               }}
               onClick={() => setEditMode(false)}
@@ -569,7 +569,7 @@ export default function TableExtractionPanel({ documentId, documentName, onClose
                   borderRadius: "999px",
                   border: `1px solid ${i === activeIdx ? "var(--brand)" : "var(--border-default)"}`,
                   background: i === activeIdx ? "var(--brand)" : "var(--surface-raised)",
-                  color: i === activeIdx ? "#fff" : "var(--text-secondary)",
+                  color: i === activeIdx ? "var(--brand-text)" : "var(--text-secondary)",
                   cursor: "pointer",
                   fontFamily: "var(--font-body)",
                   transition: "background 100ms, color 100ms",

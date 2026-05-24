@@ -365,7 +365,7 @@ const MemoizedMessage = memo(({
   if (msg.role === "user") {
     return (
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <div style={{ maxWidth: "75%", background: "var(--brand)", color: "#fff", borderRadius: "16px 16px 4px 16px", padding: "12px 16px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)" }}>
+        <div style={{ maxWidth: "75%", background: "var(--brand)", color: "var(--brand-text)", borderRadius: "16px 16px 4px 16px", padding: "12px 16px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)" }}>
           {msg.content}
         </div>
       </div>
@@ -385,7 +385,7 @@ const MemoizedMessage = memo(({
     >
       {/* AI label row */}
       <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
-        <div style={{ width: "16px", height: "16px", borderRadius: "4px", background: "var(--brand)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: "10px", fontWeight: 700, flexShrink: 0 }}>D</div>
+        <div style={{ width: "16px", height: "16px", borderRadius: "4px", background: "var(--brand)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--brand-text)", fontSize: "10px", fontWeight: 700, flexShrink: 0 }}>D</div>
         <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-tertiary)" }}>DocuMindAI · {workspaceType.charAt(0).toUpperCase() + workspaceType.slice(1)} Workspace</span>
       </div>
 
@@ -1511,7 +1511,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           {response && (
             <>
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <div style={{ maxWidth: "75%", background: "var(--brand)", color: "#fff", borderRadius: "16px 16px 4px 16px", padding: "12px 16px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)" }}>
+                <div style={{ maxWidth: "75%", background: "var(--brand)", color: "var(--brand-text)", borderRadius: "16px 16px 4px 16px", padding: "12px 16px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)" }}>
                   {response.query}
                 </div>
               </div>
@@ -1519,7 +1519,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
               <div aria-live="polite" aria-atomic="false" style={{ paddingBottom: "8px" }}>
                 {/* AI label */}
                 <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
-                  <div style={{ width: "16px", height: "16px", borderRadius: "4px", background: "var(--brand)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: "10px", fontWeight: 700 }}>D</div>
+                  <div style={{ width: "16px", height: "16px", borderRadius: "4px", background: "var(--brand)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--brand-text)", fontSize: "10px", fontWeight: 700 }}>D</div>
                   <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-tertiary)", animation: loading ? "pulse 1.5s ease-in-out infinite" : "none" }}>DocuMindAI</span>
                   {response.mode === "general" && (
                     <span title="Answered without documents — general knowledge only" style={{ background: "var(--surface-sunken)", color: "var(--text-secondary)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-full)", padding: "1px 8px", fontSize: "10px", fontWeight: 500, letterSpacing: "0.02em" }}>

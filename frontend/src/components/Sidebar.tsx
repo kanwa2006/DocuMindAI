@@ -103,7 +103,7 @@ function TagPopover({ chat, onClose, onSave }: { chat: ChatSession; onClose: () 
           placeholder="Type tag, press Enter"
           style={{ flex: 1, height: "32px", padding: "0 8px", background: "var(--surface-sunken)", border: "1px solid var(--border-default)", borderRadius: "6px", fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-primary)", outline: "none" }}
         />
-        <button onClick={addTag} style={{ height: "32px", padding: "0 10px", background: "var(--brand)", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "12px" }}>Add</button>
+        <button onClick={addTag} style={{ height: "32px", padding: "0 10px", background: "var(--brand)", color: "var(--brand-text)", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "12px" }}>Add</button>
       </div>
       <button onClick={onClose} style={{ marginTop: "10px", width: "100%", height: "28px", background: "none", border: "1px solid var(--border-default)", borderRadius: "6px", cursor: "pointer", fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-secondary)" }}>Done</button>
     </div>

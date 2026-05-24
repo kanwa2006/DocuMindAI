@@ -193,7 +193,7 @@ export default function ResearchGapsPanel({ documentIds, onClose }: Props) {
               {data[tab.key].length > 0 && (
                 <span style={{
                   background: activeTab === tab.key ? "var(--brand)" : "var(--border-default)",
-                  color: activeTab === tab.key ? "#fff" : "var(--text-secondary)",
+                  color: activeTab === tab.key ? "var(--brand-text)" : "var(--text-secondary)",
                   borderRadius: "999px", fontSize: "10px", fontWeight: 600,
                   padding: "0 6px", minWidth: "18px", textAlign: "center",
                 }}>

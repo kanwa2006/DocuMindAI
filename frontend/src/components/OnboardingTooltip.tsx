@@ -98,7 +98,7 @@ export default function OnboardingTooltip({ step, targetSelector, onNext, onDism
         <button
           onClick={onNext}
           style={{
-            background: "var(--brand)", color: "#fff", border: "none", cursor: "pointer",
+            background: "var(--brand)", color: "var(--brand-text)", border: "none", cursor: "pointer",
             borderRadius: "var(--radius-md)", padding: "6px 14px",
             fontSize: "var(--text-xs)", fontWeight: "var(--weight-semibold)",
             fontFamily: "var(--font-body)", transition: "filter var(--dur-fast)",
