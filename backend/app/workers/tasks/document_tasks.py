@@ -125,7 +125,19 @@ def process_document(self, document_id: str):
     except Exception as e:
         logger.error(f"[Tracing] Task failed for {document_id} - {str(e)}")
         db.rollback()
-        
+
+        # self.retry(exc=e) defaults to throw=True and re-raises the ORIGINAL
+        # exception (not MaxRetriesExceededError) once retries are exhausted.
+        # Pre-check so we always flip status to FAILED — otherwise the doc stays
+        # in PROCESSING forever and the frontend polls forever.
+        if self.request.retries >= 3:
+            logger.error(f"[Tracing] Max retries exhausted for {document_id}. Marking FAILED.")
+            doc_fail = db.query(Document).filter(Document.id == document_id).first()
+            if doc_fail:
+                doc_fail.status = DocumentStatus.FAILED
+                db.commit()
+            return {"status": "error", "detail": "Max retries exceeded", "original_error": str(e)}
+
         try:
             self.retry(exc=e, countdown=2 ** self.request.retries, max_retries=3)
         except MaxRetriesExceededError:
@@ -194,6 +206,13 @@ def process_clip_document(self, document_id: str, content: str):
     except Exception as e:
         logger.error(f"[ClipTask] Failed for {document_id}: {e}")
         db.rollback()
+        # See process_document — self.retry re-raises original exc on exhaustion.
+        if self.request.retries >= 3:
+            doc_fail = db.query(Document).filter(Document.id == document_id).first()
+            if doc_fail:
+                doc_fail.status = DocumentStatus.FAILED
+                db.commit()
+            return {"status": "error", "detail": str(e)}
         try:
             self.retry(exc=e, countdown=2 ** self.request.retries, max_retries=3)
         except MaxRetriesExceededError:

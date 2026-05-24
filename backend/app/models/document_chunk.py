@@ -23,7 +23,9 @@ class DocumentChunk(Base):
     # Store semantic layout metadata (is_table, is_header, overlap_info)
     chunk_metadata = Column(JSON, nullable=True) 
     
-    # 384 dimensions for all-MiniLM-L6-v2 local model
-    embedding = Column(Vector(384), nullable=True)
+    # 1024 dimensions for BAAI/bge-m3 (current embedding_service model).
+    # If you change the embedding model, you MUST also alter this column dim and
+    # the HNSW index, then re-embed every chunk.
+    embedding = Column(Vector(1024), nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
