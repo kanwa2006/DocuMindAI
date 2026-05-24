@@ -1291,3 +1291,152 @@ Hardcoded `#fff` on **non-flipping** backgrounds (avatar HSL colors,
 error/warning badges) intentionally left as-is — those backgrounds
 stay the same colour under both themes, so white text remains correct.
 
+---
+
+## ISOLATION + ANSWER-QUALITY SESSION — 2026-05-24 (verify-first)
+
+User reported two intertwined problems: (1) answers only cover the first
+pages of a document, and (2) documents from previous chats bleed into
+unrelated new chats. Plus a stack of UI/feature bugs (P2–P10) and a
+PHASE-2/3/4 answer-quality plan. **Read-only trace done before any edits.**
+
+### PHASE 1 — Pipeline trace (concrete numbers)
+
+| Lever | File | Value | Notes |
+|---|---|---|---|
+| Chunk size | `core/config.py` | `CHUNK_SIZE = 1800` chars | per-page semantic chunker; respects `\n\n` block boundaries |
+| Chunk overlap | `core/config.py` | `CHUNK_OVERLAP = 300` chars | applied as "last block" if it's small enough |
+| Retriever | `services/retrieval_service.py` | hybrid pgvector + BM25 + RRF + reranker | `top_k=N`, candidate pool = `max(2N, 30)`, RRF k=60 |
+| Default top_k | `core/config.py:WORKSPACE_RETRIEVAL_CONFIG` | general 8, exam 8, hr 15, legal 6, finance 10, research 12, study 8 | frontend hard-codes 5 which triggers the "use workspace default" branch in `query.py:214` |
+| Grounding budget | `services/grounding_service.py` | `max_tokens = 4000` | char-est ÷ 4 = ~4000 tokens of evidence before halt |
+| Model | `core/config.py` | `gemini-2.5-flash-lite` (fallback `gemini-2.0-flash`) | `max_output_tokens = 8192`, `temperature = 0.2` |
+| Summary path | n/a | **does not exist** | "Summarize this document" goes through the same top-K retrieval as a normal question |
+
+**Why answers cover only early pages** — for a 40-page PDF (~80 chunks of
+1800 chars), `top_k=8` means only ~10 % of the document is shown to the
+LLM, and the reranker biases that 10 % toward the chunks with the highest
+similarity to the *short* query string. Short queries match TOC/intro
+pages. There is no map-reduce / "ordered window" fallback for
+summary-intents, so coverage is always slice-based, never whole-doc.
+
+**Where retrieval filters today** — `retrieval_service.retrieve_chunks`
+already *accepts* a `document_ids: Optional[List[UUID]]` filter
+(`retrieval_service.py:60-61, 76-77, 108-109`). But **no caller passes
+it.** `query.py:260-266` (the `/query/stream` event_generator) calls
+`GroundingService.prepare_grounded_context(workspace_id=...)` with no
+doc_ids. `GroundingService.prepare_grounded_context` itself has no
+`document_ids` parameter to forward. So retrieval is workspace-scoped,
+not chat-scoped → documents from every chat in the workspace bleed in.
+
+**Document → chat link, today** — `models/document.py:32` already has a
+`chat_session_id: Column(UUID(as_uuid=True), index=True, nullable=True)`
+column. But `documents.py:verify_upload` (line 144–206) and
+`documents.py:clip_text` (line 63–141) **never set it**; every uploaded
+doc has `chat_session_id = NULL`. Frontend `uploadDocument` (`lib/api.ts:168`)
+never sends a session id either. The column exists; the wire-up doesn't.
+
+**Frontend doc selection, today** — `WorkspaceUI.tsx:776-787` fetches all
+docs for the workspace via `listDocuments()`, then intersects them with
+`localStorage[docs_${workspaceType}]` (a per-workspace list, **not** a
+per-chat list). So opening a new chat in the same workspace surfaces all
+the workspace's docs in the chip rail.
+
+**System prompt, today** — `llm_service._build_system_prompt` is a strict
+hallucination-control prompt; it doesn't tell the model to *cover the
+whole document proportionally* or to *structure summaries*. It works for
+narrow Q&A; it actively underperforms on "explain everything" intents.
+
+**Gemini `response.text`, today** — `llm_service.py:162` returns
+`response.text` and `:207` yields `chunk.text` with no guard for empty
+parts / `finish_reason=1` (MAX_TOKENS / safety block). That's the
+"Invalid operation: response.text quick accessor requires the response
+to contain a valid Part" crash.
+
+**Quick-action chips, today** — `WorkspaceUI.tsx:1471` renders
+`<WorkspaceWelcome ... onQuickAction={sendMessage}>` — **the welcome
+chip's `prompt` is fed directly into `sendMessage`, which dispatches the
+SSE stream immediately. No user review/edit step.** That's the
+"clicked Generate paper → auto-sent a query" bug. The "Generate Paper"
+button in the per-doc action menu correctly opens `PaperConfigPanel`
+(line 1091), so the routing inconsistency is the welcome-chip side.
+
+**Title auto-naming, today** — `WorkspaceUI.tsx:815-820` already updates
+chat title from the first user message (truncated to 40 chars) and
+dispatches a `chat-title-updated` event. The default created title in
+`chats.create_chat_session` is whatever the frontend posts — and
+`createChat` posts `"New ${workspaceType} chat"`. So a chat with zero
+messages keeps that title until the first send. Working as designed;
+the issue is purely "user hasn't sent yet."
+
+**Duplicate AI reply, today** — `WorkspaceUI.tsx:826-829` sets a
+streaming `response` state; on `done` (line 859-888) it saves the
+message via `createChatMessage`, pushes it into `history`, and then
+clears `response` after a 120 ms timeout. During the overlap window
+the streaming response and the saved history message both render,
+producing the visible duplicate.
+
+**Trial pill, today** — `lib/store/trialStore.tsx` is updated by
+billing/status fetches and SSE `trial_status` events. The `/query/stream`
+event sets `lastTrialStatus` (api.ts:354) but doesn't *pass it to the
+store* — the consumer (TrialPill) only sees billing/status responses.
+After a query, the pill keeps showing the pre-query count.
+
+**.pptx upload, today** — `WorkspaceUI.tsx:957-962` short-circuits with
+`toast.error("PowerPoint files aren't supported yet")` *before* hitting
+the backend. Backend `documents.py:ALLOWED_MIMES` lists only PDF and
+DOCX. Extraction router has no .pptx handler.
+
+**Forgot-password, today** — `auth.py` (per AUDIT step 7) issues a
+30-min reset token via `secrets.token_urlsafe(32)` and a reset link in
+the email. The user has now asked for a 6-digit OTP flow instead.
+
+**Trust score, today** — backend `/query/stream` emits a `metadata`
+event with `confidence_score` (grounding RRF/rerank avg). Frontend
+sets `response.confidence_score` and renders `<ConfidenceBadge>`. A
+separate Veritas trust_report SSE event (`onTrustReport`) populates
+`TrustScoreBadge` — but it's only fired by the veritas engine, which
+is currently not wired into the streaming path for general chat.
+
+### PHASE 2 — fix plan (no edits yet)
+
+1. Add `chat_session_id` to upload payloads (frontend) and persist it
+   on the Document row (backend verify_upload + clip_text).
+2. Backend `/query/stream`: look up READY docs in the *current*
+   chat_session_id, pass their ids to `GroundingService.prepare_grounded_context`,
+   which forwards them to `RetrievalService.retrieve_chunks(document_ids=…)`.
+   `New Chat` with no uploads → empty list → no-doc/general mode (already
+   exists, line 299-309).
+3. Frontend chip rail: filter docs to `chat_session_id === chatId` (new
+   field on `Document`); change `localStorage[docs_${workspaceType}]`
+   key to `localStorage[docs_chat_${chatId}]` so per-chat lists are
+   isolated.
+4. Raise effective top_k for grounded Q&A (already configurable per
+   workspace; can bump general 8→10 within token budget).
+5. Add `/query/summary` (or branch in `/stream` on summary-intent) that
+   does map-reduce: chunk the doc into ordered windows, summarize each,
+   then reduce into a structured final summary covering all pages.
+
+### PHASE 3 — improved prompt (planned)
+
+Layer a "document intelligence" preamble onto `_build_system_prompt`
+when grounded context is present:
+
+- "Read and reason over the ENTIRE provided context before answering.
+   Never assume the first pages represent the whole document."
+- "Cover the document proportionally" + domain-specific hints (legal /
+  finance / research / academic / slides).
+- Keep the existing strict no-external-knowledge / citation-format rules.
+- Add a structured `Overview · Key Topics · Important Details · Insights
+  · Risks · Summary` template for summary-style intents.
+
+### PHASE 4 — proof plan (planned)
+
+- Upload a >10-page PDF, ask "explain everything in detail," paste the
+  answer here, and confirm cites from late pages.
+- Ask one specific question about a late-page fact, confirm correct
+  page citation.
+
+---
+
+(end of session-3 PHASE-1 trace — ready to start edits)
+
