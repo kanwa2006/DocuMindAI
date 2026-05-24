@@ -1018,11 +1018,13 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
-    // PowerPoint isn't supported by the extraction pipeline yet — reject with a
-    // clear message instead of letting the backend bounce it as "PDF only".
+    // P8: PowerPoint is supported via python-pptx on the backend. Legacy
+    // `.ppt` (binary PowerPoint, pre-2007) is NOT supported — convert to
+    // .pptx first. Surface a clear message instead of accepting it and
+    // letting the worker fail silently.
     const lowerName = selectedFile.name.toLowerCase();
-    if (lowerName.endsWith(".ppt") || lowerName.endsWith(".pptx")) {
-      toast.error("PowerPoint files (.ppt/.pptx) aren't supported yet. Please upload a PDF or DOCX.");
+    if (lowerName.endsWith(".ppt") && !lowerName.endsWith(".pptx")) {
+      toast.error("Legacy .ppt files aren't supported. Save as .pptx and re-upload.");
       e.target.value = "";
       return;
     }
@@ -1475,7 +1477,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         <input
           type="file"
           multiple
-          accept=".pdf,.docx"
+          accept=".pdf,.docx,.pptx"
           ref={batchFileInputRef}
           className="hidden"
           onChange={handleBatchFileChange}
@@ -1690,7 +1692,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       <div style={{ background: "var(--surface-base)", paddingTop: "8px", paddingBottom: "max(16px, env(safe-area-inset-bottom))", backdropFilter: "blur(8px)", borderTop: "1px solid var(--border-subtle)", position: "sticky", bottom: 0, zIndex: 10 }}>
 
         {/* Hidden file input — triggered by the paperclip in the input bar */}
-        <input id="upload-trigger" type="file" className="hidden" accept=".pdf,.docx" ref={fileInputRef} onChange={handleFileChange} />
+        <input id="upload-trigger" type="file" className="hidden" accept=".pdf,.docx,.pptx" ref={fileInputRef} onChange={handleFileChange} />
 
         {/* Comparison toggle row (shown only when 2+ docs are READY) */}
         {docs.filter((d) => d.status === "READY").length >= 2 && (

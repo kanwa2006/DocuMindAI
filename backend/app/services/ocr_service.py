@@ -1,8 +1,80 @@
+import os
 import fitz  # PyMuPDF
 import logging
 from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+
+# P8 — PowerPoint extraction. python-pptx is an optional dep; gracefully
+# degrade if not installed so PDF-only deployments still work.
+try:
+    from pptx import Presentation  # type: ignore
+    _PPTX_AVAILABLE = True
+except Exception:  # pragma: no cover — env without python-pptx
+    Presentation = None  # type: ignore
+    _PPTX_AVAILABLE = False
+
+
+def _extract_pptx_stream(file_path: str):
+    """Yield one page-equivalent record per slide.
+
+    Slide text is concatenated from every shape that exposes a text frame
+    (title placeholder, body, text boxes, tables). Slide notes are appended
+    after a `--- speaker notes ---` divider so the chunker can decide
+    whether to include them in retrieval.
+    """
+    if not _PPTX_AVAILABLE or Presentation is None:
+        raise RuntimeError(
+            "python-pptx is not installed; .pptx extraction unavailable."
+        )
+    logger.info(f"[Tracing] Starting python-pptx extraction for {file_path}")
+    prs = Presentation(file_path)
+    for idx, slide in enumerate(prs.slides):
+        parts: List[str] = []
+        for shape in slide.shapes:
+            try:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        line = "".join(run.text for run in para.runs).strip()
+                        if line:
+                            parts.append(line)
+                # tables in slides
+                if getattr(shape, "has_table", False) and shape.has_table:
+                    for row in shape.table.rows:
+                        cells = [c.text.strip() for c in row.cells]
+                        joined = " | ".join(c for c in cells if c)
+                        if joined:
+                            parts.append(joined)
+            except Exception as inner_exc:
+                logger.debug(
+                    f"[pptx] shape extraction skipped on slide {idx + 1}: {inner_exc}"
+                )
+        notes_text = ""
+        try:
+            if slide.has_notes_slide:
+                notes_text = (slide.notes_slide.notes_text_frame.text or "").strip()
+        except Exception:
+            notes_text = ""
+
+        slide_text = "\n\n".join(parts).strip()
+        if notes_text:
+            slide_text = (
+                f"{slide_text}\n\n--- speaker notes ---\n{notes_text}".strip()
+            )
+
+        yield {
+            "page_number": idx + 1,  # treat each slide as a "page" for citations
+            "extracted_text": slide_text,
+            "layout_metadata": {
+                "source": "pptx",
+                "slide_index": idx,
+                "shape_count": len(slide.shapes),
+                "has_notes": bool(notes_text),
+            },
+        }
+    logger.info(f"[Tracing] python-pptx extraction complete: {idx + 1} slides")
+
 
 class OCRService:
     @staticmethod
@@ -29,12 +101,45 @@ class OCRService:
         }
 
     @staticmethod
+    def _looks_like_pptx(file_path: str) -> bool:
+        """P8: detect a pptx via extension OR ZIP-magic + ppt/ directory.
+
+        document_tasks.py downloads every storage object to a
+        `tempfile(...suffix=".pdf")` regardless of the original mime, so
+        the extension alone isn't reliable — peek at the bytes too.
+        PPTX files are ZIP archives whose central directory contains
+        `ppt/presentation.xml`.
+        """
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".pptx":
+            return True
+        try:
+            with open(file_path, "rb") as fh:
+                head = fh.read(4)
+            if head[:2] != b"PK":
+                return False
+            import zipfile
+            with zipfile.ZipFile(file_path) as zf:
+                names = zf.namelist()
+            return any(n.startswith("ppt/") for n in names)
+        except Exception:
+            return False
+
+    @staticmethod
     def extract_document_stream(file_path: str):
         """
         Extracts document pages using layout-aware mechanisms, yielding page by page to save memory.
+
+        P8: dispatches by detection. `.pptx` files are streamed through
+        python-pptx (one yield per slide); everything else goes through
+        the existing PyMuPDF path so PDFs keep their behaviour.
         """
+        if OCRService._looks_like_pptx(file_path):
+            yield from _extract_pptx_stream(file_path)
+            return
+
         logger.info(f"[Tracing] Starting PyMuPDF streaming extraction for {file_path}")
-        
+
         try:
             doc = fitz.open(file_path)
             for page_num in range(len(doc)):

@@ -1718,4 +1718,54 @@ listener (`chat-title-updated`) refreshes the list.
       sidebar title becomes "What does this contract require us to do"
       (or truncated). ✅ PENDING
 
+### P8 — PowerPoint (.pptx) upload support
+
+**Backend:**
+- `backend/requirements.txt` — added `python-pptx>=0.6.23`.
+- `backend/app/services/ocr_service.py`:
+  - New `_extract_pptx_stream(file_path)` yields one record per slide.
+    Concatenates text from every shape with a text frame (titles, body,
+    text boxes, tables) and appends speaker notes after a
+    `--- speaker notes ---` divider.
+  - New `OCRService._looks_like_pptx(file_path)` static method.
+    Detects pptx via extension OR by sniffing ZIP magic bytes
+    (`PK\x03\x04`) + the `ppt/` directory inside. The worker downloads
+    every storage object to a `tempfile(...suffix=".pdf")` regardless
+    of mime, so extension-only detection wouldn't work — magic-byte
+    fallback is mandatory and keeps `document_tasks.py` (STABLE)
+    untouched.
+  - `OCRService.extract_document_stream` dispatches: `_looks_like_pptx`
+    → `_extract_pptx_stream`; everything else flows through the
+    existing PyMuPDF path. PDFs unchanged.
+  - `python-pptx` is loaded with a try/except so PDF-only deployments
+    without the dep still start.
+- `backend/app/api/v1/endpoints/documents.py`:
+  - `ALLOWED_MIMES` extended with
+    `application/vnd.openxmlformats-officedocument.presentationml.presentation`
+    plus a legacy `application/vnd.ms-powerpoint` entry (frontend still
+    blocks raw `.ppt` — the extractor would fail on the binary format).
+  - Reject message rephrased: `Unsupported file type. Accepted: PDF, DOCX, PPTX.`
+
+**Frontend:**
+- `WorkspaceUI.tsx`:
+  - `handleFileChange` no longer hard-rejects pptx. Only legacy `.ppt`
+    (not `.pptx`) is rejected with a "save as .pptx and re-upload"
+    message.
+  - Both file inputs (single-upload + HR batch) now have
+    `accept=".pdf,.docx,.pptx"`.
+
+**Could regress:**
+- A pptx with hundreds of slides will produce hundreds of "pages" in
+  `document_pages`. Chunking + embedding scales linearly; an explicit
+  bound would be a future cost-guard. Documented in
+  KNOWN_REMAINING_ISSUES.md.
+- Slides with only images and no text frames will yield empty slide
+  text. The chunker will skip empty content (returns no chunks);
+  retrieval will simply have less to grip on for that slide.
+
+**Proof (manual):**
+- [ ] Upload a `.pptx` → status transitions Processing → READY → ask a
+      question that references a slide near the end → answer cites the
+      slide number. ✅ PENDING
+
 

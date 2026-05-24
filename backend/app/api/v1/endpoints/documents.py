@@ -41,6 +41,9 @@ except Exception:
 ALLOWED_MIMES = [
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
+    # P8: PowerPoint
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",  # .pptx
+    "application/vnd.ms-powerpoint",  # legacy .ppt — accepted at the API edge, extractor will reject if it's not actually pptx
 ]
 
 
@@ -244,7 +247,7 @@ async def get_presigned_upload_url(
     Frontend checks provider field and switches to multipart POST instead of S3 PUT.
     """
     if content_type not in ALLOWED_MIMES:
-        raise HTTPException(status_code=415, detail="Only PDF files are accepted.")
+        raise HTTPException(status_code=415, detail="Unsupported file type. Accepted: PDF, DOCX, PPTX.")
 
     max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
     if file_size > max_bytes:
@@ -305,7 +308,7 @@ async def upload_local(
     and any serve-file endpoint all agree on the filesystem location.
     """
     if file.content_type not in ALLOWED_MIMES:
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+        raise HTTPException(status_code=400, detail="Unsupported file type. Accepted: PDF, DOCX, PPTX.")
 
     content = await file.read()
     size = len(content)
