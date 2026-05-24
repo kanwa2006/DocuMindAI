@@ -1440,3 +1440,82 @@ when grounded context is present:
 
 (end of session-3 PHASE-1 trace — ready to start edits)
 
+### P1 — Per-chat document isolation — **IMPLEMENTED, NEEDS RUNTIME PROOF**
+
+**Backend:**
+- `backend/app/schemas/document.py` — `DocumentResponse` now surfaces
+  `chat_session_id`; `DocumentCreate` accepts it. Status type widened to
+  include `INDEXING` (it already exists in the enum) so frontend polling
+  doesn't error on intermediate states.
+- `backend/app/api/v1/endpoints/documents.py`:
+  - `VerifyUploadRequest` + `ClipRequest` accept optional
+    `chat_session_id` (string-UUID).
+  - `verify_upload` and `clip_text` persist `chat_session_id` on the
+    new `Document` row (silently coerced via `uuid.UUID`; bad input
+    becomes `None`, never raises).
+  - `GET /documents` accepts `chat_session_id` query param; when present,
+    rows are filtered to that single chat. Invalid id → empty list (no
+    workspace-wide leak).
+- `backend/app/services/grounding_service.py` — `prepare_grounded_context`
+  accepts `document_ids: Optional[List[UUID]]` and forwards it to
+  `RetrievalService.retrieve_chunks(document_ids=…)`. An EMPTY list
+  short-circuits to no-document mode (no DB call, zeroed payload). This
+  preserves the existing "general" / no-doc path the streaming endpoint
+  already handles via `is_grounded = bool(grounded_context.strip())`.
+- `backend/app/api/v1/endpoints/query.py` `event_generator()`:
+  - Loads `Document.id` where `chat_session_id == session_id` AND
+    `owner_id == user_id` AND `status == READY` — only this chat's
+    READY docs participate in retrieval.
+  - Passes that list to `prepare_grounded_context(document_ids=…)`.
+  - When `session_id` is None (REST clients without a chat),
+    `document_ids` is left as `None` → existing workspace-wide behaviour.
+  - Retrieval cache key now includes the attached doc ids so two chats
+    asking the same question don't share results.
+
+**Frontend:**
+- `frontend/src/lib/api.ts`:
+  - `Document` interface gains `chat_session_id?: string | null` and
+    `INDEXING` status.
+  - `uploadDocument(file, workspaceId?, chatSessionId?)` posts
+    `chat_session_id` in the verify body.
+  - `listDocuments(workspaceId?, chatSessionId?)` adds the new query
+    param.
+  - `ClipTextRequest` gains `chat_session_id`.
+- `frontend/src/components/clips/ClipModal.tsx` — `chatSessionId` prop;
+  forwarded in the clip request and the optimistic Document.
+- `frontend/src/components/WorkspaceUI.tsx`:
+  - Workspace-doc-sync effect now reads `listDocuments(undefined, chatId)`.
+    With no chatId the docs list is empty (no default reuse).
+  - Per-workspace `localStorage["docs_${workspaceType}"]` shadow list
+    **removed** from upload, batch upload (HR), and clip flows. Backend
+    is now the single source of truth via `chat_session_id`.
+  - `handleFileChange` and the HR batch upload pass `chatId` to
+    `uploadDocument()`.
+  - `ClipModal` rendered with `chatSessionId={chatId || undefined}`.
+
+**Why this is safe to deploy without a DB migration:**
+- `Document.chat_session_id` already exists in the schema (`models/document.py:32`).
+- Pre-existing rows have `chat_session_id = NULL`. Those rows are
+  invisible to chat-scoped retrieval (correct — they were never tied
+  to a chat). They remain visible in workspace-level listings if any
+  endpoint omits the `chat_session_id` filter (e.g. the admin /documents
+  GET without the new param).
+
+**Could regress:**
+- Any historical doc with `chat_session_id = NULL` now disappears from
+  the chip rail because `listDocuments(undefined, chatId)` strictly
+  filters. This is the desired behaviour; users with orphan docs can
+  reupload them into the chat that needs them. A future migration could
+  back-fill `chat_session_id` for legacy docs if we ever want them
+  reachable from a particular chat.
+- /search, /ask, /debug remain workspace-scoped (no `session_id` in their
+  contract). Only /stream is the per-chat hot path; the others are
+  rarely-used REST debugging endpoints. Documented as known follow-up.
+
+**Proof (manual UI test required — paste here after running):**
+- [ ] Chat A: upload doc X → ask about X → cites X. ✅ PENDING
+- [ ] Chat B (New Chat, no upload): same question → no-document mode,
+      NO citation of X. ✅ PENDING
+- [ ] Chat C: upload doc Y only → cites only Y, NEVER X. ✅ PENDING
+
+

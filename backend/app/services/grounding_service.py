@@ -19,14 +19,43 @@ class GroundingService:
         final_top_k: int = 5,               # Selection Limit
         similarity_threshold: float = 0.0,
         rerank_threshold: float = 0.0,      # Low-confidence Filtering
-        max_tokens: int = 4000              # Token Budget Strategy
+        max_tokens: int = 4000,             # Token Budget Strategy
+        document_ids: Optional[List[UUID]] = None,  # P1: per-chat isolation
     ) -> Dict[str, Any]:
         """
         Orchestrates the pipeline from semantic retrieval -> reranking -> formatting.
         Produces deterministic, citation-ready contexts for the LLM.
+
+        P1: when ``document_ids`` is provided, retrieval is restricted to only
+        those documents (in addition to the workspace + owner filters
+        downstream). Callers in /query/stream pass the document_ids attached
+        to the current chat session so other chats' docs don't bleed in.
         """
         start_time = time.time()
-        
+
+        # P1: empty document_ids list is meaningful — it means "this chat has
+        # no attached docs", in which case retrieval would return nothing
+        # anyway. Short-circuit to skip the (unnecessarily wide) DB call.
+        if document_ids is not None and len(document_ids) == 0:
+            return {
+                "query": query,
+                "grounded_context_str": "",
+                "evidence_metadata": [],
+                "confidence_score": 0.0,
+                "tracing": {
+                    "retrieval_tracing": {
+                        "embedding_time_sec": 0.0,
+                        "database_time_sec": 0.0,
+                        "total_time_sec": 0.0,
+                    },
+                    "reranking_time_sec": 0.0,
+                    "total_grounding_time_sec": round(time.time() - start_time, 4),
+                    "candidates_retrieved": 0,
+                    "evidence_accepted": 0,
+                    "estimated_tokens": 0,
+                },
+            }
+
         # 1. Candidate Retrieval (Top-30 Expansion Strategy)
         # We fetch a wide net from pgvector because vector search is highly scalable
         # but misses fine-grained cross-attention semantic nuance.
@@ -35,7 +64,8 @@ class GroundingService:
             query=query,
             workspace_id=workspace_id,
             top_k=retrieval_top_k,
-            similarity_threshold=similarity_threshold
+            similarity_threshold=similarity_threshold,
+            document_ids=document_ids,  # P1: forward chat-scoped filter
         )
         candidates = retrieval_payload["results"]
         

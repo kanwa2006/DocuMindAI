@@ -16,6 +16,7 @@ from app.services.grounding_service import GroundingService
 from app.services.llm_service import llm_service
 from app.services.retrieval_service import RetrievalService
 from app.models.chat import ChatMessage
+from app.models.document import Document, DocumentStatus
 from app.models.org import User
 from app.core.auth import get_current_user
 from app.core.workspace import resolve_workspace_id
@@ -214,7 +215,11 @@ async def ask_question_stream(
             effective_top_k = request.top_k if request.top_k != 5 else ws_config["top_k"]
 
             # Task 4.3 — fetch last 8 messages for conversation history
+            # P1 — also fetch the documents attached to THIS chat session so
+            # retrieval can be scoped to them only.
             conversation_history = []
+            attached_doc_ids: list = []  # P1: doc UUIDs for this chat only
+            owner_uuid = uuid.UUID(user_id)
             if request.session_id:
                 try:
                     sess_uuid = uuid.UUID(request.session_id)
@@ -235,8 +240,26 @@ async def ask_question_stream(
                         f"[query/stream] Loaded {len(conversation_history)} history messages "
                         f"for session {request.session_id}"
                     )
+
+                    # P1: docs attached to this exact chat, READY only.
+                    # Owner filter is belt-and-suspenders on top of the
+                    # session_id (which is owned by the user already, but
+                    # the joint filter prevents any cross-tenant leak if
+                    # the session_id is ever spoofed).
+                    doc_stmt = (
+                        select(Document.id)
+                        .where(Document.chat_session_id == sess_uuid)
+                        .where(Document.owner_id == owner_uuid)
+                        .where(Document.status == DocumentStatus.READY)
+                    )
+                    doc_result = await db.execute(doc_stmt)
+                    attached_doc_ids = [row[0] for row in doc_result.all()]
+                    logger.info(
+                        f"[query/stream] Chat {request.session_id} has "
+                        f"{len(attached_doc_ids)} attached READY docs"
+                    )
                 except Exception as exc:
-                    logger.warning(f"[query/stream] Failed to load history: {exc}")
+                    logger.warning(f"[query/stream] Failed to load history/docs: {exc}")
 
             history_text = "\n".join([
                 f"{m['role'].upper()}: {m['content'][:300]}"
@@ -253,16 +276,32 @@ async def ask_question_stream(
             # 1. Retrieval phase
             yield f"event: status\ndata: {json.dumps({'message': 'Retrieving semantic chunks...'})}\n\n"
 
+            # P1: include the chat's attached doc ids in the cache key so two
+            # chats in the same workspace asking the same question don't
+            # share results.
+            attached_ids_key = ",".join(sorted(str(d) for d in attached_doc_ids))
+            cache_key = (
+                f"retrieval:{workspace_type}:"
+                f"{hashlib.sha256((cache_key + ':' + attached_ids_key).encode()).hexdigest()[:16]}"
+            )
+
             grounding_payload = await _get_cached_retrieval(cache_key)
             if grounding_payload:
                 logger.info(f"[query/stream] Cache hit: {cache_key}")
             else:
+                # P1: if the session has attached docs, pass them through so
+                # retrieval is restricted to this chat only. If no session_id
+                # or no docs are attached, attached_doc_ids stays []; the
+                # GroundingService short-circuits to no-document mode (which
+                # the existing C10 logic below handles).
+                doc_filter = attached_doc_ids if request.session_id else None
                 grounding_payload = await GroundingService.prepare_grounded_context(
                     db=db,
                     query=request.query,
                     workspace_id=resolve_workspace_id(current_user["workspace_id"]),
                     final_top_k=effective_top_k,
-                    similarity_threshold=request.similarity_threshold
+                    similarity_threshold=request.similarity_threshold,
+                    document_ids=doc_filter,
                 )
                 await _set_cached_retrieval(cache_key, grounding_payload)
 

@@ -48,6 +48,9 @@ class ClipRequest(BaseModel):
     title: Optional[str] = None
     content: str
     source_hint: Optional[str] = None  # "email", "message", "web", "note", "other"
+    # P1: pin the clip to a specific chat session so it never leaks into
+    # other chats in the same workspace. Optional for backwards compat.
+    chat_session_id: Optional[str] = None
 
 
 class VerifyUploadRequest(BaseModel):
@@ -58,6 +61,9 @@ class VerifyUploadRequest(BaseModel):
     file_hash: Optional[str] = None
     mime_type: Optional[str] = None
     size_bytes: Optional[int] = None
+    # P1: per-chat isolation. When set, retrieval will only see this doc for
+    # queries made in this specific chat session.
+    chat_session_id: Optional[str] = None
 
 
 @router.post("/clip")
@@ -114,6 +120,14 @@ async def clip_text(
     file_hash = hashlib.sha256(request.content.encode()).hexdigest()
     size_bytes = len(request.content.encode("utf-8"))
 
+    # P1: persist chat_session_id so per-chat retrieval can filter to this clip
+    chat_uuid: Optional[uuid.UUID] = None
+    if request.chat_session_id:
+        try:
+            chat_uuid = uuid.UUID(request.chat_session_id)
+        except (ValueError, TypeError):
+            chat_uuid = None
+
     new_doc = Document(
         id=doc_id,
         filename=filename,
@@ -124,6 +138,7 @@ async def clip_text(
         status=DocumentStatus.PROCESSING,
         owner_id=owner_id,
         workspace_id=ws_uuid,
+        chat_session_id=chat_uuid,
         content_hash=content_hash,
         source="clip",
     )
@@ -166,12 +181,22 @@ async def verify_upload(
         local_path = Path(storage_path)
         size_bytes = local_path.stat().st_size if local_path.exists() else 0
 
+    # P1: persist chat_session_id so the retrieval path in /query/stream can
+    # restrict the vector search to only the docs attached to this chat.
+    chat_uuid: Optional[uuid.UUID] = None
+    if request.chat_session_id:
+        try:
+            chat_uuid = uuid.UUID(request.chat_session_id)
+        except (ValueError, TypeError):
+            chat_uuid = None
+
     new_doc = Document(
         id=doc_id,
         filename=request.filename,
         storage_path=storage_path,
         owner_id=owner_id,
         workspace_id=ws_uuid,
+        chat_session_id=chat_uuid,
         file_hash=file_hash,
         mime_type=mime_type,
         size_bytes=size_bytes,
@@ -322,12 +347,18 @@ async def upload_local(
 @router.get("", response_model=List[DocumentResponse])
 async def list_documents(
     workspace_id: Optional[str] = Query(None),
+    chat_session_id: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
     """
     FIX 6.6: Accepts optional workspace_id query param to filter documents.
     Falls back to JWT workspace_id. Strict owner isolation enforced.
+
+    P1: Accepts optional chat_session_id to restrict the list to docs
+    attached to a single chat. When provided, this is the only view that
+    matters for the chat's chip rail — docs from other chats in the same
+    workspace are excluded.
     """
     effective_workspace = workspace_id or current_user.get("workspace_id", "general")
     try:
@@ -339,8 +370,19 @@ async def list_documents(
         select(Document)
         .where(Document.workspace_id == ws_uuid)
         .where(Document.owner_id == uuid.UUID(current_user["id"]))
-        .order_by(Document.created_at.desc())
     )
+
+    # P1: per-chat isolation filter. Empty/None chat_session_id means
+    # "all of this workspace's docs"; a real UUID means "only this chat".
+    if chat_session_id:
+        try:
+            chat_uuid = uuid.UUID(chat_session_id)
+            stmt = stmt.where(Document.chat_session_id == chat_uuid)
+        except (ValueError, TypeError):
+            # Invalid id → return empty list rather than leaking everything
+            return []
+
+    stmt = stmt.order_by(Document.created_at.desc())
     result = await db.execute(stmt)
     return result.scalars().all()
 

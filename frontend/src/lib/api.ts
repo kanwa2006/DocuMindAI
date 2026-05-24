@@ -1,9 +1,10 @@
 export interface Document {
   id: string;
   filename: string;
-  status: 'PENDING_UPLOAD' | 'UPLOADED' | 'PROCESSING' | 'EXTRACTED' | 'READY' | 'FAILED' | 'DEDUPLICATED';
+  status: 'PENDING_UPLOAD' | 'UPLOADED' | 'PROCESSING' | 'EXTRACTED' | 'INDEXING' | 'READY' | 'FAILED' | 'DEDUPLICATED';
   duplicate_of?: string;
   workspace_id?: string;
+  chat_session_id?: string | null;  // P1: per-chat isolation
   created_at: string;
   source?: string; // "upload" | "clip" | "scan"
 }
@@ -165,7 +166,11 @@ export const logout = async () => {
   return res.json();
 };
 
-export const uploadDocument = async (file: File, workspaceId?: string): Promise<Document> => {
+export const uploadDocument = async (
+  file: File,
+  workspaceId?: string,
+  chatSessionId?: string,  // P1: bind upload to a specific chat session
+): Promise<Document> => {
   // 1. Get Presigned URL (or local upload info)
   const wsParam = workspaceId ? `&workspace_id=${encodeURIComponent(workspaceId)}` : '';
   const preRes = await apiFetch(`/documents/upload/presigned?filename=${encodeURIComponent(file.name)}&content_type=${encodeURIComponent(file.type || 'application/pdf')}&file_size=${file.size}${wsParam}`);
@@ -198,6 +203,8 @@ export const uploadDocument = async (file: File, workspaceId?: string): Promise<
   }
 
   // 3. Verify and Trigger Pipeline
+  // P1: pass chat_session_id so the Document row gets linked to the chat,
+  // and the retrieval path can later restrict by it.
   const verRes = await apiFetch(`/documents/upload/verify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -208,6 +215,7 @@ export const uploadDocument = async (file: File, workspaceId?: string): Promise<
       file_hash: uploadMeta.file_hash,
       mime_type: uploadMeta.mime_type,
       size_bytes: uploadMeta.size_bytes,
+      chat_session_id: chatSessionId ?? null,
     })
   });
   if (!verRes.ok) throw new Error("Failed to verify upload");
@@ -216,8 +224,14 @@ export const uploadDocument = async (file: File, workspaceId?: string): Promise<
 };
 
 
-export const listDocuments = async (workspaceId?: string): Promise<Document[]> => {
-  const qs = workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : '';
+export const listDocuments = async (
+  workspaceId?: string,
+  chatSessionId?: string,  // P1: per-chat isolation filter
+): Promise<Document[]> => {
+  const params = new URLSearchParams();
+  if (workspaceId) params.append("workspace_id", workspaceId);
+  if (chatSessionId) params.append("chat_session_id", chatSessionId);
+  const qs = params.toString() ? `?${params.toString()}` : "";
   const res = await apiFetch(`/documents${qs}`, {});
   if (!res.ok) throw new Error('Failed to sync workspace');
   return res.json();
@@ -234,6 +248,7 @@ export interface ClipTextRequest {
   title?: string;
   content: string;
   source_hint?: 'email' | 'message' | 'web' | 'note' | 'other';
+  chat_session_id?: string;  // P1: per-chat isolation
 }
 
 export interface ClipTextResponse {

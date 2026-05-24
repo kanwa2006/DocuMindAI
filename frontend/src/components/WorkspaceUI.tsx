@@ -772,19 +772,26 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     if (saved) setVoiceLang(saved);
   }, []);
 
-  // Workspace document sync
+  // Workspace document sync — P1: scope STRICTLY to the current chat.
+  // Before P1 this read `docs_${workspaceType}` from localStorage which
+  // surfaced every upload across every chat in the same workspace. Now we
+  // ask the backend for docs where `chat_session_id == chatId`. A new chat
+  // with no uploads gets an empty list — no bleed.
   useEffect(() => {
+    if (!chatId) {
+      setDocs([]);
+      setActiveDoc(null);
+      return;
+    }
     const syncWorkspace = async () => {
       try {
-        const fetchedDocs = await listDocuments();
-        const wsDocs = JSON.parse(localStorage.getItem(`docs_${workspaceType}`) || "[]");
-        const filteredDocs = fetchedDocs.filter((d) => wsDocs.includes(d.id));
-        setDocs(filteredDocs);
-        setActiveDoc(filteredDocs.length > 0 ? filteredDocs[0] : null);
+        const fetchedDocs = await listDocuments(undefined, chatId);
+        setDocs(fetchedDocs);
+        setActiveDoc(fetchedDocs.length > 0 ? fetchedDocs[0] : null);
       } catch { toast.error("Failed to sync workspace"); }
     };
     syncWorkspace();
-  }, [workspaceType]);
+  }, [workspaceType, chatId]);
 
   const handleQueryChange = (val: string) => {
     setQuery(val);
@@ -963,10 +970,14 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     setLoading(true);
     const toastId = toast.loading("Uploading document securely...");
     try {
-      const uploadedDoc = await uploadDocument(selectedFile);
-      const wsDocs = JSON.parse(localStorage.getItem(`docs_${workspaceType}`) || "[]");
-      wsDocs.push(uploadedDoc.id);
-      localStorage.setItem(`docs_${workspaceType}`, JSON.stringify(wsDocs));
+      // P1: bind the upload to THIS chat session. listDocuments now filters
+      // by chat_session_id, so we no longer need the per-workspace
+      // localStorage shadow list — the backend is the source of truth.
+      const uploadedDoc = await uploadDocument(
+        selectedFile,
+        undefined,
+        chatId || undefined,
+      );
       setDocs((prev) => [uploadedDoc, ...prev]);
       setActiveDoc(uploadedDoc);
 
@@ -1021,9 +1032,9 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   };
 
   const handleClipped = (doc: Document) => {
-    const wsDocs = JSON.parse(localStorage.getItem(`docs_${workspaceType}`) || "[]");
-    wsDocs.push(doc.id);
-    localStorage.setItem(`docs_${workspaceType}`, JSON.stringify(wsDocs));
+    // P1: chat-scoped — no more per-workspace localStorage shadow list.
+    // The clip backend already records chat_session_id, so listDocuments
+    // for this chat will surface it on next sync.
     setDocs((prev) => [doc, ...prev]);
     if (!activeDoc) setActiveDoc(doc);
     toast.success("📋 Text clipped — processing…");
@@ -1234,12 +1245,13 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         try {
           // Simulate progress during upload
           setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 30, status: "uploading" } }));
-          const uploadedDoc = await uploadDocument(file);
+          // P1: bind every batch-uploaded doc to the current chat session so
+          // HR rankings don't leak across chats.
+          const uploadedDoc = await uploadDocument(file, undefined, chatId || undefined);
           setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 60, status: "uploading" } }));
 
-          const wsDocs = JSON.parse(localStorage.getItem(`docs_${workspaceType}`) || "[]");
-          wsDocs.push(uploadedDoc.id);
-          localStorage.setItem(`docs_${workspaceType}`, JSON.stringify(wsDocs));
+          // P1: backend is now source of truth for per-chat docs — no
+          // per-workspace localStorage shadow list.
           setDocs((prev) => [uploadedDoc, ...prev]);
           setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 100, status: "done" } }));
         } catch {
@@ -1250,7 +1262,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
 
     if (batchFileInputRef.current) batchFileInputRef.current.value = "";
     setTimeout(() => setBatchProgress({}), 3000);
-  }, [workspaceType]);
+  }, [workspaceType, chatId]);
 
   const handlePaperGenerated = useCallback((data: any) => {
     setGeneratedPaper(data);
@@ -1307,6 +1319,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           initialText={clipInitialText}
           onClose={() => { setClipModalOpen(false); setClipInitialText(""); }}
           onClipped={handleClipped}
+          chatSessionId={chatId || undefined}
         />
       )}
 

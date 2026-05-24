@@ -17,9 +17,10 @@ interface ClipModalProps {
   initialText?: string;
   onClose: () => void;
   onClipped: (doc: Document) => void;
+  chatSessionId?: string;  // P1: bind clip to the current chat session
 }
 
-export function ClipModal({ initialText = "", onClose, onClipped }: ClipModalProps) {
+export function ClipModal({ initialText = "", onClose, onClipped, chatSessionId }: ClipModalProps) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState(initialText);
   const [sourceHint, setSourceHint] = useState<SourceHint | null>(null);
@@ -58,6 +59,7 @@ export function ClipModal({ initialText = "", onClose, onClipped }: ClipModalPro
         content,
         title: title.trim() || undefined,
         source_hint: sourceHint || undefined,
+        chat_session_id: chatSessionId,  // P1: per-chat isolation
       };
       const res = await clipText(req);
 
@@ -67,6 +69,7 @@ export function ClipModal({ initialText = "", onClose, onClipped }: ClipModalPro
         filename: res.filename || title.trim() || content.slice(0, 40),
         status: res.status === "deduplicated" ? "READY" : "PROCESSING",
         source: "clip",
+        chat_session_id: chatSessionId,
         created_at: new Date().toISOString(),
       };
 
