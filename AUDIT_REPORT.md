@@ -1636,4 +1636,39 @@ to contain a valid Part... finish_reason is 1`.
 - [ ] Reload any workspace page → console has zero hydration errors.
       ✅ PENDING
 
+### P5 — Quick-action chip audit (welcome + workspace actions)
+
+Two chip surfaces exist in `WorkspaceUI.tsx`:
+1. **Welcome chips** — `WORKSPACE_CONFIG[ws].quickActions`, shown when
+   `history.length === 0`. P2 routed all of these through
+   `handleWelcomeQuickAction` which **prefills** the textarea (except
+   exam "Generate paper" which opens `PaperConfigPanel`).
+2. **Action chips** — `WORKSPACE_ACTIONS[ws]`, the per-doc chip rail
+   above the input. Each chip goes through `handleWorkspaceAction(label)`.
+   At the bottom of that handler is a fallback `toast("This action
+   isn't wired up yet…")` so no chip can silently no-op.
+
+| WS | Welcome chip | Behaviour | Action chip | Behaviour |
+|---|---|---|---|---|
+| general | Summarize / Extract key points / Compare | prefill textarea | — | — |
+| exam | Generate paper / Question bank / Answer key | Generate paper → **opens PaperConfigPanel**; others prefill | Generate Paper / Question Bank / Answer Key / Export DOCX / Extract Tables | panel / prefill / toggle / DOCX blob download / panel |
+| hr | Rank candidates / Match JD / Interview kit | prefill | Batch Upload / Set JD Context / View Rankings / Export Candidates | file picker / prefill / panel / panel+toast |
+| study | Study plan / Flashcards / Quiz me | prefill | Study Mode / Flashcard Mode / Pomodoro Timer / My Progress | prefill / fetch+panel / toggle / prefill |
+| research | Synthesize / Find gaps / Export citations | prefill | Citation Mode / Review Mode / Import Papers / Find Gaps | panel / prefill / file picker / panel |
+| legal | Extract clauses / Risk analysis / Map obligations | prefill | Contract Mode / Risk Mode / Clause Library / Risk Report | prefill / panel / prefill / panel |
+| finance | Extract figures / Compute ratios / Year-on-year | prefill | Extraction Mode / Table Mode / Verify / Ratios | prefill / panel / panel / panel |
+
+Follow-up suggestion chips (rendered under each AI reply): now route
+through `fillPrompt` (P2), so they all prefill the textarea and never
+auto-send.
+
+**Could regress:** any chip the user expects to *immediately* trigger
+an answer now requires a Send press. That's the spec — "the user
+reviews and presses Send."
+
+**Proof (manual):**
+- [ ] Every workspace: click every chip; verify behaviour matches the
+      table above; verify zero "This action isn't wired up yet"
+      toasts in regular usage. ✅ PENDING
+
 
