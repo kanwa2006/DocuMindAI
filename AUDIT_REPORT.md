@@ -1518,4 +1518,34 @@ when grounded context is present:
       NO citation of X. ✅ PENDING
 - [ ] Chat C: upload doc Y only → cites only Y, NEVER X. ✅ PENDING
 
+### P2 — Quick-action chips no longer auto-send
+
+**Root cause:** `WorkspaceUI.tsx:1471` rendered
+`<WorkspaceWelcome onQuickAction={sendMessage}>` — clicking any welcome
+chip dispatched the SSE stream immediately. The exam "Generate paper"
+chip skipped the `PaperConfigPanel` entirely; all other chips bypassed
+user review of the canned prompt.
+
+**Fix:**
+- `WorkspaceWelcome.onQuickAction` signature widened to `(label, prompt)`
+  so the parent can route based on label.
+- New parent handler `handleWelcomeQuickAction(label, prompt)`:
+  - `exam` workspace + label contains "generate paper" → opens
+    `PaperConfigPanel` (`setShowPaperConfig(true)`). No message sent.
+  - All other chips → `fillPrompt(prompt)` which calls
+    `handleQueryChange(prompt)` and focuses the textarea. The Send
+    button stays in the user's hands.
+- Follow-up suggestion chips (after each AI reply) also switched from
+  `onFollowUpClick={sendMessage}` to `onFollowUpClick={fillPrompt}` — they
+  prefill so the user can tweak the wording before sending. Consistent
+  with the spec rule "prompt chips prefill; never auto-send."
+
+**Proof (UI test required):**
+- [ ] Exam: click "Generate paper" → PaperConfigPanel opens, network tab
+      shows ZERO `/query/stream` request. ✅ PENDING
+- [ ] General: click "Summarize" → textarea fills with the prompt; no
+      request fired until the user clicks Send. ✅ PENDING
+- [ ] Follow-up chip after an answer → textarea fills, no auto-send.
+      ✅ PENDING
+
 

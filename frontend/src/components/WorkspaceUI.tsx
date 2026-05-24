@@ -292,7 +292,17 @@ const MARKDOWN_COMPONENTS = buildMarkdownComponents("general");
 
 // ─── Workspace welcome state (Task 5.1) ───────────────────────────────────────
 
-function WorkspaceWelcome({ workspaceType, onQuickAction }: { workspaceType: string; onQuickAction: (prompt: string) => void }) {
+function WorkspaceWelcome({
+  workspaceType,
+  onQuickAction,
+}: {
+  workspaceType: string;
+  // P2: pass BOTH label and prompt so the parent can decide whether to
+  // open a config panel (Generate paper → PaperConfigPanel) or just
+  // prefill the input box. Auto-send is never the default — the user
+  // must press Send themselves.
+  onQuickAction: (label: string, prompt: string) => void;
+}) {
   const cfg = WORKSPACE_CONFIG[workspaceType] || WORKSPACE_CONFIG.general;
   return (
     <div className="message-enter" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", padding: "40px 16px", textAlign: "center" }}>
@@ -314,7 +324,7 @@ function WorkspaceWelcome({ workspaceType, onQuickAction }: { workspaceType: str
         )}
         <div style={{ display: "flex", gap: "8px", justifyContent: "center", flexWrap: "wrap", marginTop: "24px" }}>
           {cfg.quickActions.map((a) => (
-            <button key={a.label} onClick={() => onQuickAction(a.prompt)} className="btn btn-secondary"
+            <button key={a.label} onClick={() => onQuickAction(a.label, a.prompt)} className="btn btn-secondary"
               style={{ borderRadius: "999px", height: "34px", padding: "0 14px", fontSize: "13px", gap: a.icon ? "6px" : 0 }}>
               {a.icon && <span>{a.icon}</span>}{a.label}
             </button>
@@ -1073,6 +1083,22 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     setTimeout(() => textareaRef.current?.focus(), 0);
   }, [chatId]);
 
+  // P2 — welcome quick-action chips. NEVER auto-send. For chips that map
+  // to a config panel (exam "Generate paper" → PaperConfigPanel), open the
+  // panel and let the user click its Generate button. For everything else
+  // prefill the input so the user can review/edit and press Send.
+  const handleWelcomeQuickAction = useCallback((label: string, prompt: string) => {
+    const lower = label.toLowerCase();
+    // Exam: "Generate paper" → open the Paper Configuration panel only.
+    if (workspaceType === "exam" && lower.includes("generate paper")) {
+      setShowPaperConfig(true);
+      return;
+    }
+    // Study: "Quiz me" / "Flashcards" — wire these to their respective
+    // panels later (P5). For now, prefill so the user can still send.
+    fillPrompt(prompt);
+  }, [workspaceType, fillPrompt]);
+
   const handleWorkspaceAction = useCallback(async (label: string) => {
     if (workspaceType === "finance") {
       if (label === "Ratios" || label === "Verify") { setShowRatioPanel((v) => !v); return; }
@@ -1481,7 +1507,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
 
         {/* Welcome state (Task 5.1) */}
         {!response && !loading && history.length === 0 && (
-          <WorkspaceWelcome workspaceType={workspaceType} onQuickAction={sendMessage} />
+          <WorkspaceWelcome workspaceType={workspaceType} onQuickAction={handleWelcomeQuickAction} />
         )}
 
         {/* No documents hint — softened in C10. Asking without a doc is allowed; this is a nudge, not a gate. */}
@@ -1509,7 +1535,8 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
               isStreaming={isStreaming}
               onRegenerate={regenerateLastResponse}
               followUps={[]}
-              onFollowUpClick={sendMessage}
+              // P2: prefill, never auto-send. User reviews and clicks Send.
+              onFollowUpClick={fillPrompt}
               trustData={msg.role === "assistant" ? trustDataMap[msg.id] : undefined}
               isTrustExpanded={expandedTrustMsgId === msg.id}
               onTrustToggle={() => setExpandedTrustMsgId((prev) => prev === msg.id ? null : msg.id)}
