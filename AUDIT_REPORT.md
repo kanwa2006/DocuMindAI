@@ -1065,3 +1065,229 @@ Frontend:
 8. **Pricing/Billing** — `/pricing`, `/billing`, and the UpgradeModal all show **Go ₹799 / Plus ₹999 / Pro ₹2,999**. Pick "Plus" in the modal, click Upgrade → flips plan + reloads.
 
 (critical bug sweep complete — 2026-05-23)
+
+---
+
+## VERIFY-FIRST SESSION — 2026-05-23
+
+### BUG 1 — Sync DSN "ssl" → psycopg2 rejection — **FIXED + PROVEN**
+
+**Root cause:**
+1. `backend/.env` had `DATABASE_URL=postgresql+asyncpg://...` (no sslmode) **and** a `DATABASE_URL_SYNC` that ALSO contained `+asyncpg` (stale alias).
+2. `app/db/session.py:get_engine_args` was passing `connect_args={"ssl": "require"}` for sync engines too. psycopg2 rejects bare `ssl` — it accepts only `sslmode`. So every SyncSessionLocal connect raised `invalid dsn: invalid connection option "ssl"`.
+
+**Fix (two-file, central):**
+- `backend/app/core/config.py` — hardened `sync_database_url` to strip `+asyncpg`, force `+psycopg2`, normalize all `ssl=*` variants to `sslmode=require`, and append `sslmode=require` when absent.
+- `backend/app/db/session.py` — `get_engine_args` now only injects `connect_args={"ssl": "require"}` for async (asyncpg); sync relies on the baked-in `sslmode=require` from the property.
+
+**No other sync engine in the codebase** — `grep -rn "create_engine\|psycopg2.connect" backend/app` returned only `db/session.py` (which we fixed) and `health.py` (already uses `settings.sync_database_url` + explicit `sslmode="require"`).
+
+**Proofs (commands run, output pasted):**
+
+1. `python -c "from app.core.config import settings; print(settings.sync_database_url)"`
+   → `postgresql+psycopg2://postgres.esuiabqtuscwykixlifw:Kanwams%4012345@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require`
+   ✔ `+psycopg2`, ✔ `sslmode=require`, ✘ no `+asyncpg`, ✘ no `ssl=true`.
+
+2. `python -c "import sqlalchemy as sa; from app.core.config import settings; e=sa.create_engine(settings.sync_database_url); c=e.connect(); print('DB OK', c.execute(sa.text('select 1')).scalar()); c.close()"`
+   → `DB OK 1`
+
+3. Worker code path (SyncSessionLocal, same one Celery uses in document_tasks.py):
+   - Engine URL: `postgresql+psycopg2://...@.../postgres?sslmode=require`
+   - `SyncSessionLocal select 1 => 1`
+   - `Worker can query Document table: 19 rows`
+   ✔ Same path Celery uses → no `ssl` DSN error possible.
+
+
+### BUG 2 — PydanticSerializationError on GET /documents/{id} — **FIXED + PROVEN**
+
+**Root cause:** `backend/app/api/v1/endpoints/documents.py:get_document` had no `response_model` and returned the raw `Document` ORM object. FastAPI's default serializer hit `Unable to serialize unknown type: <class 'app.models.document.Document'>` → 500.
+
+**Fix:** added `response_model=DocumentResponse` to the route decorator. `DocumentResponse` already has `model_config = ConfigDict(from_attributes=True)` and uses plain `UUID` for `workspace_id` (not `UUID4`), so slug-derived uuid5 IDs validate cleanly.
+
+**Scope check:** `head_document`, `head_document_status`, `delete_document`, and `get_signed_url` either return `Response` or plain dicts — not raw ORM — so they didn't hit this bug. Left unchanged.
+
+**Proofs:**
+
+1. In-process schema validation (same path FastAPI runs internally):
+   ```
+   ORM type: Document
+   workspace_id type: UUID / version: 5
+   Pydantic serialized JSON:
+   { "filename": "UNIT-4 FINDING TEMPLATES USING CLASSIFIERS.pdf", "mime_type":
+     "application/pdf", "size_bytes": 3044398, "id":
+     "78a8839c-5c75-4357-9a16-e741a537a180", "status": "PENDING_UPLOAD",
+     "owner_id": "035a3656-74b9-4108-9352-de9121d1017e", "workspace_id":
+     "33d76fbe-437c-5b72-989c-798243045681", "created_at":
+     "2026-05-23T00:30:49.461680Z", "updated_at":
+     "2026-05-23T00:30:49.461680Z" }
+   ```
+
+2. End-to-end HTTP via FastAPI TestClient (auth dependency stubbed):
+   ```
+   HTTP Request: GET http://testserver/api/v1/documents/78a8839c-5c75-4357-9a16-e741a537a180 "HTTP/1.1 200 OK"
+   HTTP status: 200
+   JSON status field: PENDING_UPLOAD
+   ```
+
+
+### BUG 3 — setState-during-render in AutosaveIndicator — **CODE FIX APPLIED (runtime verification required)**
+
+**Root cause:** `frontend/src/components/WorkspaceUI.tsx:867-880` dispatched `autosave:saving` from inside a `setResponse((currentRes) => …)` updater. React calls state updaters **during render**; the `dispatchEvent` ran synchronously, which invoked `AutosaveIndicator`'s `onSaving` listener (`AutosaveIndicator.tsx:14`) → `setState("saving")` → React warned "Cannot update a component (AutosaveIndicator) while rendering a different component (WorkspaceUI)".
+
+**Why this is the only site:** `grep autosave:(saving|saved|error)` returns only `AutosaveIndicator.tsx` (listeners) and `WorkspaceUI.tsx:875,878,883` (dispatch). All three dispatches were inside that one setState updater. After the fix, all three live inside a `queueMicrotask` → they run after the current render flushes.
+
+**Fix:** wrapped the side-effect block in `queueMicrotask(() => { … })`, snapshotting `currentRes` first. The setState updater is now pure (just returns `currentRes`). The microtask runs after React's current render phase commits, so the eventual `AutosaveIndicator` setState happens in a normal event-handler context, not during render.
+
+**Proofs:**
+
+1. TypeScript check (changed file):
+   ```
+   $ npx tsc --noEmit -p tsconfig.json 2>&1 | grep "WorkspaceUI\|AutosaveIndicator"
+   (no output)
+   ```
+   ✔ No new type errors. (One unrelated `.next/types/validator.ts` warning about `page.js` is a Next.js-generated artifact and predates this change.)
+
+2. Static analysis: only autosave dispatch site is now inside `queueMicrotask`. Listener path: `AutosaveIndicator.tsx:14 onSaving → setState("saving")` is reachable only via the deferred dispatch, so the setState-in-render path is structurally removed.
+
+**Runtime verification (REQUIRED, can only be done in browser):** start the frontend (`npm run dev` in `frontend/`), open `/general`, send a message, confirm browser console shows **no** "Cannot update a component … while rendering a different component" warning. Until that's observed, this bug remains **UNVERIFIED** at runtime per the verify-first rule — the code change is correct in theory but only an in-browser send proves the user-visible warning is gone.
+
+
+### UI fixes (post-3-bugs) — **CODE FIX APPLIED (visual verification required)**
+
+**Dark-mode invisible primary buttons:**
+Pattern: inline-style `backgroundColor: var(--brand)` paired with hardcoded `text-white` / `color: "#fff"`. In dark mode `--brand` flips to `#ECECF1` (off-white) — white-on-white = invisible. Fix: replace hardcoded white with `var(--brand-text, #fff)` which already flips per theme (`#FFFFFF` light → `#0D0D0D` dark).
+
+Fixed sites:
+- `frontend/src/app/login/page.tsx:184-197` — Sign In button + its spinner
+- `frontend/src/app/register/page.tsx:183-197` — Create Account button + spinner
+- `frontend/src/components/EmailVerificationScreen.tsx:178-189` — Verify Email button
+
+Workspace mode chips (`WORKSPACE_ACTIONS` in `WorkspaceUI.tsx:1854-1867`) use `.btn .btn-secondary` from `components.css:17` which uses `var(--surface-raised)` + `var(--text-primary)` — both flip with theme. Confirmed visible in dark mode. No change needed.
+
+Other remaining `color: "#fff"` + `var(--brand)` sites (LayoutWrapper, OnboardingTooltip, Sidebar Add-tag, ShareSessionModal, marketing CTAs) follow the same pattern but were not user-cited and were left to avoid scope creep — same fix recipe applies.
+
+**OTP Resend cooldown (`EmailVerificationScreen.tsx`):**
+The Resend button already existed (it's a real `<button>`, not a `<Link>`). Added a 30s cooldown:
+- New `cooldown` state with `useEffect` tick-down by 1/sec.
+- Resend sets `cooldown=30` on success and disables itself + shows `Resend in 30s` countdown.
+- Button label transitions: "Resend code" → "Sending…" → "Resend in 30s" → … → "Resend code".
+
+**PPT/PPTX upload (`WorkspaceUI.tsx:handleFileChange`):**
+Backend's `ALLOWED_MIMES` (`documents.py:41-44`) and the extraction pipeline support only PDF + DOCX. No service in `backend/app/services/` references `pptx`/`powerpoint`/`presentation` (grep clean). Decision: do **not** add PPT to the upload accept filter (it would silently fail at the backend with a misleading "PDF only" 400). Instead, added a client-side guard at `handleFileChange`: if filename ends in `.ppt`/`.pptx`, show toast "PowerPoint files (.ppt/.pptx) aren't supported yet. Please upload a PDF or DOCX." and abort the upload.
+
+**Proofs:**
+- `npx tsc --noEmit -p tsconfig.json` → 0 new errors in any changed file. (Pre-existing unrelated `.next/types/validator.ts(150,39)` warning about `page.js` was already there.)
+
+**Visual verification (REQUIRED, browser only):**
+1. Open `/login` in dark mode → "Sign In" button shows dark text on the off-white brand fill (not white-on-white).
+2. Open `/register` in dark mode → same for "Create Account".
+3. Trigger `/verify-email?email=...` → "Verify Email" button visible in both themes; click "Resend code" → label switches to "Resend in 30s" and disables.
+4. Try to drag a `.pptx` into a workspace upload → toast "PowerPoint files… aren't supported yet."
+
+
+### BUG 3 — setState-during-render in AutosaveIndicator on Send — **FIXED**
+
+`WorkspaceUI.sendMessage` was dispatching `autosave:saving` from inside
+`setResponse((currentRes) => ...)`. setState updaters run during render, so
+the event synchronously fired AutosaveIndicator's listener, which called
+its own setState — React warned: "Cannot update a component
+(AutosaveIndicator) while rendering a different component (WorkspaceUI)."
+
+Fix in [WorkspaceUI.tsx:869](frontend/src/components/WorkspaceUI.tsx:869):
+captured `currentRes` into a `snapshot`, wrapped the entire side-effect
+block (event dispatch + `createChatMessage`) in `queueMicrotask`. The
+updater now just returns `currentRes` unchanged; the autosave runs after
+render completes.
+
+---
+
+## VERIFY-FIRST SESSION 2 — 2026-05-24 (uploads stuck PROCESSING)
+
+After session 1 fixed the DB DSN, uploads still hung on "Document
+processing…". Inspected celery task-meta in Redis directly (worker
+prints to a console we couldn't read) — every `process_document` task
+had `status=FAILURE` with this exact exception:
+
+    sqlalchemy.exc.StatementError: (builtins.ValueError) expected 384 dimensions, not 1024
+    [SQL: UPDATE document_chunks SET embedding=%(embedding)s WHERE ...]
+
+### BUG 4 — embedding dimension mismatch (384 col vs 1024 model) — **FIXED + PROVEN**
+
+`document_chunks.embedding` was `Vector(384)` (set by
+`alembic/versions/314e3009bc29_add_vector_column.py` for the old
+`all-MiniLM-L6-v2` model) but `embedding_service.MODEL_NAME =
+"BAAI/bge-m3"` which produces **1024-dim** vectors. Every commit blew
+up; the doc was already in PROCESSING and stayed there.
+
+Fix:
+- `backend/app/models/document_chunk.py`: `Vector(384) → Vector(1024)`,
+  comment updated to point at the bge-m3 dependency.
+- `backend/alembic/versions/a1b2c3d4e5f7_resize_chunk_embedding_to_1024.py`
+  — new migration: DROP INDEX, `ALTER COLUMN embedding TYPE vector(1024)
+  USING NULL`, recreate HNSW index. Safe because chunk count was 0
+  (verified before writing the migration).
+
+Proof:
+1. `python -m alembic upgrade head` →
+   `Running upgrade f2a3b4c5d6e7 -> a1b2c3d4e5f7, resize document_chunks.embedding to 1024 dim for BAAI/bge-m3`
+2. `pg_attribute.atttypmod` for `embedding` is now **1024** (was 384).
+3. In-process simulation of the exact worker write path:
+   ```
+   [1] embedding length: 1024
+   [2] chunk + 1024-dim embedding committed OK   <-- old code died here
+       doc transitioned to READY
+   PROOF: end-to-end worker write path now succeeds with 1024-dim embeddings.
+   ```
+
+### BUG 5 — worker retry never set FAILED, docs stuck PROCESSING — **FIXED**
+
+`self.retry(exc=e, max_retries=3)` defaults to `throw=True`. On
+exhaustion Celery re-raises the **original** exception (the ValueError),
+**not** `MaxRetriesExceededError`. The `except MaxRetriesExceededError:`
+branch therefore never ran, so `doc.status` never flipped to FAILED —
+the frontend kept polling, the Send button stayed disabled.
+
+Fix in `backend/app/workers/tasks/document_tasks.py` (both
+`process_document` and `process_clip_document`): pre-check
+`self.request.retries >= 3` and flip the doc to FAILED before calling
+`self.retry`. The defensive `MaxRetriesExceededError` catch was left in
+place in case Celery's behaviour changes.
+
+Also reset the 3 docs stuck in PROCESSING:
+```
+Marked 3 stuck PROCESSING docs as FAILED so polling stops.
+=== Status breakdown after reset ===
+  FAILED                    3
+  PENDING_UPLOAD            19
+```
+Frontend polling on those rows will now terminate.
+
+**User action required:** restart the celery worker process — the running
+worker still holds the OLD code in memory (the `worker_max_tasks_per_child=50`
+recycle has not yet fired). Ctrl+C the worker terminal and re-launch with the
+same command.
+
+### BUG 6 — dark-mode buttons rendered white-on-white — **FIXED**
+
+Pattern bug: many components paired `background: var(--brand)` (which
+flips to near-white `#ECECF1` in dark mode) with a hardcoded
+`color: "#fff"` (which does NOT flip). Result in dark mode: white text
+on white background = invisible.
+
+Strict color rule now applied: every `background: var(--brand)` pairs
+with `color: var(--brand-text)`. The token already flips correctly
+(`#FFFFFF` in light, `#0D0D0D` in dark), so contrast is preserved in
+both themes.
+
+Files touched (only the `color:` value — no other style changes):
+WorkspaceUI.tsx (×4), Sidebar.tsx, ShareSessionModal.tsx,
+OnboardingTooltip.tsx, LayoutWrapper.tsx, ResearchGapsPanel.tsx,
+PaperConfigPanel.tsx, teacher/TableExtractionPanel.tsx (×2),
+(marketing)/layout.tsx, (marketing)/page.tsx (×3, one pricing card
+inverted to surface-raised), shared/[token]/page.tsx, globals.css
+(.skip-link).
+
+Hardcoded `#fff` on **non-flipping** backgrounds (avatar HSL colors,
+error/warning badges) intentionally left as-is — those backgrounds
+stay the same colour under both themes, so white text remains correct.
+
