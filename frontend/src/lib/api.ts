@@ -829,21 +829,43 @@ export const verifyEmail = async (otp: string): Promise<{ success: boolean; mess
   return res.json();
 };
 
-export const forgotPassword = async (email: string): Promise<{ message: string }> => {
+// P9 — OTP-based password reset. Replaces the previous link-token flow.
+// forgotPassword sends a 6-digit code by email; verifyResetOtp confirms
+// it without consuming it; resetPassword(email, otp, new) atomically
+// consumes the OTP and updates the password.
+
+export const forgotPassword = async (email: string): Promise<{ message: string; resend_in?: number }> => {
   const res = await apiFetch("/auth/forgot-password", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email }),
   });
   // Always treated as success — backend returns 202 regardless to prevent enumeration.
-  return res.json().catch(() => ({ message: "If an account exists, a reset link has been sent." }));
+  return res.json().catch(() => ({ message: "If an account exists, a reset code has been sent." }));
 };
 
-export const resetPassword = async (token: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
+export const verifyResetOtp = async (email: string, otp: string): Promise<{ valid: boolean }> => {
+  const res = await apiFetch("/auth/verify-otp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, otp }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Invalid or expired code.");
+  }
+  return res.json();
+};
+
+export const resetPassword = async (
+  email: string,
+  otp: string,
+  newPassword: string,
+): Promise<{ success: boolean; message: string }> => {
   const res = await apiFetch("/auth/reset-password", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token, new_password: newPassword }),
+    body: JSON.stringify({ email, otp, new_password: newPassword }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

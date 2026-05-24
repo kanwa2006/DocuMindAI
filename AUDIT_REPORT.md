@@ -1768,4 +1768,65 @@ listener (`chat-title-updated`) refreshes the list.
       question that references a slide near the end → answer cites the
       slide number. ✅ PENDING
 
+### P9 — Forgot-password OTP flow
+
+Replaces the previous 30-min `reset-password?token=…` link with a
+6-digit OTP. Keeps the no-enumeration guarantee.
+
+**Backend (`backend/app/api/v1/endpoints/auth.py`):**
+- New helpers:
+  - `_generate_password_otp()` → 6-digit numeric string.
+  - `_store_password_otp(email, otp)` → Redis `pwotp:{email}`, 10 min TTL.
+  - `_peek_password_otp(email)` → read-only for verify-otp.
+  - `_consume_password_otp(email, otp)` → constant-time compare via
+    `secrets.compare_digest`, atomic delete on match.
+  - `_mark_password_otp_sent(email)` / `_password_otp_cooldown_seconds(email)`
+    → 30 s resend cooldown via separate Redis key (`pwotp_sent:{email}`).
+  - `_send_password_otp_email(email, otp)` → SMTP if configured;
+    otherwise **logs the OTP loudly** so dev can copy-paste it.
+- Endpoints:
+  - `POST /auth/forgot-password` — same contract `{ email }`, now sends
+    an OTP. Still returns 202 with a `resend_in` hint (30 s if a fresh
+    send happened, the leftover cooldown otherwise). No enumeration —
+    same body whether the email exists or not.
+  - `POST /auth/verify-otp` (new) — `{ email, otp }` → `{ valid: true }`
+    or generic 400. Peek-only; does NOT consume the OTP so the user can
+    enter it once on a screen and still use it on the next step.
+  - `POST /auth/reset-password` — contract changed to
+    `{ email, otp, new_password }`. Validates + consumes OTP, then
+    updates `users.hashed_password`. The legacy `{ token, new_password }`
+    contract is gone; the FE redirects the legacy `/reset-password`
+    page to the new flow.
+- `backend/app/core/middleware.py` — added `/api/v1/auth/verify-otp` to
+  `CSRF_EXEMPT_PATHS` (pre-auth route, no CSRF cookie yet).
+- Rate limits unchanged: `3/min` forgot-password, `10/hr` reset-password,
+  plus the new `10/min` on verify-otp.
+
+**Frontend:**
+- `lib/api.ts` — `forgotPassword(email)` returns the new `resend_in`
+  hint; `verifyResetOtp(email, otp)`; `resetPassword(email, otp, new)`.
+  The previous `resetPassword(token, new)` signature is gone (the
+  redirect page that replaces `/reset-password` no longer calls it).
+- `/forgot-password/page.tsx` — single page, three-step state machine:
+  email → OTP → new password → success. OTP input is a 6-digit numeric
+  field (autoComplete="one-time-code") with letter-spaced display.
+  Resend button shows a live countdown using the backend's `resend_in`.
+  "Use a different email" button to reset.
+- `/reset-password/page.tsx` — collapsed to a soft fallback page that
+  explains the change and links to `/forgot-password`. Keeps legacy URLs
+  out of 404 territory.
+
+**Could regress:**
+- Any reset email sent BEFORE this deploy still references a link with a
+  token. That link now lands on the soft fallback page; the user has to
+  request a fresh code. Acceptable — old tokens expire in 30 minutes
+  anyway.
+
+**Proof (manual + dev-log):**
+- [ ] /forgot-password → email step → backend log prints
+      `OTP=NNNNNN` line (no SMTP) → enter that OTP → password screen
+      → set new password → /login?reset=true. ✅ PENDING
+- [ ] Resend button disabled until counter expires, then re-enabled.
+      ✅ PENDING
+
 

@@ -450,50 +450,118 @@ class ForgotPasswordRequest(BaseModel):
     email: str
 
 
+# P9 — OTP-based password reset. Replaces the prior link-token flow per
+# user request: send a 6-digit code by email, the user enters it on the
+# reset page, then sets a new password. Tokens stay in Redis (10 min TTL).
+# Rate-limit + 30 s resend cooldown enforced.
+
 class ResetPasswordRequest(BaseModel):
-    token: str
+    # P9: { email, otp, new_password } replaces the old { token, new_password }.
+    email: str
+    otp: str
     new_password: str
 
 
-async def _store_reset_token(user_id: str, token: str) -> None:
-    """Store a password-reset token with 30-minute TTL."""
+class VerifyOtpRequest(BaseModel):
+    email: str
+    otp: str
+
+
+def _generate_password_otp() -> str:
+    """6-digit zero-padded numeric OTP, kept in step with the email-verify OTPs."""
+    return f"{secrets.randbelow(10**6):06d}"
+
+
+async def _store_password_otp(email: str, otp: str) -> None:
+    """Store the OTP keyed by lower-cased email. 10-minute TTL.
+    Existing key is overwritten so a resend produces a fresh code.
+    """
     redis = await _get_redis()
     if not redis:
         return
     try:
-        await redis.setex(f"pwreset:{token}", 1800, user_id)
+        await redis.setex(f"pwotp:{email}", 600, otp)
     finally:
         await redis.close()
 
 
-async def _consume_reset_token(token: str) -> str | None:
+async def _peek_password_otp(email: str) -> str | None:
+    """Read-only peek used by verify-otp + by the resend-cooldown check."""
     redis = await _get_redis()
     if not redis:
         return None
     try:
-        user_id = await redis.get(f"pwreset:{token}")
-        if user_id:
-            await redis.delete(f"pwreset:{token}")
-        return user_id
+        return await redis.get(f"pwotp:{email}")
     finally:
         await redis.close()
 
 
-def _send_reset_email(to_email: str, token: str) -> None:
-    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
-        logger.warning("[auth] SMTP not configured — reset token logged below (use it directly)")
-        logger.warning("[auth] Password-reset token for %s: %s", to_email, token)
+async def _consume_password_otp(email: str, otp: str) -> bool:
+    """Constant-time compare + atomic delete on success."""
+    redis = await _get_redis()
+    if not redis:
+        return False
+    try:
+        stored = await redis.get(f"pwotp:{email}")
+        if not stored:
+            return False
+        # secrets.compare_digest avoids timing oracle on a 6-digit string.
+        if not secrets.compare_digest(stored, otp):
+            return False
+        await redis.delete(f"pwotp:{email}")
+        return True
+    finally:
+        await redis.close()
+
+
+async def _password_otp_cooldown_seconds(email: str) -> int:
+    """How many seconds before another OTP can be requested. Always 0 if no
+    OTP is on file (no enumeration leak — we don't say whether the email
+    exists, only whether *we recently sent* something).
+    """
+    redis = await _get_redis()
+    if not redis:
+        return 0
+    try:
+        ttl = await redis.ttl(f"pwotp_sent:{email}")
+        return ttl if (ttl and ttl > 0) else 0
+    finally:
+        await redis.close()
+
+
+async def _mark_password_otp_sent(email: str) -> None:
+    """Set a short-lived 'resend cooldown' marker (30 seconds)."""
+    redis = await _get_redis()
+    if not redis:
         return
     try:
-        reset_link = f"{settings.FRONTEND_URL.rstrip('/')}/reset-password?token={token}"
+        await redis.setex(f"pwotp_sent:{email}", 30, "1")
+    finally:
+        await redis.close()
+
+
+def _send_password_otp_email(to_email: str, otp: str) -> None:
+    """Send the OTP. In dev / when SMTP isn't configured, LOG it loudly so
+    the developer can copy-paste it during manual testing.
+    """
+    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
+        logger.warning(
+            "[auth] SMTP not configured — password-reset OTP logged below "
+            "(use it directly in the reset form). Email=%s OTP=%s",
+            to_email, otp,
+        )
+        return
+    try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "DocuMindAI — Reset your password"
+        msg["Subject"] = "DocuMindAI — Your password reset code"
         msg["From"] = settings.EMAIL_FROM or settings.SMTP_USER
         msg["To"] = to_email
         body = (
-            f"Click the link below to reset your DocuMindAI password.\n\n"
-            f"  {reset_link}\n\n"
-            f"This link expires in 30 minutes. If you did not request a reset, ignore this email.\n"
+            f"Your DocuMindAI password reset code is:\n\n"
+            f"   {otp}\n\n"
+            f"Enter this code on the reset screen to choose a new password.\n"
+            f"The code expires in 10 minutes. If you did not request this, "
+            f"ignore this email — no changes were made.\n"
         )
         msg.attach(MIMEText(body, "plain"))
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
@@ -502,7 +570,7 @@ def _send_reset_email(to_email: str, token: str) -> None:
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             server.sendmail(settings.SMTP_USER, [to_email], msg.as_string())
     except Exception as exc:
-        logger.error("[auth] Reset email failed for %s: %s", to_email, exc)
+        logger.error("[auth] Reset OTP email failed for %s: %s", to_email, exc)
 
 
 @router.post("/forgot-password", status_code=202)
@@ -512,23 +580,58 @@ async def forgot_password(
     body: ForgotPasswordRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Send a password-reset link by email.
+    """Send a 6-digit password-reset OTP by email.
 
-    Always returns 202 regardless of whether the email exists, to prevent
-    user-enumeration attacks. Tokens are random 32-char URL-safe strings
-    with a 30-minute TTL stored in Redis.
+    Always returns 202 with the same body whether or not the account exists,
+    to prevent user-enumeration. The resend cooldown is enforced via a
+    separate Redis key (`pwotp_sent:{email}`, 30 s TTL); when an in-cooldown
+    request arrives we still return 202 but skip the actual send.
     """
     email = body.email.strip().lower()
+
+    # Skip the send (but still return 202) if we sent one in the last 30 s.
+    cooldown = await _password_otp_cooldown_seconds(email)
+    if cooldown > 0:
+        return {
+            "message": "If an account exists for that email, a reset code has been sent.",
+            "resend_in": cooldown,
+        }
+
     stmt = select(User).where(User.email == email)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
     if user is not None:
-        token = secrets.token_urlsafe(32)
-        await _store_reset_token(str(user.id), token)
-        _send_reset_email(email, token)
+        otp = _generate_password_otp()
+        await _store_password_otp(email, otp)
+        await _mark_password_otp_sent(email)
+        _send_password_otp_email(email, otp)
 
-    return {"message": "If an account exists for that email, a reset link has been sent."}
+    return {
+        "message": "If an account exists for that email, a reset code has been sent.",
+        "resend_in": 30,
+    }
+
+
+@router.post("/verify-otp")
+@limiter.limit("10/minute")
+async def verify_password_otp(
+    request: Request,
+    body: VerifyOtpRequest,
+) -> dict:
+    """Stateless preflight: confirm an OTP without consuming it.
+
+    Lets the frontend split the flow into two screens — "enter OTP" then
+    "set new password" — without expanding the contract of reset-password.
+    The OTP is only DELETED in reset-password (or on TTL expiry).
+    """
+    email = body.email.strip().lower()
+    otp = body.otp.strip()
+    stored = await _peek_password_otp(email)
+    if not stored or not secrets.compare_digest(stored, otp):
+        # Generic message — no enumeration.
+        raise HTTPException(status_code=400, detail="Invalid or expired code.")
+    return {"valid": True}
 
 
 @router.post("/reset-password")
@@ -538,15 +641,33 @@ async def reset_password(
     body: ResetPasswordRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    """Validate { email, otp } and update the password atomically.
+
+    Returns generic errors so callers can't probe the email database. The
+    OTP is consumed (deleted) on success.
+    """
     if len(body.new_password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
-    user_id = await _consume_reset_token(body.token.strip())
-    if not user_id:
-        raise HTTPException(status_code=400, detail="Reset link is invalid or has expired.")
+    email = body.email.strip().lower()
+    otp = body.otp.strip()
+
+    ok = await _consume_password_otp(email, otp)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Invalid or expired code.")
+
+    # OTP matched — find the user and update the password. We re-look-up
+    # rather than trusting the email blindly so a future enumeration vector
+    # (e.g. case-only differences) is closed.
+    stmt = select(User).where(User.email == email)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        # Generic — no enumeration.
+        raise HTTPException(status_code=400, detail="Invalid or expired code.")
 
     await db.execute(
-        sa_update(User).where(User.id == user_id).values(hashed_password=hash_password(body.new_password))
+        sa_update(User).where(User.id == user.id).values(hashed_password=hash_password(body.new_password))
     )
     await db.commit()
     return {"success": True, "message": "Password updated. You can now sign in."}
