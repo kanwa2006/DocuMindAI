@@ -30,6 +30,7 @@ import { TrustScoreBadge, TrustReport } from "./veritas/TrustScoreBadge";
 import { TrustScorePanel } from "./veritas/TrustScorePanel";
 import { DocumentPreviewPanel } from "./DocumentPreviewPanel";
 import ProactiveInsightsPanel from "./ProactiveInsightsPanel";
+import { useTrialStore } from "../lib/store/trialStore";
 
 // ─── Workspace configuration (Phase 5) ───────────────────────────────────────
 
@@ -152,12 +153,27 @@ function splitDisclaimer(text: string): { main: string; disclaimer: string | nul
 }
 
 // ─── Confidence badge (Task 4.6) ──────────────────────────────────────────────
+//
+// P10 — Surface trust score for grounded answers. The badge now displays
+// the actual percentage (rounded to a whole %) alongside the band label.
+// `score` is the average rerank score returned by GroundingService
+// (`confidence_score` on the metadata SSE event). For ungrounded answers
+// the parent component zeros this out, so the badge stays off-screen.
 
 function ConfidenceBadge({ score }: { score: number }) {
-  if (score >= 0.85) return <span className="badge badge-success">✓ High Confidence</span>;
-  if (score >= 0.70) return <span className="badge badge-warning">~ Moderate Confidence</span>;
-  if (score >= 0.50) return <span className="badge badge-error">⚠ Low Confidence — verify</span>;
-  return <span className="badge badge-error">⚠ Please verify answer</span>;
+  // Hide on ungrounded answers (parent passes 0.0).
+  if (!score || score <= 0) return null;
+  const pct = Math.round(score * 100);
+  if (score >= 0.85) {
+    return <span className="badge badge-success" title="Trust score from evidence reranking">✓ Trust Score {pct}% · High</span>;
+  }
+  if (score >= 0.70) {
+    return <span className="badge badge-warning" title="Trust score from evidence reranking">~ Trust Score {pct}% · Moderate</span>;
+  }
+  if (score >= 0.50) {
+    return <span className="badge badge-error" title="Trust score from evidence reranking">⚠ Trust Score {pct}% · Low — verify</span>;
+  }
+  return <span className="badge badge-error" title="Trust score from evidence reranking">⚠ Trust Score {pct}% · Please verify</span>;
 }
 
 // ─── ReactMarkdown: code block with copy button (Additional req) ──────────────
@@ -711,6 +727,12 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
 
   const mdComponents = useMemo(() => buildMarkdownComponents(workspaceType), [workspaceType]);
 
+  // Misc-fix: read setTrialStatus so each SSE `trial_status` frame updates
+  // the pill in the header. Previously WorkspaceUI passed `undefined` for
+  // onTrialStatus and the pill only updated on the next billing-status
+  // poll — so the counter "didn't tick down" after asking a question.
+  const { setTrialStatus } = useTrialStore();
+
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -930,33 +952,50 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           abortControllerRef.current = null;
           if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
           setShowThinkingLabel(false);
+          // Misc fix — duplicate-answer rendering:
+          // Previously the response stayed mounted for a fixed 120 ms after
+          // `createChatMessage` was kicked off, which meant the streaming
+          // response AND the persisted history message were on screen
+          // simultaneously (visible as TWO identical AI replies in the
+          // screenshot the user shared). Clear `response` AS PART OF the
+          // same microtask that pushes the saved message into history, so
+          // the swap happens atomically.
           setResponse((currentRes) => {
             if (currentRes && chatId) {
-              // Side effects (event dispatch + network) MUST be deferred —
-              // setState updaters can run during render, and the autosave event
-              // triggers AutosaveIndicator's setState, which would violate
-              // setState-in-render.
               const snapshot = currentRes;
               queueMicrotask(() => {
                 window.dispatchEvent(new CustomEvent("autosave:saving"));
                 createChatMessage(chatId, "assistant", JSON.stringify(snapshot)).then((savedMsg) => {
+                  // Atomic swap: push into history AND null out the streaming
+                  // response in the same React batch — no overlap window.
                   setHistory((prev) => [...prev, savedMsg]);
+                  setResponse(null);
                   window.dispatchEvent(new CustomEvent("autosave:saved"));
                   if (latestTrustRef.current) {
                     setTrustDataMap((prev) => ({ ...prev, [savedMsg.id]: latestTrustRef.current! }));
                     latestTrustRef.current = null;
                   }
-                }).catch(() => window.dispatchEvent(new CustomEvent("autosave:error")));
+                }).catch(() => {
+                  // Even if the save fails, hide the streaming view; the
+                  // user can regenerate.
+                  setResponse(null);
+                  window.dispatchEvent(new CustomEvent("autosave:error"));
+                });
               });
+            } else if (!chatId) {
+              // No chatId → we never persist; just hide the streaming view.
+              setTimeout(() => setResponse(null), 0);
             }
             return currentRes;
           });
-          setTimeout(() => { setResponse(null); }, 120);
         },
         abortControllerRef.current.signal,
         chatId || undefined,
         workspaceType,
-        undefined, // onTrialStatus
+        // Misc-fix: feed the SSE trial_status frame straight into the
+        // global store so TrialPill ("Free trial — N left") updates after
+        // each question without waiting for the next billing-status poll.
+        (ts) => setTrialStatus(ts.queriesUsed, ts.queriesRemaining),
         (stage) => setThinkingStage(stage), // onThinkingStage
         comparisonMode,
         (trust) => { latestTrustRef.current = trust; }, // onTrustReport
@@ -965,7 +1004,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       toast.error(err.message || "Query failed.", { id: toastId });
       setLoading(false);
     }
-  }, [activeDoc, chatId, history.length, workspaceType, docs, comparisonMode]);
+  }, [activeDoc, chatId, history.length, workspaceType, docs, comparisonMode, setTrialStatus]);
 
   const handleAsk = (e: React.FormEvent) => { e.preventDefault(); sendMessage(query); };
 

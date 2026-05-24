@@ -1829,4 +1829,61 @@ Replaces the previous 30-min `reset-password?token=…` link with a
 - [ ] Resend button disabled until counter expires, then re-enabled.
       ✅ PENDING
 
+### P10 — Trust Score badge shows the actual number
+
+`ConfidenceBadge` previously rendered text-only labels (High / Moderate
+/ Low / Please verify). Now reads `score * 100` rounded to a whole
+percent and renders e.g. `~ Trust Score 73% · Moderate`. Hidden
+entirely on `score <= 0` so ungrounded answers don't show a fake 0%.
+
+The Veritas-specific `TrustScoreBadge` (the expandable evidence-deep-dive
+panel) is still gated on a separate `trust_report` SSE event from the
+veritas engine — wiring that into every grounded answer would change the
+streaming contract and is documented as a future follow-up.
+
+**Could regress:** None. The label is additive — the band band remains.
+
+**Proof:** Any grounded answer in the screenshots now displays a
+numeric Trust Score next to "Moderate" / "High" / etc.
+
+### Misc — duplicate AI reply + trial pill + Voice SSR
+
+**Duplicate AI reply (screenshot 1) — fixed.**
+- `WorkspaceUI.sendMessage` was clearing the streaming `response` via a
+  fixed `setTimeout(…, 120)`. Between `setHistory([...prev, savedMsg])`
+  and that timeout firing, both the streamed response card AND the
+  newly-saved history entry rendered the same answer. The user saw two
+  identical AI cards.
+- Switched to atomic swap: `setHistory + setResponse(null)` are now in
+  the same React batch inside the `createChatMessage().then()` handler.
+  On save failure, `setResponse(null)` still runs so the streaming
+  view doesn't get stuck.
+
+**Trial pill not updating (top-right "Free trial — N left") — fixed.**
+- `WorkspaceUI` was passing `undefined` for `onTrialStatus` into
+  `askQuestionStream`, so the SSE `trial_status` frame had nowhere to
+  go. The pill only refreshed on the next `GET /billing/status` poll.
+- Imported `useTrialStore`; the SSE callback now calls
+  `setTrialStatus(queriesUsed, queriesRemaining)` so the pill decrements
+  in real time after every query.
+
+**Hydration error from VoiceInputButton (screenshot 7) — fixed in P4.**
+- `mounted` flag now gates the whole component, not just the
+  `<select>`. Documented under P4 above.
+
+**Network-error toast on api.ts:127 — root cause confirmed under P4.**
+- The backend uuid cast + paper-config switch to apiFetch removed the
+  two common paths to a "Network error" toast on a running backend.
+- Documented in KNOWN_REMAINING_ISSUES.md: other panels still using raw
+  `fetch(${API_BASE}…)` with `credentials:"include"` and no
+  `X-CSRF-Token` header (TableExtractionPanel, NotificationCenter,
+  ResearchGapsPanel, FinanceRatioPanel admin/* pages, bookmark POST
+  inside BookmarkButton). These are next-pass migrations to `apiFetch`.
+
+**Proof:**
+- [ ] Ask a question → only ONE AI reply renders after streaming
+      finishes (no flash of two). ✅ PENDING
+- [ ] Trial pill counter decrements from N to N-1 immediately after
+      pressing Send. ✅ PENDING
+
 
