@@ -18,6 +18,73 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound=BaseModel)
 
+
+# P3 — safe accessor for Gemini `response.text` / `chunk.text`.
+#
+# google-generativeai raises:
+#   "Invalid operation: response.text quick accessor requires the response
+#   to contain a valid Part, but none were returned. ... finish_reason is 1"
+# when the candidate has no parts (e.g., empty completion, safety block,
+# truncated output). Reading `.text` blindly crashes the whole stream.
+#
+# This helper inspects candidates / parts / finish_reason and returns a
+# safe string (possibly empty, possibly a user-friendly fallback message).
+# Provider internals are NOT modified — this is a thin wrapper used at the
+# two access sites (`generate` and `generate_stream`).
+def _safe_extract_text(response_or_chunk, *, on_empty: str = "") -> str:
+    """Return text from a Gemini response/chunk without crashing on no-part responses."""
+    try:
+        # Fast path: the property is safe to read.
+        text = getattr(response_or_chunk, "text", None)
+        if text:
+            return text
+    except Exception as exc:
+        # response.text raises ValueError when finish_reason indicates no
+        # valid Part. Fall through to the part-by-part inspection.
+        logger.warning(f"[Gemini] response.text accessor failed: {exc}")
+
+    # Manual extraction from candidates / parts.
+    try:
+        candidates = getattr(response_or_chunk, "candidates", None) or []
+        if not candidates:
+            return on_empty
+        candidate = candidates[0]
+        finish_reason = getattr(candidate, "finish_reason", None)
+        # finish_reason mapping (varies slightly across google-generativeai versions):
+        #   0 = FINISH_REASON_UNSPECIFIED, 1 = STOP, 2 = MAX_TOKENS,
+        #   3 = SAFETY, 4 = RECITATION, 5 = OTHER
+        fr_value = getattr(finish_reason, "value", finish_reason)
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) if content else None
+        if parts:
+            collected: List[str] = []
+            for p in parts:
+                p_text = getattr(p, "text", None)
+                if p_text:
+                    collected.append(p_text)
+            if collected:
+                return "".join(collected)
+        # No parts. Give a user-friendly explanation for known reasons.
+        if fr_value == 2:  # MAX_TOKENS
+            return on_empty or (
+                "[The response was cut off before it could complete. "
+                "Try asking a shorter question or fewer documents.]"
+            )
+        if fr_value == 3:  # SAFETY
+            return on_empty or (
+                "[The response was blocked by a safety filter. "
+                "Try rephrasing the question.]"
+            )
+        if fr_value == 4:  # RECITATION
+            return on_empty or (
+                "[The response was blocked because it would have recited "
+                "the source material verbatim.]"
+            )
+        return on_empty
+    except Exception as exc:
+        logger.warning(f"[Gemini] Could not extract text from candidates: {exc}")
+        return on_empty
+
 class BaseLLMProvider(ABC):
     @abstractmethod
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
@@ -159,7 +226,10 @@ class GeminiLLMProvider(BaseLLMProvider):
                 )
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(None, model.generate_content, user_prompt)
-                return response.text
+                # P3 — safe accessor: never crashes on empty parts /
+                # finish_reason=1/2/3 etc. Returns "" or a fallback msg
+                # which the caller handles like any other answer.
+                return _safe_extract_text(response)
             return _run
 
         try:
@@ -204,7 +274,12 @@ class GeminiLLMProvider(BaseLLMProvider):
                 raise
 
         for chunk in stream_response:
-            yield chunk.text
+            # P3 — safe accessor: a stream chunk can have finish_reason set
+            # on the last frame with no parts; reading chunk.text would
+            # raise ValueError and kill the entire SSE stream mid-response.
+            token = _safe_extract_text(chunk)
+            if token:
+                yield token
 
 class LLMService:
     def __init__(self, provider: BaseLLMProvider = None):

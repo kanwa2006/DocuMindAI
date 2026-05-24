@@ -1548,4 +1548,43 @@ user review of the canned prompt.
 - [ ] Follow-up chip after an answer → textarea fills, no auto-send.
       ✅ PENDING
 
+### P3 — Gemini `response.text` finish_reason=1 guard
+
+**Root cause:** `GeminiLLMProvider.generate` returned `response.text`
+(`llm_service.py:162`) and `generate_stream` yielded `chunk.text`
+(line 207). The google-generativeai SDK raises a ValueError on the
+`text` accessor whenever the candidate has no Parts — which happens on
+empty completions, MAX_TOKENS truncation, safety blocks, or recitation
+blocks. The whole SSE stream then died with the toast the user saw:
+`Invalid operation: response.text quick accessor requires the response
+to contain a valid Part... finish_reason is 1`.
+
+**Fix (additive, per CLAUDE.md "wrap only, never rewrite" rule):**
+- Added `_safe_extract_text(response_or_chunk)` at module scope in
+  `llm_service.py`. It tries `.text` first; on failure it walks
+  `candidates[0].content.parts[i].text`, falling back to a friendly
+  message keyed on `finish_reason`:
+  - 2 (MAX_TOKENS) → "The response was cut off… try a shorter
+    question or fewer documents."
+  - 3 (SAFETY) → "blocked by a safety filter."
+  - 4 (RECITATION) → "would have recited source material."
+  - otherwise → `""` (the caller treats this like a normal short answer).
+- Both `generate()` and `generate_stream()` now route through
+  `_safe_extract_text`. Provider internals (model config, key rotation,
+  fallback model retry, async executor pattern) are untouched.
+- Stream loop now skips empty tokens — the last chunk often has
+  `finish_reason` but no parts, and yielding `""` previously sent an
+  empty `event: token` over SSE for the frontend to no-op.
+
+**Could regress:**
+- A genuine empty completion now silently returns `""` instead of
+  crashing. The streaming endpoint's `done` event still fires; the
+  user sees a blank answer rather than a red toast — acceptable, and
+  the `MAX_TOKENS` / `SAFETY` paths surface a real reason.
+
+**Proof (manual):**
+- [ ] Ask a broad question across multiple docs → real answer OR a
+      `The response was cut off…` message; never a red crash toast.
+      ✅ PENDING
+
 
