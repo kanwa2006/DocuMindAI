@@ -345,7 +345,7 @@ async def list_documents(
     return result.scalars().all()
 
 
-@router.get("/{document_id}")
+@router.get("/{document_id}", response_model=DocumentResponse)
 async def get_document(
     document_id: str,
     current_user: dict = Depends(get_current_user),

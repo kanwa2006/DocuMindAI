@@ -866,15 +866,22 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           setShowThinkingLabel(false);
           setResponse((currentRes) => {
             if (currentRes && chatId) {
-              window.dispatchEvent(new CustomEvent("autosave:saving"));
-              createChatMessage(chatId, "assistant", JSON.stringify(currentRes)).then((savedMsg) => {
-                setHistory((prev) => [...prev, savedMsg]);
-                window.dispatchEvent(new CustomEvent("autosave:saved"));
-                if (latestTrustRef.current) {
-                  setTrustDataMap((prev) => ({ ...prev, [savedMsg.id]: latestTrustRef.current! }));
-                  latestTrustRef.current = null;
-                }
-              }).catch(() => window.dispatchEvent(new CustomEvent("autosave:error")));
+              // Side effects (event dispatch + network) MUST be deferred —
+              // setState updaters can run during render, and the autosave event
+              // triggers AutosaveIndicator's setState, which would violate
+              // setState-in-render.
+              const snapshot = currentRes;
+              queueMicrotask(() => {
+                window.dispatchEvent(new CustomEvent("autosave:saving"));
+                createChatMessage(chatId, "assistant", JSON.stringify(snapshot)).then((savedMsg) => {
+                  setHistory((prev) => [...prev, savedMsg]);
+                  window.dispatchEvent(new CustomEvent("autosave:saved"));
+                  if (latestTrustRef.current) {
+                    setTrustDataMap((prev) => ({ ...prev, [savedMsg.id]: latestTrustRef.current! }));
+                    latestTrustRef.current = null;
+                  }
+                }).catch(() => window.dispatchEvent(new CustomEvent("autosave:error")));
+              });
             }
             return currentRes;
           });
@@ -945,6 +952,14 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
+    // PowerPoint isn't supported by the extraction pipeline yet — reject with a
+    // clear message instead of letting the backend bounce it as "PDF only".
+    const lowerName = selectedFile.name.toLowerCase();
+    if (lowerName.endsWith(".ppt") || lowerName.endsWith(".pptx")) {
+      toast.error("PowerPoint files (.ppt/.pptx) aren't supported yet. Please upload a PDF or DOCX.");
+      e.target.value = "";
+      return;
+    }
     setLoading(true);
     const toastId = toast.loading("Uploading document securely...");
     try {

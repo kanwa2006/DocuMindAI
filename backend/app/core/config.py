@@ -141,9 +141,29 @@ class Settings(BaseSettings):
     
     @property
     def sync_database_url(self) -> str:
-        if self.DATABASE_URL:
-            return self.DATABASE_URL.replace('+asyncpg', '')
-        return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        """
+        Build a psycopg2-safe sync DSN. Strips asyncpg driver tag, forces
+        +psycopg2, and normalizes any 'ssl' param to 'sslmode' (which psycopg2
+        requires — it rejects bare 'ssl' as an invalid connection option).
+        Every sync engine and psycopg2.connect() in the codebase MUST use this.
+        """
+        url = self.DATABASE_URL or (
+            f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+            f"@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        )
+        # Drop asyncpg driver tag — psycopg2 cannot use it
+        url = url.replace("+asyncpg", "")
+        # Force explicit psycopg2 driver
+        if "+psycopg2" not in url:
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        # Normalize ssl variants → sslmode=require (psycopg2's accepted form)
+        url = url.replace("?ssl=true", "?sslmode=require")
+        url = url.replace("&ssl=true", "&sslmode=require")
+        url = url.replace("?ssl=require", "?sslmode=require")
+        url = url.replace("&ssl=require", "&sslmode=require")
+        if "sslmode=" not in url:
+            url += ("&" if "?" in url else "?") + "sslmode=require"
+        return url
 
     @property
     def gemini_keys_list(self) -> List[str]:

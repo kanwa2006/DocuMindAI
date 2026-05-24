@@ -11,8 +11,11 @@ def get_engine_args(url: str, is_async: bool):
             url = url.replace("sqlite://", "sqlite+aiosqlite://")
     elif "postgresql" in url or "postgres" in url:
         # Supabase (and most managed PG) requires SSL.
-        # Use the string "require" — NOT ssl=True, which asyncpg rejects.
-        args["connect_args"] = {"ssl": "require"}
+        # asyncpg accepts the `ssl` kwarg; psycopg2 rejects it (must be `sslmode`).
+        # For sync, sslmode is already baked into the URL by settings.sync_database_url,
+        # so no connect_args needed here.
+        if is_async:
+            args["connect_args"] = {"ssl": "require"}
     return url, args
 
 async_url, async_args = get_engine_args(settings.async_database_url, is_async=True)
