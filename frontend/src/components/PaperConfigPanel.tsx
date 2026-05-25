@@ -4,6 +4,17 @@ import { useState } from "react";
 import { toast } from "react-hot-toast";
 import { apiFetch } from "../lib/api";
 
+// PART 2 — per-question shape. When `questions` is provided + non-empty,
+// the backend treats each item as authoritative (its own marks + sub_parts).
+export interface QuestionSubPartConfig {
+  label: string;
+  marks: number;
+}
+export interface QuestionConfig {
+  marks: number;
+  sub_parts?: QuestionSubPartConfig[];
+}
+
 export interface ExamSectionConfig {
   label: string;
   question_type: string;
@@ -11,6 +22,8 @@ export interface ExamSectionConfig {
   count: number;
   allow_subquestions: boolean;
   // derived: total_marks = marks_per_question * count
+  // PART 2 — when set, overrides count/marks_per_question/allow_subquestions
+  questions?: QuestionConfig[];
 }
 
 export interface PaperConfig {
@@ -27,6 +40,10 @@ export interface PaperConfig {
 interface Props {
   onClose: () => void;
   onGenerated: (result: any) => void;
+  // PART 1 — needed so the backend can scope retrieval to THIS chat's
+  // uploaded documents. Without it, the backend refuses with a clear
+  // "no documents attached" message.
+  chatSessionId?: string;
 }
 
 const BOARDS = ["CBSE", "ICSE", "State Board", "University", "JEE/NEET Style"];
@@ -81,7 +98,7 @@ function BloomSlider({ value, onChange }: {
   );
 }
 
-export default function PaperConfigPanel({ onClose, onGenerated }: Props) {
+export default function PaperConfigPanel({ onClose, onGenerated, chatSessionId }: Props) {
   // B5: sensible defaults — Total 100, Duration 180, Difficulty Mixed are already defaults.
   const [subject, setSubject] = useState("");
   const [board, setBoard] = useState("CBSE");
@@ -97,7 +114,20 @@ export default function PaperConfigPanel({ onClose, onGenerated }: Props) {
   ]);
   const [generating, setGenerating] = useState(false);
 
-  const sectionTotals = sections.map((s) => s.marks_per_question * s.count);
+  // PART 2: section total derives from per-question marks (if set) OR
+  // marks_per_question × count (legacy section-level shape).
+  const sectionTotalFor = (s: ExamSectionConfig): number => {
+    if (s.questions && s.questions.length > 0) {
+      return s.questions.reduce(
+        (acc, q) => acc + (q.sub_parts && q.sub_parts.length > 0
+          ? q.sub_parts.reduce((a, sp) => a + sp.marks, 0)
+          : q.marks),
+        0,
+      );
+    }
+    return s.marks_per_question * s.count;
+  };
+  const sectionTotals = sections.map(sectionTotalFor);
   const sectionTotal = sectionTotals.reduce((a, b) => a + b, 0);
   const bloomTotal = bloom[0] + bloom[1] + bloom[2];
   const marksOk = Math.abs(sectionTotal - totalMarks) < 0.01;
@@ -116,21 +146,116 @@ export default function PaperConfigPanel({ onClose, onGenerated }: Props) {
   const updateSection = (idx: number, field: keyof ExamSectionConfig, val: any) =>
     setSections((prev) => prev.map((s, i) => i === idx ? { ...s, [field]: val } : s));
 
+  // PART 2 — per-question helpers. "Custom questions" turns ON when the
+  // user wants per-question sub-parts; turning it OFF clears the per-Q list.
+  const enableCustomQuestions = (idx: number) => {
+    setSections((prev) => prev.map((s, i) => {
+      if (i !== idx) return s;
+      if (s.questions && s.questions.length > 0) return s;
+      const seed: QuestionConfig[] = Array.from({ length: s.count }, () => ({
+        marks: s.marks_per_question,
+      }));
+      return { ...s, questions: seed };
+    }));
+  };
+  const disableCustomQuestions = (idx: number) => {
+    setSections((prev) => prev.map((s, i) => i === idx ? { ...s, questions: undefined } : s));
+  };
+  const updateQuestion = (sIdx: number, qIdx: number, patch: Partial<QuestionConfig>) => {
+    setSections((prev) => prev.map((s, i) => {
+      if (i !== sIdx || !s.questions) return s;
+      const next = s.questions.map((q, j) => j === qIdx ? { ...q, ...patch } : q);
+      return { ...s, questions: next, count: next.length };
+    }));
+  };
+  const addQuestion = (sIdx: number) => {
+    setSections((prev) => prev.map((s, i) => {
+      if (i !== sIdx || !s.questions) return s;
+      const next = [...s.questions, { marks: s.marks_per_question || 1 }];
+      return { ...s, questions: next, count: next.length };
+    }));
+  };
+  const removeQuestion = (sIdx: number, qIdx: number) => {
+    setSections((prev) => prev.map((s, i) => {
+      if (i !== sIdx || !s.questions) return s;
+      const next = s.questions.filter((_, j) => j !== qIdx);
+      return { ...s, questions: next, count: next.length };
+    }));
+  };
+  const addSubPart = (sIdx: number, qIdx: number) => {
+    setSections((prev) => prev.map((s, i) => {
+      if (i !== sIdx || !s.questions) return s;
+      const next = s.questions.map((q, j) => {
+        if (j !== qIdx) return q;
+        const existing = q.sub_parts || [];
+        const half = (q.marks || 2) / Math.max(existing.length + 1, 1);
+        const nextLabel = String.fromCharCode("a".charCodeAt(0) + existing.length);
+        return { ...q, sub_parts: [...existing, { label: nextLabel, marks: Number(half.toFixed(2)) }] };
+      });
+      return { ...s, questions: next };
+    }));
+  };
+  const updateSubPart = (sIdx: number, qIdx: number, spIdx: number, patch: Partial<QuestionSubPartConfig>) => {
+    setSections((prev) => prev.map((s, i) => {
+      if (i !== sIdx || !s.questions) return s;
+      const next = s.questions.map((q, j) => {
+        if (j !== qIdx || !q.sub_parts) return q;
+        return { ...q, sub_parts: q.sub_parts.map((sp, k) => k === spIdx ? { ...sp, ...patch } : sp) };
+      });
+      return { ...s, questions: next };
+    }));
+  };
+  const removeSubPart = (sIdx: number, qIdx: number, spIdx: number) => {
+    setSections((prev) => prev.map((s, i) => {
+      if (i !== sIdx || !s.questions) return s;
+      const next = s.questions.map((q, j) => {
+        if (j !== qIdx || !q.sub_parts) return q;
+        const filtered = q.sub_parts.filter((_, k) => k !== spIdx);
+        return { ...q, sub_parts: filtered.length > 0 ? filtered : undefined };
+      });
+      return { ...s, questions: next };
+    }));
+  };
+
   const handleGenerate = async () => {
     if (!canGenerate) return;
     setGenerating(true);
     const toastId = toast.loading("Generating exam paper…");
     try {
-      // Translate panel state (marks_per_question + count) into the backend
-      // contract (total_marks per section + count + allow_subquestions + marks_per_question).
-      const sectionsPayload = sections.map((s) => ({
-        label: s.label,
-        question_type: s.question_type,
-        total_marks: Number((s.marks_per_question * s.count).toFixed(2)),
-        count: s.count,
-        marks_per_question: s.marks_per_question,
-        allow_subquestions: s.allow_subquestions,
-      }));
+      // Translate panel state into the backend contract. When `questions`
+      // is present (PART 2 per-question control), forward it verbatim;
+      // total_marks/count derive from the questions array on the backend.
+      const sectionsPayload = sections.map((s) => {
+        if (s.questions && s.questions.length > 0) {
+          const sectionTotal = s.questions.reduce(
+            (acc, q) => acc + (q.sub_parts && q.sub_parts.length > 0
+              ? q.sub_parts.reduce((a, sp) => a + sp.marks, 0)
+              : q.marks),
+            0,
+          );
+          return {
+            label: s.label,
+            question_type: s.question_type,
+            total_marks: Number(sectionTotal.toFixed(2)),
+            count: s.questions.length,
+            marks_per_question: s.marks_per_question,  // legacy hint
+            allow_subquestions: s.allow_subquestions,
+            questions: s.questions.map((q) => ({
+              marks: q.marks,
+              sub_parts: q.sub_parts && q.sub_parts.length > 0 ? q.sub_parts : undefined,
+            })),
+          };
+        }
+        // Section-level fallback (existing UI shape).
+        return {
+          label: s.label,
+          question_type: s.question_type,
+          total_marks: Number((s.marks_per_question * s.count).toFixed(2)),
+          count: s.count,
+          marks_per_question: s.marks_per_question,
+          allow_subquestions: s.allow_subquestions,
+        };
+      });
 
       // P4: switch from raw fetch() to apiFetch() so the CSRF token and
       // auto-refresh logic are applied. The previous raw fetch was missing
@@ -154,6 +279,9 @@ export default function PaperConfigPanel({ onClose, onGenerated }: Props) {
             "L5-L6": bloom[2],
           },
           sections: sectionsPayload,
+          // PART 1 — bind generation to THIS chat so the backend can
+          // retrieve from the uploaded docs and refuse cleanly if none.
+          chat_session_id: chatSessionId || null,
         }),
       });
       if (!res.ok) {
@@ -268,7 +396,8 @@ export default function PaperConfigPanel({ onClose, onGenerated }: Props) {
           </div>
 
           {sections.map((sec, idx) => {
-            const secTotal = sec.marks_per_question * sec.count;
+            const secTotal = sectionTotalFor(sec);
+            const customQuestions = !!sec.questions && sec.questions.length > 0;
             return (
               <div key={idx} style={{ border: "1px solid var(--border-default)", borderRadius: "8px", padding: "12px", marginBottom: "10px", background: "var(--surface-base)" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "40px 1fr 28px", gap: "6px", marginBottom: "10px", alignItems: "center" }}>
@@ -284,32 +413,144 @@ export default function PaperConfigPanel({ onClose, onGenerated }: Props) {
                   <button onClick={() => removeSection(idx)} aria-label="Remove section" style={{ width: "28px", height: "28px", border: "none", background: "none", cursor: "pointer", fontSize: "16px", color: "var(--error-text, #ef4444)" }}>×</button>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", alignItems: "center" }}>
-                  <div>
-                    <label style={{ ...labelStyle, fontSize: "10px" }}>Marks / Question</label>
-                    <input type="number" min={0.5} step={0.5} value={sec.marks_per_question}
-                      onChange={(e) => updateSection(idx, "marks_per_question", parseFloat(e.target.value) || 0)}
-                      style={{ ...inputStyle, fontSize: "12px", height: "32px" }} />
-                  </div>
-                  <div>
-                    <label style={{ ...labelStyle, fontSize: "10px" }}># of Questions</label>
-                    <input type="number" min={1} value={sec.count}
-                      onChange={(e) => updateSection(idx, "count", parseInt(e.target.value) || 1)}
-                      style={{ ...inputStyle, fontSize: "12px", height: "32px" }} />
-                  </div>
-                </div>
+                {!customQuestions && (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", alignItems: "center" }}>
+                      <div>
+                        <label style={{ ...labelStyle, fontSize: "10px" }}>Marks / Question</label>
+                        <input type="number" min={0.5} step={0.5} value={sec.marks_per_question}
+                          onChange={(e) => updateSection(idx, "marks_per_question", parseFloat(e.target.value) || 0)}
+                          style={{ ...inputStyle, fontSize: "12px", height: "32px" }} />
+                      </div>
+                      <div>
+                        <label style={{ ...labelStyle, fontSize: "10px" }}># of Questions</label>
+                        <input type="number" min={1} value={sec.count}
+                          onChange={(e) => updateSection(idx, "count", parseInt(e.target.value) || 1)}
+                          style={{ ...inputStyle, fontSize: "12px", height: "32px" }} />
+                      </div>
+                    </div>
 
-                {/* B5: clean computed-total helper */}
-                <div style={{ fontSize: "11px", color: "var(--text-tertiary)", marginTop: "6px" }}>
-                  {sec.count} × {fmt(sec.marks_per_question)} marks = <strong style={{ color: "var(--text-secondary)" }}>{fmt(secTotal)}</strong>
-                </div>
+                    <div style={{ fontSize: "11px", color: "var(--text-tertiary)", marginTop: "6px" }}>
+                      {sec.count} × {fmt(sec.marks_per_question)} marks = <strong style={{ color: "var(--text-secondary)" }}>{fmt(secTotal)}</strong>
+                    </div>
 
-                {/* B4: sub-question toggle */}
-                <label style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "8px", cursor: "pointer", fontSize: "12px", color: "var(--text-secondary)" }}>
-                  <input type="checkbox" checked={sec.allow_subquestions}
-                    onChange={(e) => updateSection(idx, "allow_subquestions", e.target.checked)} />
-                  Allow sub-parts (a, b, c) in this section
-                </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "8px", cursor: "pointer", fontSize: "12px", color: "var(--text-secondary)" }}>
+                      <input type="checkbox" checked={sec.allow_subquestions}
+                        onChange={(e) => updateSection(idx, "allow_subquestions", e.target.checked)} />
+                      Allow sub-parts (a, b, c) in this section
+                    </label>
+                  </>
+                )}
+
+                {/* PART 2 — per-question editor. Lets the teacher mix questions
+                    that have sub-parts with ones that don't, inside a single
+                    section. Toggle ON to expand into per-Q rows. */}
+                <div style={{ marginTop: "10px", borderTop: "1px dashed var(--border-subtle)", paddingTop: "10px" }}>
+                  {!customQuestions ? (
+                    <button
+                      type="button"
+                      onClick={() => enableCustomQuestions(idx)}
+                      className="btn btn-ghost btn-sm"
+                      style={{ height: "26px", fontSize: "11px", padding: "0 8px" }}
+                    >
+                      + Customise questions individually (per-question sub-parts)
+                    </button>
+                  ) : (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                        <span style={{ fontSize: "11px", color: "var(--text-secondary)", fontWeight: 500 }}>
+                          Per-question setup ({sec.questions!.length} question{sec.questions!.length === 1 ? "" : "s"} · {fmt(secTotal)} marks total)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => disableCustomQuestions(idx)}
+                          className="btn btn-ghost btn-sm"
+                          style={{ height: "22px", fontSize: "10px", padding: "0 6px" }}
+                          title="Switch back to uniform-marks shortcut"
+                        >
+                          ← uniform marks
+                        </button>
+                      </div>
+                      {sec.questions!.map((q, qIdx) => {
+                        const qMarks = q.sub_parts && q.sub_parts.length > 0
+                          ? q.sub_parts.reduce((a, sp) => a + sp.marks, 0)
+                          : q.marks;
+                        return (
+                          <div key={qIdx} style={{ padding: "8px", marginBottom: "6px", border: "1px solid var(--border-subtle)", borderRadius: "6px", background: "var(--surface-sunken)" }}>
+                            <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                              <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", minWidth: "28px" }}>Q{qIdx + 1}</span>
+                              {!(q.sub_parts && q.sub_parts.length > 0) && (
+                                <>
+                                  <label style={{ fontSize: "10px", color: "var(--text-tertiary)" }}>Marks</label>
+                                  <input
+                                    type="number" min={0.5} step={0.5} value={q.marks}
+                                    onChange={(e) => updateQuestion(idx, qIdx, { marks: parseFloat(e.target.value) || 0 })}
+                                    style={{ width: "64px", height: "26px", fontSize: "12px", padding: "0 6px", border: "1px solid var(--border-default)", borderRadius: "4px", background: "var(--surface-base)", color: "var(--text-primary)" }}
+                                  />
+                                </>
+                              )}
+                              {q.sub_parts && q.sub_parts.length > 0 && (
+                                <span style={{ fontSize: "11px", color: "var(--text-tertiary)" }}>
+                                  total {fmt(qMarks)} marks (sum of sub-parts)
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => addSubPart(idx, qIdx)}
+                                className="btn btn-ghost btn-sm"
+                                style={{ height: "22px", fontSize: "10px", padding: "0 6px", marginLeft: "auto" }}
+                              >
+                                + sub-part
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeQuestion(idx, qIdx)}
+                                aria-label="Remove question"
+                                style={{ width: "22px", height: "22px", border: "none", background: "none", cursor: "pointer", color: "var(--error-text, #ef4444)", fontSize: "14px" }}
+                              >
+                                ×
+                              </button>
+                            </div>
+
+                            {q.sub_parts && q.sub_parts.map((sp, spIdx) => (
+                              <div key={spIdx} style={{ display: "flex", gap: "6px", alignItems: "center", marginTop: "6px", paddingLeft: "32px" }}>
+                                <span style={{ fontSize: "11px", color: "var(--text-tertiary)" }}>({sp.label})</span>
+                                <label style={{ fontSize: "10px", color: "var(--text-tertiary)" }}>Marks</label>
+                                <input
+                                  type="number" min={0.5} step={0.5} value={sp.marks}
+                                  onChange={(e) => updateSubPart(idx, qIdx, spIdx, { marks: parseFloat(e.target.value) || 0 })}
+                                  style={{ width: "64px", height: "24px", fontSize: "11px", padding: "0 6px", border: "1px solid var(--border-default)", borderRadius: "4px", background: "var(--surface-base)", color: "var(--text-primary)" }}
+                                />
+                                <input
+                                  value={sp.label}
+                                  onChange={(e) => updateSubPart(idx, qIdx, spIdx, { label: e.target.value.slice(0, 2) })}
+                                  style={{ width: "36px", height: "24px", fontSize: "11px", padding: "0 6px", border: "1px solid var(--border-default)", borderRadius: "4px", background: "var(--surface-base)", color: "var(--text-primary)", textAlign: "center" }}
+                                  aria-label="Sub-part label"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeSubPart(idx, qIdx, spIdx)}
+                                  aria-label="Remove sub-part"
+                                  style={{ width: "22px", height: "22px", border: "none", background: "none", cursor: "pointer", color: "var(--text-tertiary)", fontSize: "12px", marginLeft: "auto" }}
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        onClick={() => addQuestion(idx)}
+                        className="btn btn-secondary btn-sm"
+                        style={{ height: "26px", fontSize: "11px", padding: "0 10px" }}
+                      >
+                        + Add question
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             );
           })}

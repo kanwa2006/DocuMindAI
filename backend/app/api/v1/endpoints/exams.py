@@ -1,8 +1,9 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from typing import Any, List, Optional, Dict
 import uuid
 import json
@@ -13,7 +14,7 @@ from datetime import datetime, timezone
 from app.db.session import get_db
 from app.core.auth import get_current_user
 from app.core.workspace import resolve_workspace_id
-from app.models.document import Document
+from app.models.document import Document, DocumentStatus
 from app.models.exam import ExamPaper, ExamVersion
 from app.schemas.exam import ExamPaperCreate, ExamPaperUpdate, ExamPaperResponse, GenerateQuestionRequest
 from app.services.retrieval_service import RetrievalService
@@ -22,22 +23,58 @@ from app.services.export_engine import ExportEngine
 from app.services.table_extractor import get_table_extractor
 from app.services.pdf_extractor import is_native_pdf
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ─── Task 6-T1: Section-Wise Paper Structure Models ──────────────────────────
+
+class QuestionSubPart(BaseModel):
+    """PART 2: per-question sub-part. Marks may be decimal."""
+    label: str = Field(..., description='e.g. "a", "b", "c"')
+    marks: float
+
+
+class QuestionSpec(BaseModel):
+    """PART 2: optional per-question spec. When a section provides a `questions`
+    list, that list is authoritative (each question carries its own marks +
+    optional sub_parts). When `questions` is empty/None, the generator falls
+    back to the section-level (`count`, `marks_per_question`, `allow_subquestions`)
+    shape so existing UIs keep working.
+    """
+    marks: float
+    sub_parts: Optional[List[QuestionSubPart]] = None
+
 
 class ExamSection(BaseModel):
     label: str           # "A", "B", "C"
     question_type: str   # "mcq", "short", "medium", "long", "case_study"
     total_marks: float   # decimal-friendly (e.g. 2.5 marks/question)
     count: int
-    # deep-debug B4: optional flag — if true, the LLM is asked to break some
-    # questions in this section into (a)/(b)/(c) sub-parts whose marks sum to
-    # the parent mark. Default false keeps current behaviour for existing UIs.
+    # deep-debug B4: SECTION-level toggle kept for backward compat. When
+    # `questions` is provided per-question, that takes precedence (PART 2).
     allow_subquestions: bool = False
     # Optional per-question marks override. If unset, parent marks_per_question
     # = total_marks / count (so sub-questions get computed marks from there).
     marks_per_question: Optional[float] = None
+    # PART 2 — per-question spec. If provided and non-empty, this is the
+    # source of truth: each question controls its own marks + sub-parts.
+    questions: Optional[List[QuestionSpec]] = None
+
+    @model_validator(mode="after")
+    def _coerce_question_marks(self) -> "ExamSection":
+        # When per-question specs are provided, ensure `count` and
+        # `total_marks` agree with them (callers may forget to recompute).
+        if self.questions:
+            self.count = len(self.questions)
+            self.total_marks = round(
+                sum(
+                    (sum(sp.marks for sp in (q.sub_parts or [])) or q.marks)
+                    for q in self.questions
+                ),
+                2,
+            )
+        return self
+
 
 class ExamGenerationRequest(BaseModel):
     sections: List[ExamSection]
@@ -49,6 +86,11 @@ class ExamGenerationRequest(BaseModel):
     difficulty: str = "mixed"
     bloom_distribution: Dict[str, int] = {}
     watermark: str = "DRAFT"
+    # PART 1 — bind generation to the chat session so retrieval is scoped
+    # to the documents the teacher uploaded for THIS paper. Optional for
+    # backward compat with old clients, but required to get real grounded
+    # questions (otherwise the backend can only output a refusal).
+    chat_session_id: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_marks(self):
@@ -88,90 +130,255 @@ def validate_marks_allocation(sections: List[ExamSection], total_marks: float, b
 
 # ─── Task 6-T1: Generate Full Paper with Answer Key ──────────────────────────
 
+def _fmt(n: float) -> str:
+    return f"{n:.1f}".rstrip("0").rstrip(".") if n != int(n) else f"{int(n)}"
+
+
+def _build_section_description(s: ExamSection) -> str:
+    """Human-readable spec for the LLM. Honors per-question sub-parts (PART 2)."""
+    if s.questions:
+        per_q_lines = []
+        for i, q in enumerate(s.questions, start=1):
+            if q.sub_parts:
+                sp_str = " + ".join(
+                    f"({sp.label}) {_fmt(sp.marks)}" for sp in q.sub_parts
+                )
+                per_q_lines.append(
+                    f"      Q{i}: {_fmt(sum(sp.marks for sp in q.sub_parts))} marks, "
+                    f"split into sub-parts {sp_str}"
+                )
+            else:
+                per_q_lines.append(f"      Q{i}: {_fmt(q.marks)} marks (single question, no sub-parts)")
+        return (
+            f"  Section {s.label} ({s.question_type.upper()}, total {_fmt(s.total_marks)} marks)\n"
+            + "\n".join(per_q_lines)
+        )
+    marks_each = (
+        s.marks_per_question
+        if s.marks_per_question is not None
+        else (s.total_marks / s.count if s.count else 0.0)
+    )
+    base = (
+        f"  Section {s.label}: {s.count} {s.question_type.upper()} questions, "
+        f"{_fmt(marks_each)} marks each (total {_fmt(s.total_marks)})"
+    )
+    if s.allow_subquestions:
+        base += (
+            ". Some questions in this section may be split into sub-parts (a),(b),(c) "
+            "whose marks sum to the parent question's marks."
+        )
+    return base
+
+
+async def _retrieve_grounding_for_paper(
+    db: AsyncSession,
+    *,
+    request: ExamGenerationRequest,
+    owner_id: uuid.UUID,
+    chat_session_id: Optional[uuid.UUID],
+) -> tuple[List[Dict[str, Any]], List[uuid.UUID]]:
+    """PART 1 — Pull chunks from the chat's attached docs that are relevant
+    to the subject + section topics. Returns (evidence_chunks, doc_ids).
+    Empty doc_ids → no docs attached; caller should refuse gracefully.
+    """
+    if not chat_session_id:
+        return [], []
+
+    # 1. Find the READY docs attached to this chat.
+    doc_stmt = (
+        select(Document.id)
+        .where(Document.chat_session_id == chat_session_id)
+        .where(Document.owner_id == owner_id)
+        .where(Document.status == DocumentStatus.READY)
+    )
+    doc_res = await db.execute(doc_stmt)
+    doc_ids: List[uuid.UUID] = [row[0] for row in doc_res.all()]
+    if not doc_ids:
+        return [], []
+
+    # 2. Run a retrieval query keyed by the subject — fetch a deeper pool
+    #    than usual (3× the chunks the section descriptions imply) so we
+    #    have wider topic coverage when the LLM writes ~10–20 questions.
+    seed_query = f"{request.subject} {request.instructions or ''} key topics, definitions, formulas, examples".strip()
+    target_k = min(40, max(20, sum(s.count for s in request.sections) * 2))
+    payload = await RetrievalService.retrieve_chunks(
+        db=db,
+        query=seed_query,
+        document_ids=doc_ids,
+        top_k=target_k,
+        similarity_threshold=0.0,
+    )
+    chunks = payload.get("results", []) or []
+    # Sort by document + page so the LLM sees the syllabus in reading order.
+    chunks = sorted(
+        chunks,
+        key=lambda c: (str(c.get("filename") or ""), int(c.get("page_number") or 0), int(c.get("chunk_index") or 0)),
+    )
+    return chunks, doc_ids
+
+
 @router.post("/generate/paper")
 async def generate_paper(
     request: ExamGenerationRequest,
     current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     6-T1 + 6-T2: Generate a section-wise exam paper with answer key.
     Validates marks before generation. Returns paper + answer_key + metadata.
+
+    PART 1 — Real questions grounded in the chat's uploaded documents.
+    The endpoint now:
+      • requires chat_session_id (returns a clear 400 if no docs are attached),
+      • retrieves chunks from those docs,
+      • injects them into the LLM prompt as evidence with page citations,
+      • on JSON parse failure, logs the raw LLM output and ONE retry; only
+        then falls back to an explicit refusal (no more placeholder text).
+
+    PART 3 — The generated paper is auto-saved to ExamPaper so Export DOCX
+    always has something to export. The exam_id is returned in the payload.
     """
-    # Task 6-T4: validate marks first
+    # 6-T4: validate marks first.
     errors = validate_marks_allocation(request.sections, request.total_marks, request.bloom_distribution)
     if errors:
         raise HTTPException(status_code=400, detail={"validation_errors": errors})
 
-    def _fmt(n: float) -> str:
-        return f"{n:.1f}".rstrip("0").rstrip(".") if n != int(n) else f"{int(n)}"
+    # PART 1: try to coerce chat_session_id (silently None on bad input).
+    chat_uuid: Optional[uuid.UUID] = None
+    if request.chat_session_id:
+        try:
+            chat_uuid = uuid.UUID(str(request.chat_session_id))
+        except (ValueError, TypeError):
+            chat_uuid = None
 
-    sections_desc = "\n".join(
-        f"  Section {s.label}: {s.count} {s.question_type.upper()} questions, "
-        f"{_fmt(s.marks_per_question if s.marks_per_question is not None else s.total_marks / s.count)} marks each "
-        f"(total {_fmt(s.total_marks)})"
-        + (". Some questions in this section may be split into sub-parts (a), (b), (c) whose marks sum to the parent question's marks." if s.allow_subquestions else "")
-        for s in request.sections
+    owner_uuid = uuid.UUID(current_user["id"])
+    workspace_uuid = resolve_workspace_id(current_user.get("workspace_id"))
+
+    # PART 1: retrieve evidence chunks from the chat's attached docs.
+    evidence, doc_ids = await _retrieve_grounding_for_paper(
+        db=db,
+        request=request,
+        owner_id=owner_uuid,
+        chat_session_id=chat_uuid,
+    )
+    if not doc_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No documents are attached to this chat. Upload a syllabus or "
+                "textbook PDF/DOCX/PPTX before generating an exam paper so the "
+                "questions can be grounded in real source material."
+            ),
+        )
+    if not evidence:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The attached document(s) finished processing but no chunks "
+                "matched the subject. Try a more specific subject name, or "
+                "upload a syllabus that covers this topic."
+            ),
+        )
+
+    # Compose the evidence block — page-cited and ordered.
+    evidence_blocks = "\n\n".join(
+        f"[{c.get('filename', 'doc')} | Page {c.get('page_number', '?')}]\n{c.get('text_content', '')}"
+        for c in evidence
     )
 
+    sections_desc = "\n".join(_build_section_description(s) for s in request.sections)
     bloom_desc = (
         ", ".join(f"{k}: {v}%" for k, v in request.bloom_distribution.items())
         if request.bloom_distribution else "Mixed levels"
     )
 
-    grounded_context = f"""
-Exam Paper Generation Configuration:
-- Subject: {request.subject}
-- Board: {request.board}
-- Total Marks: {request.total_marks}
-- Duration: {request.duration_minutes} minutes
-- Difficulty: {request.difficulty}
-- Bloom's Taxonomy Distribution: {bloom_desc}
-- Special Instructions: {request.instructions or 'None'}
+    # PART 1 + PART 3 layered system prompt. Strict grounding + JSON-only.
+    system_prompt = (
+        "You are an expert exam paper setter. Your job is to write REAL exam "
+        "questions that are grounded ONLY in the evidence below. Do not invent "
+        "facts. Each question must be answerable from the evidence. If a section "
+        "asks for topics the evidence doesn't cover, write a question whose "
+        "`text` clearly states 'The provided source material does not cover "
+        "this topic.' rather than inventing.\n\n"
+        f"EXAM CONTEXT:\n"
+        f"- Subject: {request.subject}\n"
+        f"- Board: {request.board}\n"
+        f"- Total Marks: {_fmt(request.total_marks)}\n"
+        f"- Duration: {request.duration_minutes} minutes\n"
+        f"- Difficulty: {request.difficulty}\n"
+        f"- Bloom's Taxonomy Distribution: {bloom_desc}\n"
+        f"- Special Instructions: {request.instructions or 'None'}\n\n"
+        f"SECTION SPECIFICATION (write EXACTLY this structure):\n{sections_desc}\n\n"
+        f"EVIDENCE BLOCKS (your ONLY knowledge source):\n{evidence_blocks}\n\n"
+        "OUTPUT — respond with ONLY valid JSON, no prose, no ``` fences."
+    )
 
-Sections to generate:
-{sections_desc}
-
-Generate exactly the required number of questions per section with the exact marks per question.
-Ensure questions follow the Bloom's taxonomy distribution specified.
-For MCQ: provide 4 options labeled A/B/C/D with one correct answer.
-For short/long: provide model answers and step-wise marking schemes.
-    """.strip()
-
-    prompt = (
-        f"Generate a complete {request.board} {request.subject} exam paper with {len(request.sections)} sections "
-        f"totaling {_fmt(request.total_marks)} marks and duration {request.duration_minutes} minutes. "
-        f"Return ONLY valid JSON with exactly this structure: "
-        '{"paper":{"sections":[{"label":"A","questions":[{"num":1,"text":"...","marks":2,'
-        '"bloom_level":"Remember","difficulty":"easy","options":["..."],"correct_index":0,'
+    schema_hint = (
+        '{"paper":{"sections":[{"label":"A","question_type":"short","questions":'
+        '[{"num":1,"text":"...","marks":2,"bloom_level":"Remember","difficulty":"easy",'
+        '"options":["A","B","C","D"],"correct_index":0,'
         '"subparts":[{"label":"a","text":"...","marks":1},{"label":"b","text":"...","marks":1}]}]}]},'
-        '"answer_key":[{"question_number":1,"correct_answer":"...","marking_scheme":"...",'
-        '"bloom_level":"Remember","difficulty":"easy"}]}. '
-        "The `subparts` field is OPTIONAL and only present when a question is split; "
-        "if present, the marks must sum to the parent question's marks. "
-        "Marks may be fractional (e.g. 2.5)."
+        '"answer_key":[{"question_number":1,"correct_answer":"...","marking_scheme":"...","page_ref":"filename.pdf p.4",'
+        '"bloom_level":"Remember","difficulty":"easy"}]}'
     )
 
-    raw = await llm_service.provider.generate(
-        system_prompt=f"You are an expert exam paper setter. {grounded_context}\n\nRespond ONLY with valid JSON.",
-        user_prompt=prompt,
+    user_prompt = (
+        f"Generate a complete {request.board} {request.subject} exam paper with "
+        f"{len(request.sections)} sections totaling {_fmt(request.total_marks)} marks "
+        f"({request.duration_minutes} minutes).\n"
+        f"Return ONLY valid JSON exactly matching this schema:\n{schema_hint}\n\n"
+        "Rules:\n"
+        "- `subparts` is OPTIONAL; when present, sub-part marks MUST sum to the parent question's marks.\n"
+        "- Marks may be fractional (e.g. 2.5).\n"
+        "- For MCQ items, populate `options` (4 entries) and `correct_index` (0-3).\n"
+        "- For short/medium/long/case_study items, set `options` to [] and `correct_index` to null.\n"
+        "- Every question's `text` must reference real content from the evidence.\n"
+        "- Every answer_key entry must include `page_ref` formatted as 'filename p.N'.\n"
     )
 
-    # Clean potential markdown fences
-    clean = raw.strip()
-    if clean.startswith("```json"):
-        clean = clean[7:-3].strip()
-    elif clean.startswith("```"):
-        clean = clean[3:-3].strip()
+    # PART 1 — call the LLM, parse, log raw output on failure, ONE retry,
+    # then refuse (don't ship placeholders).
+    def _strip_fences(raw: str) -> str:
+        s = (raw or "").strip()
+        if s.startswith("```json"):
+            s = s[7:]
+        elif s.startswith("```"):
+            s = s[3:]
+        if s.endswith("```"):
+            s = s[:-3]
+        return s.strip()
 
-    try:
-        data = json.loads(clean)
-    except json.JSONDecodeError:
-        # Fallback: build stub structure matching the spec
-        data = _build_stub_paper(request)
+    data: Optional[dict] = None
+    last_raw: str = ""
+    for attempt in range(2):
+        try:
+            raw = await llm_service.provider.generate(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt
+                + ("\n\nIMPORTANT: your previous output was not valid JSON. Output ONLY the JSON object."
+                   if attempt > 0 else ""),
+            )
+            last_raw = raw or ""
+            parsed = json.loads(_strip_fences(raw))
+            if "paper" in parsed and "answer_key" in parsed:
+                data = parsed
+                break
+            logger.warning(
+                "[exams/generate/paper] attempt %d returned JSON missing required keys: %s",
+                attempt + 1, list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__,
+            )
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "[exams/generate/paper] attempt %d JSON parse failed: %s; raw[:400]=%r",
+                attempt + 1, exc, (last_raw or "")[:400],
+            )
+        except Exception as exc:
+            logger.error("[exams/generate/paper] attempt %d LLM call failed: %s", attempt + 1, exc)
+            break
 
-    # Ensure the structure has required keys
-    if "paper" not in data or "answer_key" not in data:
-        data = _build_stub_paper(request)
+    if not data:
+        # PART 1: honest refusal — NEVER ship placeholder "[subject] question N on [subject]" anymore.
+        data = _build_refusal_paper(request)
 
     data["metadata"] = {
         "total_marks": request.total_marks,
@@ -180,52 +387,104 @@ For short/long: provide model answers and step-wise marking schemes.
         "subject": request.subject,
         "difficulty": request.difficulty,
         "bloom_distribution": request.bloom_distribution,
+        "doc_ids": [str(d) for d in doc_ids],
+        "chunks_grounded": len(evidence),
     }
     data["generated_at"] = datetime.now(timezone.utc).isoformat()
     data["watermark"] = request.watermark
 
+    # PART 3 — auto-save so Export DOCX can find it (and the user can revisit).
+    try:
+        new_exam = ExamPaper(
+            workspace_id=workspace_uuid,
+            owner_id=owner_uuid,
+            title=f"{request.subject} — {request.board} {_fmt(request.total_marks)}-mark paper",
+            description=f"Auto-saved {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
+            content=data,  # Stored as JSON blob; loaded back for Export DOCX.
+            status="DRAFT",
+        )
+        db.add(new_exam)
+        await db.commit()
+        await db.refresh(new_exam)
+        data["exam_id"] = str(new_exam.id)
+    except Exception as exc:
+        # Don't fail the whole request if the save flops — surface the data,
+        # and the user gets a soft warning that Export DOCX may not work until
+        # the next attempt.
+        logger.warning("[exams/generate/paper] auto-save failed: %s", exc)
+        data["exam_id"] = None
+        data["save_warning"] = "Auto-save failed — try regenerating before Export DOCX."
+
     return data
 
 
-def _build_stub_paper(request: ExamGenerationRequest) -> dict:
-    """Build a deterministic stub when LLM JSON parse fails. Honours fractional marks."""
+def _build_refusal_paper(request: ExamGenerationRequest) -> dict:
+    """PART 1: Honest refusal — used ONLY when both LLM attempts fail to
+    parse. Each section emits clearly-labelled refusal text instead of
+    placeholder questions. The teacher can regenerate immediately.
+    """
     sections = []
     answer_key = []
     q_num = 1
+    refusal = (
+        "[Generation failed] The model could not produce valid output for this "
+        "section on the last attempt. Click Generate again, or simplify the "
+        "section spec (e.g. fewer Bloom levels, narrower instructions)."
+    )
     for s in request.sections:
-        marks_each = (
-            s.marks_per_question
-            if s.marks_per_question is not None
-            else (s.total_marks / s.count if s.count else 0.0)
-        )
-        questions = []
-        for i in range(s.count):
-            q_record = {
-                "num": q_num,
-                "text": f"[{request.subject}] {s.question_type.upper()} question {i+1} on {request.subject}.",
-                "marks": marks_each,
-                "bloom_level": "Understand",
-                "difficulty": request.difficulty,
-                "options": ["Option A", "Option B", "Option C", "Option D"] if s.question_type == "mcq" else [],
-                "correct_index": 0 if s.question_type == "mcq" else None,
-            }
-            # B4: if allow_subquestions, give the first question in the section a 2-part split
-            # so the user sees the structure rendered.
-            if s.allow_subquestions and i == 0 and marks_each >= 2:
-                half = marks_each / 2
-                q_record["subparts"] = [
-                    {"label": "a", "text": "First sub-part.", "marks": half},
-                    {"label": "b", "text": "Second sub-part.", "marks": marks_each - half},
-                ]
-            questions.append(q_record)
-            answer_key.append({
-                "question_number": q_num,
-                "correct_answer": "Option A" if s.question_type == "mcq" else "Model answer.",
-                "marking_scheme": f"{marks_each} marks for complete answer.",
-                "bloom_level": "Understand",
-                "difficulty": request.difficulty,
-            })
-            q_num += 1
+        questions: List[dict] = []
+        # Honour per-question shape when provided (PART 2).
+        if s.questions:
+            for i, q in enumerate(s.questions):
+                q_marks = sum(sp.marks for sp in (q.sub_parts or [])) or q.marks
+                rec = {
+                    "num": q_num,
+                    "text": refusal,
+                    "marks": q_marks,
+                    "bloom_level": "Understand",
+                    "difficulty": request.difficulty,
+                    "options": [],
+                    "correct_index": None,
+                }
+                if q.sub_parts:
+                    rec["subparts"] = [
+                        {"label": sp.label, "text": refusal, "marks": sp.marks}
+                        for sp in q.sub_parts
+                    ]
+                questions.append(rec)
+                answer_key.append({
+                    "question_number": q_num,
+                    "correct_answer": "(no answer — generation failed)",
+                    "marking_scheme": f"{_fmt(q_marks)} marks reserved.",
+                    "bloom_level": "Understand",
+                    "difficulty": request.difficulty,
+                })
+                q_num += 1
+        else:
+            marks_each = (
+                s.marks_per_question
+                if s.marks_per_question is not None
+                else (s.total_marks / s.count if s.count else 0.0)
+            )
+            for i in range(s.count):
+                rec = {
+                    "num": q_num,
+                    "text": refusal,
+                    "marks": marks_each,
+                    "bloom_level": "Understand",
+                    "difficulty": request.difficulty,
+                    "options": [],
+                    "correct_index": None,
+                }
+                questions.append(rec)
+                answer_key.append({
+                    "question_number": q_num,
+                    "correct_answer": "(no answer — generation failed)",
+                    "marking_scheme": f"{_fmt(marks_each)} marks reserved.",
+                    "bloom_level": "Understand",
+                    "difficulty": request.difficulty,
+                })
+                q_num += 1
         sections.append({"label": s.label, "question_type": s.question_type, "questions": questions})
     return {"paper": {"sections": sections}, "answer_key": answer_key}
 
@@ -234,17 +493,50 @@ def _build_stub_paper(request: ExamGenerationRequest) -> dict:
 
 @router.get("/{exam_id}/export/docx")
 async def export_exam_docx(
-    exam_id: uuid.UUID,
+    exam_id: str,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """6-T3: Export a stored ExamPaper as an academically formatted DOCX."""
+    """6-T3 / PART 3: Export a stored ExamPaper as an academically formatted DOCX.
+
+    Accepts either:
+      • a real UUID (the new auto-save path returns one in `exam_id`), or
+      • the literal string `"latest"` — pull the most recent DRAFT for this
+        workspace + owner, for clients that didn't capture the id.
+    """
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    stmt = select(ExamPaper).where(ExamPaper.id == exam_id, ExamPaper.workspace_id == workspace_id)
+    owner_id = uuid.UUID(current_user["id"])
+
+    if exam_id == "latest":
+        stmt = (
+            select(ExamPaper)
+            .where(ExamPaper.workspace_id == workspace_id)
+            .where(ExamPaper.owner_id == owner_id)
+            .order_by(ExamPaper.created_at.desc())
+            .limit(1)
+        )
+    else:
+        try:
+            exam_uuid = uuid.UUID(exam_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid exam_id format.")
+        stmt = (
+            select(ExamPaper)
+            .where(ExamPaper.id == exam_uuid)
+            .where(ExamPaper.workspace_id == workspace_id)
+            .where(ExamPaper.owner_id == owner_id)
+        )
+
     result = await db.execute(stmt)
     exam = result.scalar_one_or_none()
     if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Couldn't find the exam to export. Generate the paper first; "
+                "the auto-save step persists it before this endpoint can run."
+            ),
+        )
 
     exam_data = {
         "title": exam.title,
@@ -254,8 +546,8 @@ async def export_exam_docx(
     }
 
     docx_bytes = ExportEngine.generate_exam_docx(exam_data)
-    safe_title = exam.title.replace(" ", "_")[:40]
-    filename = f"exam_{safe_title}_{exam_id}.docx"
+    safe_title = (exam.title or "exam_paper").replace(" ", "_")[:40]
+    filename = f"exam_{safe_title}_{exam.id}.docx"
 
     return StreamingResponse(
         iter([docx_bytes.read()]),

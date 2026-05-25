@@ -1381,8 +1381,13 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   }, [workspaceType, chatId]);
 
   const handlePaperGenerated = useCallback((data: any) => {
+    // PART 3 — keep the full payload (including data.exam_id from the
+    // backend auto-save) so the Export DOCX action chip can hit
+    // GET /exams/{id}/export/docx directly.
     setGeneratedPaper(data);
-    // Display paper as an AI message in chat
+    if (data?.save_warning) {
+      toast(data.save_warning, { icon: "⚠️" });
+    }
     const paperText = formatPaperAsMarkdown(data);
     setHistory((prev) => [...prev, {
       id: Date.now().toString(), role: "assistant",
@@ -1453,6 +1458,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         <PaperConfigPanel
           onClose={() => setShowPaperConfig(false)}
           onGenerated={handlePaperGenerated}
+          chatSessionId={chatId || undefined}
         />
       )}
 

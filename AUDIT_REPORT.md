@@ -2069,5 +2069,196 @@ log line or screenshot caption.
 | `frontend/src/app/forgot-password/page.tsx` | Rewrite as 3-step OTP UI |
 | `frontend/src/app/reset-password/page.tsx` | Soft fallback page |
 
+---
+
+## PRODUCT-FEATURE REPAIR SESSION — 2026-05-25
+
+User report: "Question paper is fake — placeholder text like `[computer
+vsion] SHORT question 1 on computer vsion. [2]`." Plus 5 more parts
+(per-question sub-questions, export/save flow, conversation context,
+slow extraction + status, rich editor).
+
+### PART 1 — TRACE before edit
+
+**Exact code that emits the placeholder strings.**
+
+File: `backend/app/api/v1/endpoints/exams.py`.
+
+The `/exams/generate/paper` endpoint **does** call the LLM at line 154,
+but the questions arrive as placeholders for **two compounding reasons**:
+
+1. **No grounding.** The prompt built at lines 121–152 includes only the
+   paper config (subject, board, marks, Bloom mix, section spec) and
+   asks for JSON. It does NOT include any chunks from the uploaded
+   document — there is no retrieval step. The endpoint signature has
+   no `db: AsyncSession`, no `chat_session_id`, no `document_ids`. So
+   even when the LLM returns valid JSON, the questions are *generic*
+   AI-fabricated content based on the subject string only, not on the
+   user's syllabus.
+2. **Silent fallback to `_build_stub_paper`.** Lines 168–174:
+   - If `json.loads(clean)` raises `JSONDecodeError`, OR
+   - If the parsed object doesn't have both `paper` AND `answer_key`
+     keys at the top level,
+   the endpoint silently calls `_build_stub_paper(request)`. That stub
+   builder is the literal source of the placeholders the user saw:
+   ```
+   "text": f"[{request.subject}] {s.question_type.upper()} question
+            {i+1} on {request.subject}."
+   ```
+   No log line tells the user it fell back; the API returns 200 with
+   a fully-formed but useless paper.
+
+**Frontend side.** `PaperConfigPanel.tsx` posts ONLY the config object
+to `/exams/generate/paper` — no `chat_session_id`, no document_ids.
+Even if the backend asked for them, the frontend isn't sending them.
+
+**Why this slipped past previous sessions.** The existing audit notes
+say "B5: sensible defaults" and "B3: MEDIUM type" — the work was on
+the marks/Bloom validation, not on grounding. The endpoint was treated
+as a stand-alone "format LLM JSON" call rather than a RAG-grounded
+generation.
+
+### PART 1 — FIX PLAN
+
+1. Add `chat_session_id: Optional[str]` to `ExamGenerationRequest`.
+2. Inject `db: AsyncSession = Depends(get_db)` so the handler can
+   look up the chat's attached READY docs (same pattern as
+   `query.py`/P1 isolation work).
+3. For each section, retrieve N relevant chunks (subject + section
+   topic as query) via `RetrievalService.retrieve_chunks` restricted
+   to `document_ids`. Combine into `evidence_blocks` formatted with
+   `[filename, Page N]` headers.
+4. Concatenate that evidence into the LLM prompt's `grounded_context`
+   (before the config + JSON schema). The system prompt also gets
+   the P3 "document intelligence" preamble plus a clear "use ONLY the
+   evidence to write questions; if a section's topic isn't covered,
+   say so" rule.
+5. On `JSONDecodeError` or missing keys, **log the raw response**
+   loudly (so we can see the LLM's failure mode) and attempt ONE
+   structured retry with `llm_service.generate_json` against a
+   Pydantic schema before falling back.
+6. Replace `_build_stub_paper`'s placeholder text with an explicit
+   refusal message ("Could not generate question — model returned
+   unparseable output; please regenerate.") so users can never again
+   see `[subject] LONG question N on [subject]`.
+7. Auto-persist the resulting ExamPaper row so PART 3's Export DOCX
+   always has something to export (covered next).
+8. Frontend: `PaperConfigPanel` posts `chat_session_id` from the
+   current chat. Without docs, surface a clear "Attach a syllabus or
+   textbook first" message before submitting.
+
+### PART 1 — Real grounded exam questions — **IMPLEMENTED**
+
+**Backend (`exams.py`):**
+- `ExamGenerationRequest` gains `chat_session_id: Optional[str]` and
+  `ExamSection` gains `questions: Optional[List[QuestionSpec]]` (PART 2
+  prep). When `questions` is provided per-section, a `model_validator`
+  recomputes `count` + `total_marks` so the marks-validation invariant
+  holds either way.
+- `generate_paper`:
+  - Inject `db: AsyncSession`.
+  - New `_retrieve_grounding_for_paper(db, request, owner_id, chat_uuid)`:
+    look up READY docs for this chat → pull a deep candidate pool
+    (`min(40, max(20, total_questions*2))`) via
+    `RetrievalService.retrieve_chunks(document_ids=[…])` → sort by
+    `(filename, page, chunk_index)` so the LLM sees the syllabus
+    in reading order.
+  - Returns 400 with explicit messages on the two "no grounding"
+    paths: (a) no docs attached, (b) docs READY but no relevant
+    chunks. **No placeholder paper is ever returned.**
+  - LLM system prompt now includes:
+    `EVIDENCE BLOCKS (your ONLY knowledge source)` with each chunk
+    cited as `[filename | Page N]`, plus an explicit instruction:
+    "if a section asks for topics the evidence doesn't cover, write a
+    question whose `text` clearly states 'The provided source material
+    does not cover this topic.'" — no fabrication, no placeholders.
+  - Schema hint requires `page_ref` on every answer_key entry.
+  - On parse failure: log the raw output (first 400 chars), retry ONCE
+    with `IMPORTANT: previous output was not valid JSON…`, then fall
+    back to `_build_refusal_paper` whose text says
+    "[Generation failed] The model could not produce valid output …
+    Click Generate again." — clearly an error, never silently shipped
+    as content.
+- `_build_stub_paper` removed in favour of `_build_refusal_paper`. The
+  placeholder strings (`[subject] question N on [subject]`) are
+  completely gone from the codebase.
+
+**Backend (`exams.py` Export DOCX — PART 3):**
+- `GET /exams/{exam_id}/export/docx` now accepts the literal string
+  `"latest"` in addition to a UUID. `"latest"` returns the most recent
+  paper for `(workspace_id, owner_id)`.
+- Returns a clearer 404 message ("Generate the paper first; the
+  auto-save step persists it…") instead of bare "Exam not found".
+- Owner filter added — workspace alone wasn't enough.
+
+**Backend auto-save (PART 3):**
+- After successful generation, `generate_paper` writes a new
+  `ExamPaper` row (`status="DRAFT"`, JSON content) and returns
+  `data["exam_id"]`. If the save flops, the request still returns the
+  paper plus `data["save_warning"]` so the user can regenerate.
+
+**Frontend (`PaperConfigPanel.tsx`):**
+- Accepts `chatSessionId` prop, posts it on `/exams/generate/paper`.
+- `ExamSectionConfig.questions?` + `QuestionConfig` + `QuestionSubPartConfig`
+  types added. Section total computed from the questions list when
+  present (PART 2).
+- Per-section UI gains a "Customise questions individually" expander.
+  Inside that:
+  - Each Q gets its own marks input and an `× remove` button.
+  - "+ sub-part" adds a labelled (a/b/c…) sub-row with its own marks.
+  - The sub-part marks input + label are individually editable; a
+    "× sub-part" button removes one.
+  - Section total live-updates from the sum of question marks
+    (or sum of sub-part marks per question with sub-parts).
+  - "← uniform marks" button collapses back to the section-level
+    shortcut (Marks/Q + Count + section-wide toggle), preserving the
+    old fast path for teachers who don't need per-Q control.
+
+**Frontend (`WorkspaceUI.tsx`):**
+- Renders `<PaperConfigPanel chatSessionId={chatId || undefined} />`.
+- `handlePaperGenerated` keeps `data.exam_id` on `generatedPaper`
+  state so the Export DOCX action chip can use it. Surfaces
+  `data.save_warning` as a soft toast when present.
+
+**Could regress:**
+- Old clients that POST to `/exams/generate/paper` WITHOUT a
+  `chat_session_id` will now get a clean 400 instead of a placeholder
+  paper. This is the desired behaviour — the previous "always 200,
+  always fake questions" was the headline bug.
+- The auto-save creates one `ExamPaper` row per generation; teachers
+  generating many drafts accumulate rows. Cleanup can be added later
+  via a "Delete old drafts" admin action; not a blocker.
+
+**Proof (manual):**
+- [ ] Upload a real syllabus PDF, open Paper Config, click Generate.
+      Response body contains `paper.sections[*].questions[*].text` with
+      REAL content about the document's topics; `metadata.chunks_grounded`
+      is > 0; `exam_id` is a UUID. ✅ PENDING
+- [ ] Same flow with NO doc attached → 400 with the "upload a syllabus
+      first" message; no fake paper is shown. ✅ PENDING
+
+### PART 2 — Per-question sub-parts — **IMPLEMENTED**
+
+Section-level toggle preserved for backward compat. New per-question
+path active when `ExamSection.questions: List[QuestionSpec]` is
+non-empty. Each question carries its own `marks`; `sub_parts` is an
+optional list of `{label, marks}` rows. Backend validator recomputes
+section `count` and `total_marks` from the questions list so marks-sum
+validation works in either shape.
+
+Frontend UI (PaperConfigPanel) exposes the new shape only when the
+teacher clicks "Customise questions individually" — keeps the default
+flow uncluttered.
+
+### PART 3 — Auto-save + Export DOCX — **IMPLEMENTED**
+
+Covered above. `generate_paper` writes an `ExamPaper` row, returns its
+id; `GET /exams/{exam_id}/export/docx` accepts both a real UUID and
+the literal `"latest"`. The existing Export DOCX chip in WorkspaceUI
+already passes `generatedPaper.exam_id ?? "latest"` — both branches
+now resolve.
+
+
+
 
 
