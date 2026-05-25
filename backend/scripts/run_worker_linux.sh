@@ -22,10 +22,18 @@ if ! command -v celery >/dev/null 2>&1; then
 fi
 
 # Beat-enabled prefork worker. -Q defaults to celery+main-queue; override via args.
+#
+# PART 5 — bump max-tasks-per-child so the BAAI/bge-m3 embedding model
+# (~1.2 GB) stays resident across many uploads. Default 50 in celery_app.conf
+# caused full process restarts (and model re-downloads/re-loads) every 50
+# tasks. 1000 is large enough for a day's work without forfeiting the
+# safety net of an eventual recycle. celery_app.py itself is STABLE per
+# CLAUDE.md — override at the CLI here instead.
 exec celery -A app.workers.celery_app worker \
   --pool=prefork \
   --concurrency=2 \
   --loglevel=info \
+  --max-tasks-per-child=1000 \
   -B \
   -Q main-queue,celery \
   "$@"

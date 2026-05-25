@@ -26,4 +26,13 @@ if (-not (Get-Command celery -ErrorAction SilentlyContinue)) {
 }
 
 # Beat-enabled solo worker — single process, single thread, runs scheduled tasks too.
-& celery -A app.workers.celery_app worker --pool=solo --loglevel=info -B @args
+#
+# PART 5 fix — disable the per-child task recycle. celery_app.conf sets
+# `worker_max_tasks_per_child=50`, which on a solo Windows worker means
+# the whole process restarts every 50 tasks. Every restart re-loads the
+# BAAI/bge-m3 embedding model (~1.2 GB), making document extraction
+# painfully slow on the 51st upload. `--max-tasks-per-child=0` disables
+# the recycle so the model stays resident for the worker's lifetime.
+# (celery_app.py itself is marked STABLE in CLAUDE.md — override at the
+# CLI instead.)
+& celery -A app.workers.celery_app worker --pool=solo --loglevel=info -B --max-tasks-per-child=0 @args

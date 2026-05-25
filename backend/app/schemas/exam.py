@@ -60,7 +60,14 @@ class ExamPaperResponse(BaseModel):
     id: UUID
     title: str
     description: Optional[str]
-    content: ExamPaperContent
+    # PART 1+3 — the auto-save path writes the full /generate/paper payload
+    # (with `paper`, `answer_key`, `metadata`, optional `edited_html` from
+    # PART 6 Phase 1, etc.). That shape doesn't match the strict
+    # ExamPaperContent schema, and the previous strict typing 500'd
+    # list_exams whenever an auto-saved row was loaded. Loosen the response
+    # to a free-form dict — the ExportEngine consumes the dict directly,
+    # and frontend list views only need the metadata.
+    content: Dict[str, Any]
     status: str
     share_token: Optional[str]
     created_at: datetime
@@ -68,6 +75,16 @@ class ExamPaperResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ExamEditSaveRequest(BaseModel):
+    """PART 6 Phase 1 — payload from the rich-text editor.
+
+    The editor stores `edited_html` alongside the original structured paper
+    so Export DOCX can fall back to the structured version if needed. The
+    blob is opaque JSON to the backend; we just persist it.
+    """
+    content: Dict[str, Any]
 
 class GenerateQuestionRequest(BaseModel):
     topic: str

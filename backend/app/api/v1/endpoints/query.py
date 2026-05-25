@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import Any
+from typing import Any, Dict
 import json
 import asyncio
 
@@ -265,10 +265,29 @@ async def ask_question_stream(
                 except Exception as exc:
                     logger.warning(f"[query/stream] Failed to load history/docs: {exc}")
 
-            history_text = "\n".join([
-                f"{m['role'].upper()}: {m['content'][:300]}"
-                for m in conversation_history[-6:]
-            ])
+            # PART 4 — strengthen conversation context.
+            # Old behaviour truncated to 300 chars per message AND fed raw
+            # assistant-side JSON (the streaming response is JSON-serialised
+            # before being saved), so the LLM saw `{"answer":"…","evidence":…}`
+            # instead of readable text. Both hurt follow-ups like "generate as
+            # I mentioned." Fix: extract `.answer` from assistant JSON when
+            # parseable, and widen truncation per role.
+            def _format_history_message(m: Dict[str, str]) -> str:
+                role = m["role"].upper()
+                content = m["content"] or ""
+                if m["role"] == "assistant":
+                    try:
+                        parsed = json_module.loads(content)
+                        if isinstance(parsed, dict) and "answer" in parsed:
+                            content = str(parsed.get("answer") or "")
+                    except (ValueError, TypeError):
+                        pass
+                    return f"{role}: {content[:800]}"
+                return f"{role}: {content[:600]}"
+
+            history_text = "\n".join(
+                _format_history_message(m) for m in conversation_history[-6:]
+            )
 
             # PHASE 2 — map-reduce summary path. When the user is clearly
             # asking for a summary / overview AND there are attached docs,

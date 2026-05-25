@@ -2258,6 +2258,108 @@ the literal `"latest"`. The existing Export DOCX chip in WorkspaceUI
 already passes `generatedPaper.exam_id ?? "latest"` — both branches
 now resolve.
 
+### PART 4 — Conversation context + Teacher routing — **IMPLEMENTED**
+
+**Backend (`query.py`):**
+- `_format_history_message(m)` extracts `.answer` from JSON-serialised
+  assistant messages before showing them to the LLM. Previous behaviour
+  fed raw `{"answer":"…","evidence":…}` strings into the prompt, which
+  the LLM treated as noise. Truncation widened: user 600 chars,
+  assistant 800.
+- Imports `Dict` from typing.
+
+**Frontend (`WorkspaceUI.sendMessage`):**
+- Exam workspace only — when the user free-text-types something like
+  "generate paper" / "create question paper" / "make a paper", show a
+  toast ("Use the Generate Paper panel for structured generation —
+  free-text chat is for Q&A") and auto-open `PaperConfigPanel`. Routes
+  intent into the structured generation path, eliminating the "the
+  previous conversation does not contain the details" error class.
+
+### PART 5 — Embedding model loaded ONCE per worker — **IMPLEMENTED**
+
+`celery_app.conf` sets `worker_max_tasks_per_child=50`, which on a
+solo Windows worker triggers a process restart every 50 tasks. Every
+restart reloads the BAAI/bge-m3 embedding model (~1.2 GB) from disk;
+that's why uploads slowed down over time and why the user saw
+"loading model" logs repeatedly. `celery_app.py` is STABLE per
+CLAUDE.md so the fix is at the run-script layer:
+
+- `backend/scripts/run_worker_windows.ps1` — appended
+  `--max-tasks-per-child=0` (disable recycle entirely).
+- `backend/scripts/run_worker_linux.sh` — appended
+  `--max-tasks-per-child=1000` (keep the safety net but never hit it
+  in a normal day's work).
+
+`GET /documents/{id}` already returns the `DocumentResponse` Pydantic
+schema (FastAPI's `response_model=` handles the ORM → dict serialise);
+no change needed there. Live status polling is already wired in
+WorkspaceUI from the previous session's P6 work.
+
+**Proof (manual):**
+- [ ] Restart the worker with the updated script → watch logs: the
+      "Using model: BAAI/bge-m3" line should fire ONCE on boot and
+      never again across 50+ uploads. ✅ PENDING
+
+### PART 6 Phase 1 — Editable paper view — **IMPLEMENTED**
+
+New component `frontend/src/components/EditablePaperPanel.tsx`:
+- 560-px side-panel mounted alongside `PaperConfigPanel`.
+- Renders the generated paper's structured content as editable HTML
+  (`paperToEditableHtml(paper)`).
+- contentEditable div with `useRef` (avoids React clobbering caret).
+- Minimal toolbar: B/I/U · H2/H3/P · UL/OL · undo/redo (uses
+  `document.execCommand` — fine for Phase 1).
+- "Save" button POSTs to a new `POST /exams/{id}/save-edits` route
+  (backend) that accepts an arbitrary `content` JSON blob with an
+  `edited_html` field. Dirty-tracking shows the unsaved-indicator and
+  blocks export-without-save.
+- "Export DOCX" reuses the existing endpoint; on dirty state, prompts
+  to save first.
+
+**Backend changes for editor (`exams.py` + `schemas/exam.py`):**
+- `ExamPaperResponse.content` loosened to `Dict[str, Any]` — the
+  strict `ExamPaperContent` schema 500'd list_exams whenever an
+  auto-saved row (free-form payload) was loaded. The Export DOCX
+  consumer is a dict-walker, not Pydantic, so the loosening is safe.
+- New `ExamEditSaveRequest` schema: `{ content: Dict[str, Any] }`.
+- New endpoint `POST /exams/{exam_id}/save-edits` validates
+  workspace + owner and writes the blob to `ExamPaper.content`.
+
+`WorkspaceUI`:
+- New state `showPaperEditor`.
+- `WORKSPACE_ACTIONS.exam` gains a `✏ Edit Paper` chip; handler opens
+  the editor when a paper has been generated, otherwise toasts a hint.
+- Renders `<EditablePaperPanel paper={generatedPaper} onClose=… onSaved=…>`
+  next to `PaperConfigPanel`.
+
+**Phase 2 + Phase 3 design notes:** captured in
+`KNOWN_REMAINING_ISSUES.md` (image upload + AI image gen plumbing,
+DOCX export, cost guards). Out of scope for this session per spec.
+
+**Proof (manual):**
+- [ ] Generate a paper → click Edit Paper → toolbar appears → edit
+      a question's text → Save → re-open editor; edits persist. ✅ PENDING
+- [ ] After save, click Export DOCX → the downloaded .docx reflects
+      the edits. ✅ PENDING
+
+---
+
+## Files modified in the PRODUCT-FEATURE-REPAIR session
+
+| File | What changed |
+|---|---|
+| `backend/app/api/v1/endpoints/exams.py` | Grounded generation; auto-save; per-Q sub-parts; `save-edits` endpoint; `/export/docx` accepts `latest` |
+| `backend/app/api/v1/endpoints/query.py` | Conversation history extracts `.answer` from JSON; wider truncation |
+| `backend/app/schemas/exam.py` | Loosened `ExamPaperResponse.content`; new `ExamEditSaveRequest` |
+| `backend/scripts/run_worker_windows.ps1` | `--max-tasks-per-child=0` (no recycle, model stays loaded) |
+| `backend/scripts/run_worker_linux.sh` | `--max-tasks-per-child=1000` |
+| `frontend/src/components/PaperConfigPanel.tsx` | Posts `chat_session_id`; per-Q editor with add/remove sub-parts |
+| `frontend/src/components/WorkspaceUI.tsx` | Routes exam free-text "generate" → panel; `Edit Paper` chip; mounts editor |
+| `frontend/src/components/EditablePaperPanel.tsx` | NEW — Phase 1 rich-text editor |
+| `KNOWN_REMAINING_ISSUES.md` | Phase 2 / Phase 3 image-editor design notes |
+
+
 
 
 

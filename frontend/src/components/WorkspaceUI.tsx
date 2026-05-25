@@ -12,6 +12,7 @@ import {
   createChatMessage, ChatMessage, updateChat, API_BASE,
 } from "../lib/api";
 import PaperConfigPanel from "./PaperConfigPanel";
+import EditablePaperPanel from "./EditablePaperPanel";
 import PomodoroTimer from "./PomodoroTimer";
 import CandidateRankingsPanel from "./CandidateRankingsPanel";
 import FinanceRatioPanel from "./FinanceRatioPanel";
@@ -129,7 +130,7 @@ const FOLLOW_UP_SUGGESTIONS: Record<string, string[]> = {
 };
 
 const WORKSPACE_ACTIONS: Record<string, { icon: string; label: string }[]> = {
-  exam:     [{ icon: "📄", label: "Generate Paper" }, { icon: "📖", label: "Question Bank" }, { icon: "🔑", label: "Answer Key" }, { icon: "🖨", label: "Export DOCX" }, { icon: "⊞", label: "Extract Tables" }],
+  exam:     [{ icon: "📄", label: "Generate Paper" }, { icon: "📖", label: "Question Bank" }, { icon: "🔑", label: "Answer Key" }, { icon: "✏", label: "Edit Paper" }, { icon: "🖨", label: "Export DOCX" }, { icon: "⊞", label: "Extract Tables" }],
   hr:       [{ icon: "📂", label: "Batch Upload" }, { icon: "🎯", label: "Set JD Context" }, { icon: "📊", label: "View Rankings" }, { icon: "📋", label: "Export Candidates" }],
   study:    [{ icon: "📖", label: "Study Mode" }, { icon: "🃏", label: "Flashcard Mode" }, { icon: "⏱", label: "Pomodoro Timer" }, { icon: "📊", label: "My Progress" }],
   finance:  [{ icon: "🔢", label: "Extraction Mode" }, { icon: "📊", label: "Table Mode" }, { icon: "✅", label: "Verify" }, { icon: "📈", label: "Ratios" }],
@@ -666,6 +667,8 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const [showPaperConfig, setShowPaperConfig] = useState(false);
   const [generatedPaper, setGeneratedPaper] = useState<any | null>(null);
   const [showAnswerKey, setShowAnswerKey] = useState(false);
+  // PART 6 Phase 1 — rich-text editor overlay for the generated paper.
+  const [showPaperEditor, setShowPaperEditor] = useState(false);
   const [showPomodoro, setShowPomodoro] = useState(false);
   const [flashcardMode, setFlashcardMode] = useState(false);
   const [flashcardDecks, setFlashcardDecks] = useState<any[]>([]);
@@ -876,6 +879,27 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const sendMessage = useCallback(async (queryText: string) => {
     if (!queryText.trim()) return;
     window.speechSynthesis?.cancel?.();
+
+    // PART 4 — Teacher workspace: if the user types "generate paper" /
+    // "create question paper" / "make a paper" in free-text chat, gently
+    // nudge them toward the Paper Configuration panel instead of routing
+    // the request through the generic chat (which has no structured config
+    // and produces vague answers like "the previous conversation does not
+    // contain the details"). Free-text chat in this workspace is for Q&A
+    // about the docs.
+    if (workspaceType === "exam") {
+      const q = queryText.trim().toLowerCase();
+      const wantsGenerate = /\b(generate|create|make)\b.*\b(paper|exam|question paper)\b/.test(q);
+      if (wantsGenerate) {
+        toast(
+          "Use the Generate Paper panel for structured exam generation — free-text chat is for Q&A about the doc.",
+          { icon: "💡", duration: 5000 },
+        );
+        setShowPaperConfig(true);
+        return;
+      }
+    }
+
     // P6 — Send is locked whenever ANY attached doc is still processing.
     // No-document mode is fine (docs.length === 0 → unlocked). All docs
     // READY/FAILED/DEDUPLICATED → unlocked. A FAILED doc doesn't block
@@ -1216,6 +1240,15 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     }
     if (workspaceType === "exam") {
       if (label === "Generate Paper") { setShowPaperConfig(true); return; }
+      if (label === "Edit Paper") {
+        // PART 6 Phase 1 — open the rich-text editor over the generated paper.
+        if (!generatedPaper) {
+          toast("Generate a paper first, then click Edit Paper.", { icon: "💡" });
+          return;
+        }
+        setShowPaperEditor(true);
+        return;
+      }
       if (label === "Answer Key") { setShowAnswerKey((v) => !v); return; }
       if (label === "Extract Tables") {
         setTablePanelDocId(activeDoc?.id ?? null);
@@ -1459,6 +1492,15 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           onClose={() => setShowPaperConfig(false)}
           onGenerated={handlePaperGenerated}
           chatSessionId={chatId || undefined}
+        />
+      )}
+
+      {/* PART 6 Phase 1 — rich-text editor for the generated paper. */}
+      {showPaperEditor && generatedPaper && (
+        <EditablePaperPanel
+          paper={generatedPaper}
+          onClose={() => setShowPaperEditor(false)}
+          onSaved={(updated) => setGeneratedPaper(updated)}
         />
       )}
 

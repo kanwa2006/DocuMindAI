@@ -291,3 +291,60 @@ minutes with no progress indicator. P4's "Document processing…" dot
 now keeps the input usable, but a small "first upload may take a
 moment — downloading the embedding model" hint would be friendlier.
 Could be inferred from the first call to `embedding_service.generate_embeddings`.
+
+---
+
+## PART 6 — Teacher rich editor: Phase 2 + Phase 3 design (deferred)
+
+Phase 1 (built in this session, see `frontend/src/components/EditablePaperPanel.tsx`):
+- contentEditable side-panel that wraps the generated paper.
+- Minimal toolbar: bold / italic / underline · H2 / H3 / P · UL / OL · undo / redo.
+- Save → `POST /exams/{exam_id}/save-edits` writes the free-form
+  content blob (`edited_html` alongside the original `paper` structure).
+- Export DOCX uses the existing `GET /exams/{exam_id}/export/docx` flow.
+
+### Phase 2 — image upload + positioning
+
+Goal: teacher can attach images (diagrams, scanned figures) to specific
+questions, dragging or resizing them inline.
+
+Sketch:
+1. Add an image picker to the toolbar that calls a new endpoint
+   `POST /exams/{exam_id}/upload-image` — returns a signed URL keyed
+   to the exam. Backend stores images under
+   `STORAGE_PATH/exam_images/{exam_id}/{uuid}.{ext}` and references them
+   by URL.
+2. Toolbar button inserts `<img src="…">` at caret; minimal CSS resize
+   handles via `resize: both; overflow: auto;` on a wrapping `<span>`.
+3. The DOCX exporter (`ExportEngine.generate_exam_docx`) currently
+   walks `paper.sections[].questions[]`. To honour edited HTML it
+   needs a small `html2docx` pass — `python-docx`'s `add_picture` for
+   inline images. Reuse the same flow as Question Bank exports.
+4. Backend rate-limit per exam (5 image uploads / minute) to keep
+   storage costs bounded for free-tier users.
+
+Effort: ~2 days. Risk: medium — DOCX image positioning is fiddly.
+
+### Phase 3 — AI-generated images from text (e.g. "Romania map")
+
+Goal: teacher selects text or pastes a description; an "AI image" button
+generates a diagram and inserts it.
+
+Sketch:
+1. Pick a single image-generation provider. Recommended:
+   `google-genai` Gemini `models.generate_images` (already aligned with
+   the LLM provider abstraction). Cost: ~ $0.04 / image at 1024×1024.
+2. Toolbar button opens a dialog: prompt textarea + "Generate" button →
+   `POST /exams/generate/image { prompt }` → returns a URL or base64
+   blob. Editor inserts as `<img>` (re-uses Phase 2's image plumbing).
+3. Caching: hash(prompt) → URL in Redis so the same diagram isn't
+   regenerated across reloads.
+4. Cost guard: free-tier 5 images / day; Plus 50; Pro 500. Add the
+   counter to `core/trial_enforcement.py` alongside the query quota.
+5. Safety: Gemini image-generation already enforces content filters;
+   plumb the refusal cleanly into the editor so the user sees why.
+
+Effort: ~3 days. Risk: medium — billing + caching are the long pole.
+
+**Order of operations**: Phase 2 first (image upload is a hard
+dependency for Phase 3's insertion path).

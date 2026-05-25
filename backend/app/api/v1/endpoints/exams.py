@@ -16,7 +16,7 @@ from app.core.auth import get_current_user
 from app.core.workspace import resolve_workspace_id
 from app.models.document import Document, DocumentStatus
 from app.models.exam import ExamPaper, ExamVersion
-from app.schemas.exam import ExamPaperCreate, ExamPaperUpdate, ExamPaperResponse, GenerateQuestionRequest
+from app.schemas.exam import ExamPaperCreate, ExamPaperUpdate, ExamPaperResponse, GenerateQuestionRequest, ExamEditSaveRequest
 from app.services.retrieval_service import RetrievalService
 from app.services.llm_service import llm_service
 from app.services.export_engine import ExportEngine
@@ -715,6 +715,46 @@ async def get_exam(
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
     return exam
+
+# PART 6 Phase 1 — dedicated edit-save endpoint. The editor stores a
+# free-form `content` blob (with `edited_html` alongside the original
+# `paper`/`answer_key`); the strict ExamPaperUpdate.content schema can't
+# accept that shape. This endpoint accepts the blob verbatim.
+@router.post("/{exam_id}/save-edits", response_model=ExamPaperResponse)
+async def save_exam_edits(
+    exam_id: str,
+    payload: ExamEditSaveRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        exam_uuid = uuid.UUID(exam_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid exam_id format.")
+
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
+    owner_id = uuid.UUID(current_user["id"])
+    stmt = (
+        select(ExamPaper)
+        .where(ExamPaper.id == exam_uuid)
+        .where(ExamPaper.workspace_id == workspace_id)
+        .where(ExamPaper.owner_id == owner_id)
+    )
+    result = await db.execute(stmt)
+    exam = result.scalar_one_or_none()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found.")
+
+    exam.content = payload.content
+    try:
+        await db.commit()
+        await db.refresh(exam)
+    except Exception as exc:
+        await db.rollback()
+        logger.error(f"[exams/save-edits] failed for {exam_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Could not save edits.")
+    return exam
+
 
 @router.put("/{exam_id}", response_model=ExamPaperResponse)
 async def update_exam(
