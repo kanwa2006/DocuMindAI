@@ -182,7 +182,16 @@ function ConfidenceBadge({ score }: { score: number }) {
 function CodeBlock({ node, inline, className, children, ...props }: any) {
   const [copied, setCopied] = useState(false);
   const codeText = String(children).replace(/\n$/, "");
-  if (inline) {
+  // react-markdown v9+ dropped the `inline` prop. Without it, this component
+  // is called for inline code too, and the old branch went straight to the
+  // <pre><div> block layout — producing `<p><div><pre>...</pre></div></p>`
+  // HTML and the hydration error the user saw.
+  // Fenced (block) code has a `language-*` className OR newlines in content;
+  // inline code has neither.
+  const isInline =
+    inline === true ||
+    (inline === undefined && !(className && /language-/.test(className)) && !codeText.includes("\n"));
+  if (isInline) {
     return <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.875em", background: "var(--surface-sunken)", padding: "2px 5px", borderRadius: "4px" }}>{children}</code>;
   }
   const handleCopy = () => {
@@ -295,9 +304,36 @@ function TableWithExport({ children, workspaceType }: { children: React.ReactNod
   );
 }
 
+// Console-error fix — `<p> cannot contain a nested <pre>/<div>` hydration
+// errors. ReactMarkdown wraps inline content in <p>; when a fenced code
+// block or a custom <div> child sneaks into that paragraph slot, the HTML
+// is invalid. This guard renders the wrapper as <div> when any child is a
+// block-level element, and as <p> otherwise.
+function SafeParagraph({ node, children, ...props }: any) {
+  const arr = React.Children.toArray(children);
+  const BLOCK_TAGS = new Set(["div", "pre", "ul", "ol", "table", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"]);
+  const BLOCK_COMPONENTS = new Set(["CodeBlock", "TableWithExport"]);
+  const hasBlockChild = arr.some((child: any) => {
+    if (!child || typeof child !== "object") return false;
+    const t = child.type;
+    if (typeof t === "string") return BLOCK_TAGS.has(t);
+    if (typeof t === "function") return BLOCK_COMPONENTS.has(t.displayName || t.name || "");
+    return false;
+  });
+  if (hasBlockChild) {
+    return <div {...props}>{children}</div>;
+  }
+  return <p {...props}>{children}</p>;
+}
+
 function buildMarkdownComponents(workspaceType: string) {
   return {
     code: CodeBlock,
+    // Custom <p> avoids HTML-invalid nesting like <p><pre>…</pre></p>.
+    p: SafeParagraph,
+    // react-markdown also emits <pre> by default; redirect it through our
+    // CodeBlock so the wrapper layout is consistent.
+    pre: ({ children }: any) => <>{children}</>,
     table: ({ children }: any) => <TableWithExport workspaceType={workspaceType}>{children}</TableWithExport>,
     th: ({ children }: any) => <th style={{ padding: "8px 12px", background: "var(--surface-sunken)", borderBottom: "2px solid var(--border-default)", textAlign: "left", fontWeight: 600, fontSize: "13px" }}>{children}</th>,
     td: ({ children }: any) => <td style={{ padding: "8px 12px", borderBottom: "1px solid var(--border-subtle)", fontSize: "13px" }}>{children}</td>,
@@ -1492,6 +1528,11 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           onClose={() => setShowPaperConfig(false)}
           onGenerated={handlePaperGenerated}
           chatSessionId={chatId || undefined}
+          // B-fix — give the panel the live status of each attached doc so
+          // it can disable Generate while anything's still processing,
+          // instead of letting the user click and hit a 409 "still
+          // processing" error.
+          attachedDocs={docs.map((d) => ({ id: d.id, filename: d.filename, status: d.status }))}
         />
       )}
 

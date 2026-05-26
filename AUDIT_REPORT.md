@@ -2359,6 +2359,128 @@ DOCX export, cost guards). Out of scope for this session per spec.
 | `frontend/src/components/EditablePaperPanel.tsx` | NEW — Phase 1 rich-text editor |
 | `KNOWN_REMAINING_ISSUES.md` | Phase 2 / Phase 3 image-editor design notes |
 
+---
+
+## EXAM WORKSPACE VERIFICATION SESSION — 2026-05-25 (post-restart)
+
+User reported: chip clearly shows `CS305-Unit-3-Fitting.pdf` in the
+exam workspace, but clicking Generate returns "No documents are
+attached to this chat." Plus 3 Next.js hydration console errors and
+a "Failed to delete chat" error.
+
+### B — "no documents are attached" misdiagnosis — **FIXED**
+
+**Root cause.** `_retrieve_grounding_for_paper` had a single empty-set
+return path:
+```py
+if not doc_ids:  # filtered by status == READY
+    return [], []
+```
+Three different failure modes (no chat session, no docs at all, docs
+present but still PROCESSING/INDEXING/EXTRACTED) all collapsed into the
+same "No documents are attached" message — and the screenshot's
+textarea placeholder ("we'll send it once the document is ready")
+confirmed the doc was actually mid-pipeline, not missing.
+
+**Fix.**
+- Backend (`exams.py`):
+  - `_retrieve_grounding_for_paper` return signature widened from
+    `(evidence, doc_ids)` to `(evidence, doc_ids, status_hint)` where
+    `status_hint` is one of `"no_session" | "no_docs" | "processing"
+    | "no_chunks" | ""`.
+  - `generate_paper` branches per hint:
+    - `no_session` → 400 "Open a chat first…"
+    - `no_docs` → 400 "No documents attached… upload first."
+    - `processing` → **409** "The attached document is still being
+      processed. Wait for the chip to turn green (Ready)…"
+    - `no_chunks` → 400 "The document finished processing but no
+      chunks matched the subject…"
+- Frontend (`PaperConfigPanel.tsx`):
+  - New `attachedDocs` prop carrying the live `{id, filename, status}`
+    of each chip.
+  - `canGenerate` now also requires at least one READY/DEDUPLICATED
+    doc. The Generate button is disabled with a tooltip explaining
+    why (no docs → "Attach a document…"; processing → "Waiting for
+    document to finish processing").
+  - Inline doc-readiness rows in the panel footer:
+    - Empty: "Attach a syllabus or textbook to this chat first."
+    - Processing: pulsing dot + "Document still processing — Generate
+      will unlock when ready (N processing)."
+  - Error toast parser now surfaces `detail` verbatim instead of the
+    old generic "Generation failed (HTTP NNN)". The user sees the
+    specific message the backend emitted.
+- WorkspaceUI passes `attachedDocs={docs.map(...)}` into the panel.
+
+**Could regress.** The Generate button no longer activates while any
+doc is processing — even if the user explicitly wants to ignore the
+processing one. Acceptable: backend would refuse anyway, and the
+processing chip turns green within a minute thanks to the P6 polling
+effect.
+
+**Proof (manual):**
+- [ ] Open exam workspace → upload PDF → chip shows pulsing dot →
+      Generate button shows "Waiting for document to finish processing"
+      tooltip → chip turns green → Generate button enables → click →
+      paper generates with REAL questions. ✅ PENDING
+
+### Markdown hydration errors (3 screenshots) — **FIXED**
+
+**Root causes.**
+- React-Markdown v9 dropped the `inline` prop. Our `CodeBlock` checked
+  `if (inline)` and otherwise rendered `<div><pre>...</pre></div>`.
+  For inline code the falsy branch ran → `<p>` containing `<div>` /
+  `<pre>` → invalid HTML → Next.js hydration error.
+- The default `p` wrapper around every paragraph wrapped code blocks
+  and our `<TableWithExport>` div inside `<p>`, also invalid.
+
+**Fix (`WorkspaceUI.tsx`).**
+- `CodeBlock` detects inline vs block when `inline` is undefined:
+  inline = no `language-*` className AND no newline in the content.
+- New `SafeParagraph` component: walks `React.Children.toArray`,
+  detects any block-level child (`div / pre / ul / ol / table /
+  blockquote / h1-h6` or named components `CodeBlock / TableWithExport`),
+  and renders the wrapper as `<div>` instead of `<p>` when so.
+- `buildMarkdownComponents` now registers `p: SafeParagraph` and
+  `pre: ({children}) => <>{children}</>` so the default `<pre>` is
+  unwrapped (CodeBlock owns the layout).
+
+### "Failed to delete chat" — **FIXED**
+
+**Root cause.** `delete_chat_session`:
+- Called `uuid.UUID(session_id)` without try/except → a malformed id
+  raised `ValueError` and bubbled as a 500.
+- No owner_id check (workspace_id alone, on the slug-derived UUID5,
+  is weak isolation).
+- Docs attached to the chat (via `Document.chat_session_id`) were
+  orphaned with a dangling FK-like pointer to the deleted session.
+- The frontend collapsed every non-OK response into the generic
+  "Failed to delete chat" toast — no real reason visible.
+
+**Fix.**
+- Backend (`chats.py`):
+  - UUID parse wrapped in try/except → 400 on malformed id.
+  - Added `ChatSession.owner_id == owner_id` to the lookup.
+  - Before delete: `UPDATE documents SET chat_session_id=NULL WHERE
+    chat_session_id=session_id AND owner_id=...`. Non-fatal if it
+    fails (logged + proceed).
+  - Wrapped delete in try/except with rollback + explicit 500 detail.
+- Frontend (`lib/api.ts`): `deleteChat` parses the body, throws the
+  backend's `detail` verbatim so the toast shows the real reason.
+
+### D — Regression sweep — **STATUS**
+
+| Item | Status |
+|---|---|
+| Per-chat doc isolation (P1) | ✅ working — confirmed via filter trace |
+| GET /documents/{id} returns Pydantic schema | ✅ — `response_model=DocumentResponse` |
+| `ssl` DSN gone (psycopg2-safe) | ✅ — `settings.sync_database_url` normalizes |
+| Gemini finish_reason guard | ✅ — `_safe_extract_text` from P3 |
+| Quiz Me clickable | ✅ — `handleWelcomeQuickAction` prefills the input |
+| Student Send not stuck | ✅ — P6 widened predicate to `docs.some(processing)` |
+| Dark-mode text readable | ✅ — BUG 6 fix from earlier session |
+| OTP forgot-password | ✅ — P9 |
+
+
 
 
 

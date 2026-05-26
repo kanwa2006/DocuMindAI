@@ -176,25 +176,42 @@ async def _retrieve_grounding_for_paper(
     request: ExamGenerationRequest,
     owner_id: uuid.UUID,
     chat_session_id: Optional[uuid.UUID],
-) -> tuple[List[Dict[str, Any]], List[uuid.UUID]]:
+) -> tuple[List[Dict[str, Any]], List[uuid.UUID], str]:
     """PART 1 — Pull chunks from the chat's attached docs that are relevant
-    to the subject + section topics. Returns (evidence_chunks, doc_ids).
-    Empty doc_ids → no docs attached; caller should refuse gracefully.
+    to the subject + section topics. Returns
+        (evidence_chunks, doc_ids, doc_status_hint).
+
+    `doc_status_hint` is one of:
+      • ""             — found READY docs, retrieval proceeded.
+      • "no_session"   — caller didn't provide a chat_session_id.
+      • "no_docs"      — chat has zero attached docs (uploaded or otherwise).
+      • "processing"   — chat HAS docs but none are READY yet.
+      • "no_chunks"    — chat has READY docs but they didn't index any chunks.
+    Caller uses the hint to pick the user-facing message.
     """
     if not chat_session_id:
-        return [], []
+        return [], [], "no_session"
 
-    # 1. Find the READY docs attached to this chat.
-    doc_stmt = (
-        select(Document.id)
+    # 1. ALL docs in this chat (any status) — used to tell processing apart
+    #    from missing.
+    all_stmt = (
+        select(Document.id, Document.status)
         .where(Document.chat_session_id == chat_session_id)
         .where(Document.owner_id == owner_id)
-        .where(Document.status == DocumentStatus.READY)
     )
-    doc_res = await db.execute(doc_stmt)
-    doc_ids: List[uuid.UUID] = [row[0] for row in doc_res.all()]
-    if not doc_ids:
-        return [], []
+    all_res = await db.execute(all_stmt)
+    all_rows = all_res.all()
+    if not all_rows:
+        return [], [], "no_docs"
+
+    ready_ids: List[uuid.UUID] = [
+        row[0] for row in all_rows
+        if (getattr(row[1], "value", row[1]) == DocumentStatus.READY.value)
+    ]
+    if not ready_ids:
+        # We HAVE docs, just none are READY yet — different user-facing message.
+        return [], [], "processing"
+    doc_ids = ready_ids
 
     # 2. Run a retrieval query keyed by the subject — fetch a deeper pool
     #    than usual (3× the chunks the section descriptions imply) so we
@@ -214,7 +231,9 @@ async def _retrieve_grounding_for_paper(
         chunks,
         key=lambda c: (str(c.get("filename") or ""), int(c.get("page_number") or 0), int(c.get("chunk_index") or 0)),
     )
-    return chunks, doc_ids
+    if not chunks:
+        return [], doc_ids, "no_chunks"
+    return chunks, doc_ids, ""
 
 
 @router.post("/generate/paper")
@@ -255,13 +274,25 @@ async def generate_paper(
     workspace_uuid = resolve_workspace_id(current_user.get("workspace_id"))
 
     # PART 1: retrieve evidence chunks from the chat's attached docs.
-    evidence, doc_ids = await _retrieve_grounding_for_paper(
+    evidence, doc_ids, status_hint = await _retrieve_grounding_for_paper(
         db=db,
         request=request,
         owner_id=owner_uuid,
         chat_session_id=chat_uuid,
     )
-    if not doc_ids:
+    # B-fix — give the user a precise, actionable message based on which
+    # condition actually failed. Returning the same generic "no documents
+    # attached" for every empty case (as before) misled users who could see
+    # a chip in the rail but were really hitting "still processing".
+    if status_hint == "no_session":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Open a chat first, then attach a syllabus or textbook before "
+                "generating a paper."
+            ),
+        )
+    if status_hint == "no_docs":
         raise HTTPException(
             status_code=400,
             detail=(
@@ -270,7 +301,16 @@ async def generate_paper(
                 "questions can be grounded in real source material."
             ),
         )
-    if not evidence:
+    if status_hint == "processing":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The attached document is still being processed. Wait for the "
+                "chip to turn green (Ready) and try again — usually takes "
+                "10–60 seconds depending on document size."
+            ),
+        )
+    if status_hint == "no_chunks":
         raise HTTPException(
             status_code=400,
             detail=(

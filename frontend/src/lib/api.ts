@@ -772,7 +772,14 @@ export const updateChat = async (id: string, updates: Partial<ChatSession>): Pro
 
 export const deleteChat = async (id: string): Promise<void> => {
   const res = await apiFetch(`/chats/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error("Failed to delete chat");
+  if (!res.ok) {
+    // Surface the real backend reason (404 / FK constraint / CSRF) instead
+    // of the generic "Failed to delete chat" the user saw in the console.
+    const body = await res.json().catch(() => ({} as any));
+    const detail = body?.detail;
+    if (typeof detail === "string") throw new Error(detail);
+    throw new Error(`Failed to delete chat (HTTP ${res.status})`);
+  }
 };
 
 export const getChatMessages = async (sessionId: string, limit: number = 50, offset: number = 0): Promise<ChatMessage[]> => {

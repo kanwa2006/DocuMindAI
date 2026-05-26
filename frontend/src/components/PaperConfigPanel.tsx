@@ -44,6 +44,10 @@ interface Props {
   // uploaded documents. Without it, the backend refuses with a clear
   // "no documents attached" message.
   chatSessionId?: string;
+  // B-fix — tell the panel which attached docs are READY and which are
+  // still processing so the Generate button can wait, instead of letting
+  // the user click and hit a 409.
+  attachedDocs?: Array<{ id: string; filename: string; status: string }>;
 }
 
 const BOARDS = ["CBSE", "ICSE", "State Board", "University", "JEE/NEET Style"];
@@ -98,7 +102,13 @@ function BloomSlider({ value, onChange }: {
   );
 }
 
-export default function PaperConfigPanel({ onClose, onGenerated, chatSessionId }: Props) {
+export default function PaperConfigPanel({ onClose, onGenerated, chatSessionId, attachedDocs = [] }: Props) {
+  // B-fix — surface a clear "docs still processing" state in the panel.
+  const READY_LIKE = new Set(["READY", "DEDUPLICATED"]);
+  const readyDocCount = attachedDocs.filter((d) => READY_LIKE.has(d.status)).length;
+  const processingDocs = attachedDocs.filter((d) => !READY_LIKE.has(d.status) && d.status !== "FAILED");
+  const docsNotReady = attachedDocs.length === 0 || readyDocCount === 0;
+  const someStillProcessing = processingDocs.length > 0;
   // B5: sensible defaults — Total 100, Duration 180, Difficulty Mixed are already defaults.
   const [subject, setSubject] = useState("");
   const [board, setBoard] = useState("CBSE");
@@ -132,7 +142,15 @@ export default function PaperConfigPanel({ onClose, onGenerated, chatSessionId }
   const bloomTotal = bloom[0] + bloom[1] + bloom[2];
   const marksOk = Math.abs(sectionTotal - totalMarks) < 0.01;
   const bloomOk = bloomTotal === 100;
-  const canGenerate = subject.trim().length > 0 && marksOk && bloomOk && sections.length > 0;
+  // B-fix — generation is blocked until at least one attached doc is READY.
+  // No docs at all → block + nudge to upload; some processing → block + hint
+  // to wait; all good → enable.
+  const canGenerate =
+    subject.trim().length > 0
+    && marksOk
+    && bloomOk
+    && sections.length > 0
+    && !docsNotReady;
   const marksDelta = totalMarks - sectionTotal;
 
   const addSection = () => {
@@ -286,8 +304,20 @@ export default function PaperConfigPanel({ onClose, onGenerated, chatSessionId }
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        const msgs: string[] = err?.detail?.validation_errors || [err?.detail || `Generation failed (HTTP ${res.status})`];
-        toast.error(msgs[0], { id: toastId });
+        // B-fix — surface the backend's specific reason verbatim instead of
+        // collapsing every 400/409 into "Generation failed (HTTP NNN)".
+        // The backend now returns precise messages for no_docs / processing
+        // / no_chunks / no_session.
+        const detail = err?.detail;
+        let msg: string;
+        if (typeof detail === "string") {
+          msg = detail;
+        } else if (detail?.validation_errors?.length) {
+          msg = detail.validation_errors[0];
+        } else {
+          msg = `Generation failed (HTTP ${res.status})`;
+        }
+        toast.error(msg, { id: toastId, duration: 6000 });
         return;
       }
       const data = await res.json();
@@ -581,8 +611,30 @@ export default function PaperConfigPanel({ onClose, onGenerated, chatSessionId }
         {!bloomOk && (
           <div style={{ fontSize: "12px", color: "var(--error-text, #dc2626)", marginBottom: "8px" }}>Bloom's distribution must sum to 100.</div>
         )}
+        {/* B-fix — explicit doc readiness state. Tells the user EXACTLY why
+            Generate is disabled when docs aren't ready, instead of the old
+            silent disable that pushed users to click and hit a 400/409. */}
+        {attachedDocs.length === 0 && (
+          <div style={{ fontSize: "12px", color: "var(--warning-text, #92400e)", marginBottom: "8px" }}>
+            Attach a syllabus or textbook (PDF / DOCX / PPTX) to this chat first.
+            The paper's questions are generated from your document's content.
+          </div>
+        )}
+        {someStillProcessing && (
+          <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <span aria-hidden="true" style={{ width: "8px", height: "8px", borderRadius: "50%", background: "var(--warning, #f59e0b)", animation: "pulse 1.4s ease-in-out infinite", display: "inline-block" }} />
+            Document still processing — Generate will unlock when ready ({processingDocs.length} processing).
+          </div>
+        )}
         <button onClick={handleGenerate} disabled={!canGenerate || generating}
-          className="btn btn-primary" style={{ width: "100%", height: "40px", fontSize: "14px", fontWeight: 600 }}>
+          className="btn btn-primary" style={{ width: "100%", height: "40px", fontSize: "14px", fontWeight: 600 }}
+          title={
+            docsNotReady
+              ? (attachedDocs.length === 0
+                  ? "Attach a document to this chat first"
+                  : "Waiting for document to finish processing")
+              : (canGenerate ? "Generate the paper" : undefined)
+          }>
           {generating ? "Generating…" : "Generate Paper →"}
         </button>
       </div>

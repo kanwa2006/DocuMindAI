@@ -178,18 +178,61 @@ async def delete_chat_session(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
+    # Console-err fix — return clean 400 instead of an uncaught ValueError
+    # when the path arg isn't a UUID (was leaking a 500 to the client which
+    # the frontend rendered as the generic "Failed to delete chat").
+    try:
+        session_uuid = uuid.UUID(session_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid chat id.")
+
+    owner_id = uuid.UUID(current_user["id"])
     stmt = select(ChatSession).where(
-        ChatSession.id == uuid.UUID(session_id),
-        ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"])
+        ChatSession.id == session_uuid,
+        ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"]),
+        ChatSession.owner_id == owner_id,  # belt-and-suspenders ownership check
     )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
-    
+
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-        
-    await db.delete(session)
-    await db.commit()
+        raise HTTPException(status_code=404, detail="Chat not found.")
+
+    # P1 follow-up — when a chat is deleted, the docs attached to it would
+    # otherwise be orphaned (chat_session_id still points at the now-deleted
+    # row). Set them to NULL so they don't reappear as ghost entries in a
+    # future chat that happens to land on a recycled id. Documents are NOT
+    # cascade-deleted because the user may have other uses (clip imports,
+    # cross-chat reuse) — orphaning to NULL is the safe middle ground.
+    try:
+        from sqlalchemy import update as _sa_update
+        from app.models.document import Document as _Document
+        await db.execute(
+            _sa_update(_Document)
+            .where(_Document.chat_session_id == session_uuid)
+            .where(_Document.owner_id == owner_id)
+            .values(chat_session_id=None)
+        )
+    except Exception as exc:
+        # Non-fatal — proceed with chat deletion.
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "[chats/delete] could not orphan docs for %s: %s", session_id, exc
+        )
+
+    try:
+        await db.delete(session)
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        import logging as _logging
+        _logging.getLogger(__name__).error(
+            "[chats/delete] failed for %s: %s", session_id, exc
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Could not delete chat — please try again or contact support.",
+        )
     return {"status": "deleted"}
 
 @router.get("/{session_id}/messages", response_model=List[ChatMessageResponse])
