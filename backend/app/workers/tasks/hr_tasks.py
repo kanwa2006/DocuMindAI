@@ -5,7 +5,8 @@ from uuid import UUID
 from app.db.session import AsyncSessionLocal
 from app.workers.celery_app import celery_app
 from app.models.hr import JobRole, CandidateProfile, JobMatch
-from app.models.document import Document, DocumentChunk
+from app.models.document import Document
+from app.models.document_chunk import DocumentChunk
 from app.schemas.hr import CandidateExtractionSchema, MatchAnalysisSchema
 from app.services.llm_service import llm_service
 from sqlalchemy.future import select
@@ -172,4 +173,4 @@ def flag_stale_reviews():
     """
     logger.info("[Workflow Automation] Running daily sweep for stale candidate reviews...")
     # Full implementation would query JobMatch for updated_at < now - 7 days
-    # and dispatch email/app notifications to the assigned owner_id.
+    # and dispatch email/app not

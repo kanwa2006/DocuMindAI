@@ -127,10 +127,19 @@ async def ai_tutor_chat(
     """
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
-    # Simple semantic context retrieval
-    query_embedding = await llm_service.get_embedding(query)
-    stmt = select(StudyNote).where(StudyNote.workspace_id == workspace_id).order_by(StudyNote.embedding.l2_distance(query_embedding)).limit(3)
-    notes = (await db.execute(stmt)).scalars().all()
+    # Semantic context retrieval with recency fallback
+    try:
+        query_embedding = await llm_service.get_embedding(query)
+        stmt = select(StudyNote).where(
+            StudyNote.workspace_id == workspace_id
+        ).order_by(StudyNote.embedding.l2_distance(query_embedding)).limit(3)
+        notes = (await db.execute(stmt)).scalars().all()
+    except Exception as exc:
+        logger.warning("[Study Tutor] Vector search failed, falling back to recency: %s", exc)
+        stmt = select(StudyNote).where(
+            StudyNote.workspace_id == workspace_id
+        ).order_by(StudyNote.created_at.desc()).limit(3)
+        notes = (await db.execute(stmt)).scalars().all()
     context = "\n".join([f"{n.title}: {n.content}" for n in notes])
     
     system_prompt = (
@@ -354,15 +363,4 @@ async def review_flashcard(
 
     card.interval_days = new_interval
     card.easiness_factor = new_ease
-    card.repetition_count = (card.repetition_count or 0) + 1
-    card.next_review_date = datetime.combine(next_review, datetime.min.time()).replace(tzinfo=timezone.utc)
-
-    await db.commit()
-    await db.refresh(card)
-
-    return {
-        "next_review": next_review.isoformat(),
-        "interval_days": new_interval,
-        "ease_factor": new_ease,
-        "repetition_count": card.repetition_count,
-    }
+    card.repetition_cou

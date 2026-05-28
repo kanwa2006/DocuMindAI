@@ -396,17 +396,40 @@ async def ai_copilot_chat(
     """
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
-    query_embedding = await llm_service.get_embedding(query)
-    stmt = select(ResearchFinding).where(ResearchFinding.workspace_id == workspace_id).order_by(ResearchFinding.embedding.l2_distance(query_embedding)).limit(3)
-    findings = (await db.execute(stmt)).scalars().all()
+    try:
+        query_embedding = await llm_service.get_embedding(query)
+        stmt = select(ResearchFinding).where(
+            ResearchFinding.workspace_id == workspace_id
+        ).order_by(ResearchFinding.embedding.l2_distance(query_embedding)).limit(3)
+        findings = (await db.execute(stmt)).scalars().all()
+    except Exception as exc:
+        logger.warning("[Research Copilot] Vector search failed, falling back to recency: %s", exc)
+        stmt = select(ResearchFinding).where(
+            ResearchFinding.workspace_id == workspace_id
+        ).order_by(ResearchFinding.created_at.desc()).limit(3)
+        findings = (await db.execute(stmt)).scalars().all()
     context = "\n".join([f"Finding: {f.statement}\nEvidence: {f.evidence_quote}" for f in findings])
-    
+
+    system_prompt = (
+        "You are an expert research copilot. Use the provided research findings as your primary "
+        "source of truth. Synthesise evidence clearly, cite findings where relevant, and never "
+        "invent citations. If the findings don't cover the topic, say so honestly and offer "
+        "what general scientific knowledge you can."
+    )
+    user_prompt = (
+        f"Relevant research findings:\n{context}\n\n"
+        f"Researcher question: {query}\n\n"
+        "Please provide a concise, evidence-based response."
+    )
+
     async def chat_stream_generator():
-        response = f"Based on the literature:\n\n{context}\n\nThis suggests that further studies are required..."
-        words = response.split(" ")
-        for word in words:
-            await asyncio.sleep(0.1)
-            yield f"data: {word} \n\n"
+        try:
+            async for token in llm_service.provider.generate_stream(system_prompt, user_prompt):
+                if token:
+                    yield f"data: {token}\n\n"
+        except Exception as e:
+            logger.error(f"[Research Copilot] LLM stream error: {e}")
+            yield f"data: [ERROR] Unable to generate response.\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(chat_stream_generator(), media_type="text/event-stream")
@@ -453,22 +476,3 @@ async def list_projects(
     result = await db.execute(select(ResearchProject).where(ResearchProject.workspace_id == workspace_id))
     return [{"id": p.id, "title": p.title, "description": p.description} for p in result.scalars().all()]
 
-@router.get("/projects/{project_id}/papers")
-async def list_papers(
-    project_id: uuid.UUID,
-    current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    result = await db.execute(select(ResearchPaper).where(ResearchPaper.project_id == project_id, ResearchPaper.workspace_id == workspace_id))
-    return [{"id": p.id, "title": p.title, "abstract": p.abstract} for p in result.scalars().all()]
-
-@router.get("/papers/{paper_id}/findings")
-async def list_findings(
-    paper_id: uuid.UUID,
-    current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    result = await db.execute(select(ResearchFinding).where(ResearchFinding.paper_id == paper_id, ResearchFinding.workspace_id == workspace_id))
-    return [{"id": f.id, "statement": f.statement, "evidence": f.evidence_quote, "methodology": f.methodology} for f in result.scalars().all()]
