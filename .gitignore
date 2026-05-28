@@ -1,62 +1,44 @@
-# ── Python ────────────────────────────────────────────────────────────────────
+# Claude Code internals
+.claude/
+.claude/**
+
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 .Python
-venv/
-env/
-.venv/
 *.egg-info/
 dist/
 build/
-.mypy_cache/
-.pytest_cache/
-
-# ── Environment / Secrets ─────────────────────────────────────────────────────
+*.egg
+.venv/
+venv/
 .env
-*.env.local
-*.env.production
 
-# ── Database (contains real user data — never commit) ─────────────────────────
-*.db
-*.sqlite
-*.sqlite3
-
-# ── FAISS indexes (regenerated on first use) ──────────────────────────────────
-storage/*/index/
-storage/*/index.faiss
-storage/*/index.pkl
-
-# ── Uploaded files (can be large, private) ────────────────────────────────────
-files/
-storage/*/
-
-# ── Node / Frontend ───────────────────────────────────────────────────────────
+# Node
 node_modules/
-frontend/dist/
-frontend/.vite/
+.next/
+.nuxt/
+dist/
+.cache/
+*.tsbuildinfo
 
-# ── OS files ──────────────────────────────────────────────────────────────────
+# Local storage / uploads
+storage/
+uploads/
+*.faiss
+
+# OS
 .DS_Store
 Thumbs.db
-desktop.ini
 
-# ── IDE ───────────────────────────────────────────────────────────────────────
-.vscode/
+# IDE
 .idea/
+.vscode/
 *.swp
-*.swo
 
-# ── Docker ────────────────────────────────────────────────────────────────────
-.docker/
+# Dev checkpoints
+checkpoint_*.md
 
-# ── Misc project scripts (not needed in production) ───────────────────────────
-fix_and_run.py
-fix_chain.py
-fix_routes.py
-check.py
-test_*.py
-generate_endterm_report.py
-migrate.py
-toc_analysis.json
+.github/

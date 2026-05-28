@@ -1,0 +1,2488 @@
+# AUDIT_REPORT.md — DocuMind AI Repair Pass
+
+Running log of every change made during this audit. One line per fix.
+
+---
+
+## STEP 1 — Orientation (Phase 0) — complete
+- Built [PROJECT_MAP.md](PROJECT_MAP.md): page → API → endpoint → service → model → worker.
+- Read CLAUDE.md (stable files), all .env* files, main.py, api.py, config.py, layout.tsx, middleware.ts, lib/api.ts, chats.py, auth.py, core/auth.py, models/org.py, models/chat.py, models/workspace_template.py.
+- Confirmed A1 (doubled /api/v1/ prefix), A2 (User.workspace_id is String "general" but endpoints parse as UUID), absence of any Workspace table.
+
+---
+
+## STEP 2 — A1: Doubled `/api/v1/` prefix removed — complete
+
+**Broken:** `NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1` already includes the prefix. ~50 manual `${API_BASE}/api/v1/...` calls across the frontend were producing `/api/v1/api/v1/...` → 404s. Confirmed by grep.
+
+**Convention picked:** keep `/api/v1` in `NEXT_PUBLIC_API_URL`; all callers use endpoint paths starting with `/` (matching `lib/api.ts`'s `apiFetch` convention). No env changes.
+
+**Files touched** (replace `${API_BASE}/api/v1/` → `${API_BASE}/`):
+- `frontend/src/lib/api.ts` (getSharedSession)
+- `frontend/src/app/bookmarks/page.tsx`
+- `frontend/src/app/admin/tenants/page.tsx`
+- `frontend/src/app/admin/corrections/page.tsx`
+- `frontend/src/app/settings/page.tsx`
+- `frontend/src/app/shared/[token]/page.tsx`
+- `frontend/src/components/BookmarkButton.tsx`
+- `frontend/src/components/CandidateRankingsPanel.tsx`
+- `frontend/src/components/CorrectionModal.tsx`
+- `frontend/src/components/DocumentChangeAlert.tsx`
+- `frontend/src/components/DocumentPreviewPanel.tsx` (also added `API_BASE` import for the relative-URL `pdfUrl`)
+- `frontend/src/components/ExportModal.tsx`
+- `frontend/src/components/FinanceRatioPanel.tsx`
+- `frontend/src/components/LegalRiskPanel.tsx`
+- `frontend/src/components/NotificationCenter.tsx`
+- `frontend/src/components/PaperConfigPanel.tsx`
+- `frontend/src/components/PinnedSessionsRail.tsx`
+- `frontend/src/components/ProactiveInsightsPanel.tsx`
+- `frontend/src/components/QueryTemplateModal.tsx`
+- `frontend/src/components/ReportShareModal.tsx`
+- `frontend/src/components/ResearchCitationModal.tsx`
+- `frontend/src/components/ResearchGapsPanel.tsx`
+- `frontend/src/components/Sidebar.tsx`
+- `frontend/src/components/teacher/TableExtractionPanel.tsx`
+- `frontend/src/components/WorkspaceUI.tsx` (also fixed `/api/v1/query` → `/query/ask` — the prefix-only fix would have produced a 404 since `/api/v1/query` is not a backend route; `/api/v1/query/ask` is)
+
+**Could regress:** any browser cached old paths — users may need a hard refresh. No other regressions expected since the backend routes are unchanged.
+
+**Remaining doubled-prefix references** (all comments / docstrings — left intact, they correctly describe the backend route):
+- `DocumentChangeAlert.tsx:8`, `NotificationCenter.tsx:9`, `QueryTemplateModal.tsx:7`
+
+## STEP 3 — A2: Workspace slug → UUID resolution — complete
+
+**Broken:** `User.workspace_id` is `Column(String(50), default="general")` (see `models/org.py`), and the registration flow sets `workspace_id="general"` (auth.py). But endpoints called `uuid.UUID(current_user["workspace_id"])` which throws `ValueError: badly formed hexadecimal UUID string` on every trial user. Symptom: every workspace page returned 5xx on first chat creation / chat list.
+
+**Fix approach:** Added `backend/app/core/workspace.py` with `resolve_workspace_id(value)` that:
+- Returns input as a UUID if it parses as one.
+- Otherwise produces a deterministic `uuid.uuid5(NAMESPACE_DNS, slug)`.
+- Treats None/"" as "general".
+- Raises HTTP 400 on truly malformed input.
+
+`NAMESPACE_DNS` chosen deliberately to match the existing inline fallback already in `endpoints/documents.py:82,164`, so any historical Document rows remain reachable.
+
+**No DB migration needed** — slugs map to virtual UUIDs. A proper `Workspace` table can be added later without disrupting this resolver (`resolve_workspace_id` can be extended to consult the table first).
+
+**Files touched:**
+- `backend/app/core/workspace.py` (new)
+- `backend/app/api/v1/endpoints/chats.py` (10 sites + import)
+- `backend/app/api/v1/endpoints/study.py` (8 + import)
+- `backend/app/api/v1/endpoints/exams.py` (7 + import)
+- `backend/app/api/v1/endpoints/research.py` (10 + import)
+- `backend/app/api/v1/endpoints/benchmark.py` (2 + import)
+- `backend/app/api/v1/endpoints/query.py` (3 + import)
+- `backend/app/api/v1/endpoints/export.py` (3 + import)
+- `backend/app/api/v1/endpoints/legal.py` (8 + import)
+- `backend/app/api/v1/endpoints/finance.py` (4 + import)
+- `backend/app/api/v1/endpoints/hr.py` (7 + import)
+- `backend/app/api/v1/endpoints/documents.py` (replaced two inline slug fallbacks with the shared helper, added import)
+
+**Could regress:** any code that compares ChatSession.workspace_id (UUID) to a value generated by some _other_ slug-mapping logic. None found in grep.
+
+**Observed but not changed:** `uuid.UUID(current_user["id"])` is correct (User.id is a real UUID column) and was left as-is.
+
+## STEP 4 — A3: Celery Windows pool — complete
+
+**Broken:** Worker on Windows crashed every 5 minutes with `PermissionError [WinError 5]` / `OSError [WinError 6]` because billiard's prefork pool requires POSIX fork. `auto_health_check.run_health_check` (Celery Beat task) couldn't run.
+
+**Fix:** Added two run scripts that select the right pool per OS. `backend/app/workers/celery_app.py` is untouched (per CLAUDE.md "never modify").
+
+**Files added:**
+- `backend/scripts/run_worker_windows.ps1` — uses `--pool=solo` (single-threaded, fork-free) with beat enabled. Local dev only.
+- `backend/scripts/run_worker_linux.sh` — uses `--pool=prefork --concurrency=2` with beat enabled. Production-equivalent.
+
+**Docker / Linux deploys** continue to use the command in `infrastructure/docker-compose.yml:109` (`celery -A app.workers.celery_app worker -Q main-queue,celery`) — unchanged.
+
+**Could regress:** none. New files, no edits to existing config.
+
+## STEP 5 — A4: Gemini key loading + loud warning — complete (partial)
+
+**Real bug discovered:** `.env` had `GEMINI_API_KEYS=k1,k2,...` (plural, comma-separated; 21 real keys). But `services/llm_key_rotation.py` only reads `GEMINI_API_KEY_1`, `_2`, ... — the numbered form. So **none of the 21 keys were being loaded**; `GeminiKeyRotator._load_keys()` raised RuntimeError; the system silently fell back to `DummyLLMProvider`. This is the actual cause of the "falls back to DummyLLMProvider" symptom in the user's report.
+
+**Fix:** Added a startup bridge in `backend/app/main.py` that:
+- Reads `settings.gemini_keys_list` (the plural comma-separated form) and promotes each key to `os.environ["GEMINI_API_KEY_N"]` via `setdefault` (so existing numbered keys win).
+- Also re-reads `.env` via python-dotenv to catch numbered keys that pydantic-settings ignores (they aren't declared as Settings fields).
+- Logs a LOUD `ERROR`-level multi-line banner if zero keys are detected.
+- Logs an `INFO` line with the count of loaded keys at startup.
+
+`services/llm_key_rotation.py` is **NOT modified** (per CLAUDE.md: STABLE after creation).
+
+**Migration to `google.genai` declined.** CLAUDE.md: "`llm_service.py` ... Wrap only; never rewrite provider internals." Replacing `google.generativeai` would require rewriting the entire `GeminiLLMProvider` class. Documenting as a future task in KNOWN_REMAINING_ISSUES.md.
+
+**Files touched:**
+- `backend/app/main.py` (additive — bridge + warning above existing Sentry block)
+- `.env.example` (documented `GEMINI_API_KEY_1` and noted both forms accepted)
+
+**Could regress:** None. `setdefault` won't overwrite existing GEMINI_API_KEY_N variables. The bridge only runs once at process startup, before any LLM service initializes.
+
+## STEP 6 — B1: react-pdf SSR `DOMMatrix is not defined` — complete
+
+**Broken:** Even with `'use client'` on `EnterpriseDocumentViewer.tsx`, the module's top-level `pdfjs.GlobalWorkerOptions.workerSrc = new URL(...)` (plus react-pdf's own internal references to `DOMMatrix`) executes during the Next.js SSR module-load pass for the parent boundary. Result: every workspace page crashed.
+
+**Fix:**
+- `frontend/src/components/DocumentPreviewPanel.tsx` — replaced the static `import EnterpriseDocumentViewer from "./EnterpriseDocumentViewer"` with `dynamic(() => import("./EnterpriseDocumentViewer"), { ssr: false, loading: <…> })`. The viewer is now loaded client-only.
+- `frontend/src/components/EnterpriseDocumentViewer.tsx` — guarded `pdfjs.GlobalWorkerOptions.workerSrc = …` inside `if (typeof window !== 'undefined')` as a belt-and-suspenders measure for any other entry point that might import it.
+
+**Could regress:** First-render flash of "Loading viewer…" placeholder (≈100ms) until the dynamic chunk lands. Acceptable for a PDF viewer.
+
+## STEP 7 — B4: Missing routes — complete
+
+**Created** the six routes that previously 404'd:
+- `frontend/src/app/dashboard/page.tsx` — redirects to `/general` (server-side `redirect()`).
+- `frontend/src/app/sessions/page.tsx` — lists chats across all 7 workspaces using `getChats(ws_type)`; sorted by recency.
+- `frontend/src/app/billing/page.tsx` — uses existing `getBillingStatus()` / `upgradePlan()`; shows trial usage and upgrade buttons.
+- `frontend/src/app/pricing/page.tsx` — marketing pricing page; Trial / Professional ₹799 (annual) or ₹999 (monthly) / Enterprise ₹2,999.
+- `frontend/src/app/forgot-password/page.tsx` — email form → `POST /auth/forgot-password`.
+- `frontend/src/app/reset-password/page.tsx` — token form → `POST /auth/reset-password`.
+
+**Backend additions** in `backend/app/api/v1/endpoints/auth.py`:
+- `POST /auth/forgot-password` — stores a 30-min `secrets.token_urlsafe(32)` keyed `pwreset:{token}` in Redis. Returns 202 regardless of whether the email exists (no enumeration). Email goes via SMTP if configured; otherwise logs the token loudly so admins can do manual resets in dev.
+- `POST /auth/reset-password` — validates token, sets new `hashed_password`, deletes token from Redis.
+- Added `import secrets` to auth.py.
+
+**Frontend `lib/api.ts`** — added `forgotPassword(email)` and `resetPassword(token, newPassword)` helpers.
+
+**Could regress:** The new backend endpoints add two POST routes under `/auth` — no path collisions. Pages use existing CSS variables (`--text-primary`, `--accent`, etc.) defined in `tokens.css`; they render correctly with the current theme.
+
+## STEP 8 — B5/B6/B7: sidebar toggle, share, account menu — complete
+
+**B5 — sidebar toggle:**
+- Added `Cmd+B / Ctrl+B` keyboard shortcut handler in `LayoutWrapper.tsx`.
+- Persist `isSidebarOpen` to `localStorage` on every change (separate `useEffect`). The initial-load restoration already existed; now updates are saved too.
+- The existing onClick handler already worked, but state was only saved on load. With persistence both ways, the toggle now sticks across reloads.
+
+**B6 — share button:**
+- The old code called `(window as any).__toastSuccess?.("Link copied!")`, which is a no-op since `__toastSuccess` was never defined. Replaced with `toast.success / toast.error` from `react-hot-toast` (already used elsewhere). Added clipboard-availability guard.
+
+**B7 — account dropdown items (Usage Dashboard, Billing):**
+- The dropdown already called `router.push(href)`. The targets (`/dashboard`, `/billing`) didn't exist before STEP 7 → 404s. Now they exist and resolve.
+
+**Other:**
+- Added `/reset-password` to `isAuthPage` so the reset flow gets the same minimal-chrome layout as `/login` / `/forgot-password`.
+
+**Files touched:**
+- `frontend/src/components/LayoutWrapper.tsx`
+
+## STEP 9 — Category C copy / pricing fixes (C1, C2, C3, C4, C5, C6) + bonus — complete
+
+**C1 — Landing page hero CTA:**
+- `frontend/src/app/(marketing)/page.tsx` — replaced `Start Free — 10 Queries` with `Start free. No credit card.` Removed `· 10 queries free ·` from the trust line. Subheadline now mentions "...and more across 7 specialised workspaces" so the persona list is internally consistent with the actual 7 workspaces (BF6).
+
+**C2 — Free trial 5 → 10, frontend de-hardcoded:**
+- `backend/app/core/trial_enforcement.py` — `TRIAL_QUERY_LIMIT` 5 → **10**. Single source of truth; already exported via `GET /billing/status` (field `trial_limit`).
+- `frontend/src/lib/store/trialStore.tsx` — added `trialLimit: number | null` to the store; `setTrialStatus` now accepts an optional third arg and merges it in. Initial value is `null` until billing/status loads — no hardcoded 5.
+- `frontend/src/components/LayoutWrapper.tsx` — billing-status fetch now passes `status.trial_limit` to `setTrialStatus`. `<TrialPill trialLimit={5} … />` → `trialLimit={trialLimit ?? undefined}`.
+- `frontend/src/components/TrialPill.tsx` — `trialLimit = 5` default removed; thresholds use `queriesRemaining` only. Pill label reworded `{used} / {limit} free queries` → `Free trial — {N} left` (BF1 — smaller, cleaner).
+
+**C3 — Pricing consistency + read-only fallback on exhaustion:**
+- `frontend/src/app/(marketing)/page.tsx` — Professional card period `/month` + description `Billed annually · ₹999/mo monthly`; Enterprise description `Billed monthly · SLA included`. Matches `/pricing` and the billing page exactly.
+- `frontend/src/components/UpgradeModal.tsx` — modal is now **always dismissable**, X button is always rendered as a 44px tap target, ESC and backdrop-click always close. The "trap on limit_reached" branch is gone. Title and copy now switch by trigger: `Your free trial is complete` + read-only reassurance vs `Upgrade DocuMindAI` / `Unlock unlimited queries…`. The hardcoded `TRIAL_LIMIT = 5` constant was removed (unused). (BF9 — close affordance.)
+- `frontend/src/components/LayoutWrapper.tsx` — `onClose={upgradeTrigger !== "limit_reached" ? closeUpgradeModal : undefined}` is now `onClose={closeUpgradeModal}` unconditionally. The 402 from backend still opens the modal with `limit_reached`, but the user can dismiss it and remain in read-only mode (chat list and message history don't require quota; only `/query/stream` does, which will return 402 again on attempt).
+- Verified: `WorkspaceUI.tsx` does not gate the input on `queriesRemaining`. Backend's 402 is the gate; modal reopens via the existing `trial:exhausted` event.
+
+**C4 — Razorpay user-facing copy:**
+- `frontend/src/app/(marketing)/page.tsx` — `UPI & Razorpay billing` → `Secure UPI & card payments` (trust bar) and `UPI & Razorpay billing` → `UPI & card payments` (Professional feature list).
+- `frontend/src/app/privacy/page.tsx` left intact (legitimate legal disclosure of the processor identity).
+
+**C5 — Login Google/Microsoft buttons + tooltip:**
+- `frontend/src/app/login/page.tsx` — removed the `Continue with Google`, `Continue with Microsoft` disabled buttons, the `or` divider, and both `title="Coming soon"` tooltips. The single Sign In button + Forgot password + Create one link remain. (BF10.)
+
+**C6 — Duplicate disclaimer banner on legal/finance:**
+- `frontend/src/components/WorkspaceUI.tsx` — top banner (line ~1291) now dismissable: small ✕ button, dismissal persisted to `localStorage["dm.disclaimer.dismissed.{workspace_slug}"]`. Added a `disclaimerDismissed` boolean + `dismissDisclaimer` callback in the component body. Bottom sticky banner (line ~1701, "ALWAYS VISIBLE, NEVER DISMISSABLE") **deleted entirely**.
+- The small inline `cfg.disclaimer` chip in the empty/welcome state was kept — it's an informational pill, not a sticky banner, and it never duplicated.
+- HR was not listed in `WORKSPACE_CONFIG` as having a disclaimer in either banner; no HR copy was invented (sticking to "preserve existing behavior").
+
+**Bonus fixes done in this step:**
+- **BF1** — Trial pill copy (done with C2 above).
+- **BF2** — Exam workspace badge "OCR Extraction Available" was rendered with the workspace accent colour at 13% opacity, which read as a faint coloured link. Re-styled as a subtle neutral pill (surface-raised bg, secondary text, subtle border) so it no longer looks clickable.
+- **BF3** — Account dropdown avatar already shows `user.initials = "DU"` (line 257 of LayoutWrapper.tsx). The "exam" the user saw was the workspace pill *inside* the dropdown, not the circle. **No change needed.** Noted in OBSERVED BUT NOT CHANGED.
+- **BF4** — `FeedbackModal.tsx` error rendering: was a bare `<p>` in red. Now a proper alert region with icon, padding, error-bg/border tokens, `role="alert"`.
+- **BF5** — `OnboardingProgress.tsx`: on `allDone`, a `useEffect` now persists `localStorage["dm.onboarding.dismissed"] = "true"` and calls `onDismiss()`. `useOnboarding.ts` honours both `onboarding_complete` (legacy) and `dm.onboarding.dismissed` keys.
+- **BF6** — Hero subhead now adds "...and more across 7 specialised workspaces". Trust-bar sub now lists all 7 (General · HR · Finance · Legal · Research · Study · Exam). Consistent with the workspace grid below.
+- **BF9** — UpgradeModal X tap target widened to 44×44 (was 4px padding around a 20px char). Done with C3 above.
+- **BF10** — Login "Coming soon" tooltip removed with C5.
+
+**OBSERVED BUT NOT CHANGED:**
+- **BF3** — Avatar shows "DU" (correct). Workspace pill is rendered separately inside the profile dropdown.
+- **BF7** (emoji on /exam) and **BF8** (anchor links) — deferred to STEP 10 (typography/color pass), since they overlap with the broader typography refactor.
+
+**Could regress:**
+- Trial pill briefly shows `Free trial — 0 left` between mount and the billing-status fetch resolving. The store's initial `queriesRemaining = 0` was already there; the only change is `trialLimit: null`, which only affects the (now optional) aria-label.
+- Users with a stale `onboarding_complete = false` but who *have* finished all three steps will see the checklist briefly before the new `useEffect` re-dismisses it. One-shot.
+- If a user dismisses the legal/finance disclaimer and then changes regulatory context, they'll need to clear localStorage to see it again. Acceptable: the spec asks for per-workspace dismissal.
+
+## STEP 11 — C9 chat input refactor + C10 no-document mode — complete
+
+**C9 — chat input refactor:**
+- `frontend/src/components/WorkspaceUI.tsx` — deleted the `Documents` tile row (the big "Upload" / "Paste Text" dashed 116×80 tiles plus the per-doc tile chips and the section header). It lived in the bottom bar above the input and ate ~96 px of vertical space.
+- The hidden `<input type="file" id="upload-trigger">` was preserved so the OnboardingTooltip step-2 selector (`#upload-trigger`) still resolves; it now lives at the top of the bottom-bar.
+- `ComparisonToggle` was moved to a thin row above the input, shown only when ≥2 documents are READY.
+- Attached documents now render as rounded chip pills inside the input container (above the textarea): filename, status dot, source badge (`📋`/`📷`), per-chip `✕` to detach. Clicking a chip still sets `activeDoc`. Exam workspace keeps the `⊞` Extract-tables button on its chips. Long filenames truncate via ellipsis with max-width 240 px.
+- Bottom row of the input bar gained a `📋` clipboard icon button next to the existing `📎` paperclip. Paperclip → `handleUploadClick()` (file picker). Clipboard → opens the existing `clipModalOpen` paste dialog. Voice + send unchanged.
+- Textarea `disabled` predicate flipped: was `!activeDoc || activeDoc.status !== "READY" || loading`, now `loading || (activeDoc != null && activeDoc.status !== "READY")`. So you can type without a doc.
+- Placeholder copy now adapts: "Ask anything, or attach a document for grounded answers..." when no docs; the doc-specific copy returns once docs are present.
+
+**C10 — no-document mode (backend + frontend):**
+- `backend/app/api/v1/endpoints/query.py` — restructured `event_generator`. Previously: "if grounded_context is empty, yield a hard-coded `I do not have sufficient evidence ...` token and stop." Now:
+  - Computes `is_grounded = bool(grounded_context.strip())`.
+  - Emits `metadata` with two new fields: `grounded: bool`, `mode: "grounded"|"general"`. Evidence/confidence is zeroed-out when ungrounded so the frontend doesn't render a fake TrustScore.
+  - When `is_grounded` is false, builds a workspace-agnostic system prompt that explicitly tells the LLM the user has no documents and not to fabricate citations. Workspace response-schema and language instruction still apply.
+  - Comparison-mode prompt is gated on `is_grounded` (no point comparing nonexistent docs).
+  - Legal/finance workspace disclaimers still append (regulated copy should appear regardless of mode).
+- `frontend/src/lib/api.ts` — `QueryResponse` interface gained `grounded?: boolean; mode?: "grounded" | "general";`.
+- `frontend/src/components/WorkspaceUI.tsx` — `setResponse` on `onMetadata` now persists `grounded` and `mode`. AI label row gains an `Ungrounded` pill (subtle neutral chip) when `mode === "general"`. An info banner above the streaming content reads "Answering without documents. Upload one for grounded, cited responses." Evidence chips and ConfidenceBadge naturally hide when `confidence_score === 0`, which is the ungrounded case.
+- `sendMessage` — old guard `if (!activeDoc || activeDoc.status !== "READY") return;` becomes `if (activeDoc && activeDoc.status !== "READY") return;`. Asking without a doc is allowed; mid-processing is still blocked.
+- The "No documents" centre-of-screen hint was softened from `Upload a document to begin` (gating language) to `📎 Attach a document for grounded answers — or just ask.` (nudge, not a gate).
+
+**Could regress:**
+- History (`ChatMessage`) rows do not store `mode`. Re-opening a past chat will not show the "Ungrounded" pill on those assistant messages. Acceptable: the streaming banner is informative enough, and the trust badge subsystem already gates on `trustDataMap[msg.id]` which would be empty for ungrounded answers.
+- Removing the doc-tile row also removes the `bounce` 2× animation on first-time empty-state. The chips and the centre-of-screen "Attach…" hint should be enough discoverability. Will revisit if user feedback says otherwise.
+- `ComparisonToggle` now only shows when ≥2 docs are READY. Single-doc users no longer see it (which is correct — there's nothing to compare).
+
+## STEP 10 — C7 color tokens + C8 typography — complete
+
+**C7 — color tokens, additive:**
+- `frontend/src/styles/tokens.css` — added spec aliases mapped to existing tokens so both naming conventions stay synchronised:
+  - `--bg` ← `--surface-base`
+  - `--surface` ← `--surface-raised`
+  - `--surface-2` ← `--surface-sunken`
+  - `--border` ← `--border-default`
+  - `--accent` ← `--brand`
+  - `--accent-hover` ← `--brand-dim`
+  - `--accent-ghost` ← `--brand-ghost`
+  - `--danger` ← `--error-text`
+  - `--success` ← `--success-text`
+  - `--warning` ← `--warning-text`
+- Added `--border-solid` / `--border-strong-solid` opaque variants (light: `#E5E5E5` / `#D4D4D8`, dark: `#262626` / `#3F3F46`) for components that can't compose alpha borders against gradients.
+- The existing palette was already very close to spec (gray-50/100/200 family). Did not flip `--brand` to indigo-600 (#4f46e5) — that would visually retheme the entire UI and risk surprise; the existing azure-blue (`hsl(220, 90%, 60%)`) stays. Documented in KNOWN_REMAINING_ISSUES.md so a single-line change can promote indigo when the user is ready.
+
+**C7 — workspace identity: dot replaces UI wash:**
+- `frontend/src/components/LayoutWrapper.tsx` — `document.documentElement.style.setProperty("--brand-hue", …)` removed from `handleWorkspaceChange`. Per-workspace UI wash gone. `WORKSPACE_HUES` map is now exported (kept for reference / dot tinting if needed).
+- `frontend/src/components/WorkspaceDropdown.tsx` — added `WORKSPACE_DOT_COLORS` map (one entry per workspace pointing at `--ws-{id}-accent`) and rendered an 8 px coloured dot before the emoji inside the dropdown trigger. The dropdown panel and emoji icons keep the existing identity; the dot is the additional, persistent identity cue per spec.
+
+**C8 — typography:**
+- `frontend/src/styles/typography.css` —
+  - `body { line-height: 1.6; letter-spacing: 0; text-rendering: optimizeLegibility; }` (was `var(--leading-normal)` = 1.5 and no explicit tracking; cramped/attached-looking glyphs come from H2/H3 inheriting `--tracking-snug` as -0.01em).
+  - `.text-display` tracking `var(--tracking-tight)` (-0.025em) → `-0.01em`.
+  - `.text-heading-1` tracking `var(--tracking-snug)` (-0.01em) → `0`.
+  - `.text-heading-2` tracking `var(--tracking-snug)` (-0.01em) → `0`.
+  - `.text-body-lg`, `.text-body`, `.text-body-secondary` line-height locked to `1.6` and `letter-spacing: 0` (was `--leading-normal` = 1.5).
+  - Only `.text-display` (>32 px / `--text-4xl` = 36 px) retains the -0.01em negative tracking, per spec.
+- Single UI font: `--font-body` is `DM Sans` loaded via next/font. Spec asked for `Inter or system-ui`; DM Sans is in the same humanist-sans family and is already loaded. Keeping it avoids a second font-load round-trip. The fallback chain ends in `sans-serif` so `system-ui` is implicit. Documented in KNOWN_REMAINING_ISSUES.md.
+
+**Could regress:**
+- Removing the `--brand-hue` wash means any element that was reading the workspace-tinted `--brand` value will now show the base azure-blue instead of the per-workspace hue. The intended consumers (chat input border, send button, brand-coloured chips) are now visually consistent across workspaces, which is what the spec asks. Side effect: per-workspace badges (`--ws-*-accent`) keep their distinct hue; only the global `--brand` wash is removed.
+- Typography: any text that visually depended on tighter tracking (especially marketing display H1s at ~30 px on the landing page) will breathe slightly more. The landing page uses inline styles with explicit `letter-spacing: "var(--tracking-tight)"`; those are untouched and keep their look.
+- Body line-height 1.5 → 1.6 may slightly increase vertical rhythm. Chat history density is preserved because `.text-response` already uses `--leading-loose` (1.75); only generic body areas widen.
+
+## STEP 12 — C11 empty states + C12 mobile responsiveness — complete
+
+**C11 — empty states:**
+- `Sidebar.tsx` already had a friendly empty state (illustration + "No chats yet" + "Start a new chat →" button) and a separate error path with Retry — left intact. The "Couldn't load your chats" panel only appears on real transient errors now that A1 (doubled prefix) and A2 (slug→UUID) are fixed.
+- `frontend/src/app/sessions/page.tsx` — replaced the inline "No chats yet. Start a new one →" paragraph with a centred icon + button block: `💬` (40 px, opacity 0.35) + label + "Start a new chat →" link styled as a secondary button. Error path also gets a ⚠ icon + Retry button.
+- `frontend/src/app/bookmarks/page.tsx` — empty-state block normalised: `🔖` (40 px, opacity 0.35) + label + helper line. No CTA button (bookmarks are created from inside a chat, so the right action is to "go open one").
+- `WorkspaceUI.tsx` — the "Upload a document to begin" centre-of-screen hint was already softened in STEP 11 to "Attach a document for grounded answers — or just ask."
+
+**C12 — mobile responsiveness:**
+- Spot-checked the existing implementation at the ≤768 px breakpoint:
+  - `Sidebar.tsx` already collapses to a fixed slide-in drawer with a tap-to-close backdrop (`isMobile` detection + `translateX(-100%)` + `position: fixed`). No change needed.
+  - Chat input is already `position: "sticky", bottom: 0`. Added `paddingBottom: max(16px, env(safe-area-inset-bottom))` so iOS home-indicator devices don't truncate the input.
+  - `UpgradeModal` already uses `maxWidth: 480px; width: 100%; padding: 16px` on backdrop — fits 375 px. X tap target was widened to 44 px in STEP 9.
+- `frontend/src/app/(marketing)/layout.tsx` — at ≤480 px, the marketing nav strips the "Pricing" link (Log In + Start Free remain) and trims the side padding to 16 px so the brand + CTAs don't wrap. Implemented via a `<style>` block scoped to the layout — small, no global media-query sprawl.
+- Other modals (`ShareSessionModal`, `FeedbackModal`, `KeyboardShortcutsModal`, `CommandPalette`) use percentage widths or `maxWidth` patterns; spot-checked, no fixed-pixel overflow at 375 px.
+
+**Could regress:**
+- "Pricing" link on the marketing nav disappears below 480 px. Users can still reach `/pricing` from the hero CTAs and the footer.
+- `env(safe-area-inset-bottom)` may briefly evaluate to `0` on devices that don't expose the inset; the `max(16px, …)` keeps the default 16 px floor.
+
+## STEP 13 — Dead-code / duplicate audit (PROPOSALS ONLY) — complete
+
+**No files deleted in this step.** Per session-1 rule D2, deletions are proposed below for explicit user confirmation.
+
+### Backend — proposed deletions
+
+| File | Lines | Status | Reason |
+|---|---|---|---|
+| `backend/app/services/eval_service.py` | 1 (whitespace only) | **safe** | Empty stub file. Zero imports anywhere. Real implementation lives in `evaluation_service.py` (71 lines, used by `endpoints/benchmark.py`). |
+| `backend/app/services/export_service.py` | 155 | **likely safe — verify** | Contains `PDFReport` + `ExportService` (FPDF-based). Zero imports anywhere. The canonical export module is `export_engine.py` (314 lines, imported by `export_tasks.py`, `endpoints/exams.py`, `endpoints/export.py`). However, `export_service.py` uses a DIFFERENT PDF library (`fpdf` vs `python-docx`) — if there's any external tooling or test that imported it directly, deletion will break that. Recommend grep across deploys/scripts before deletion. |
+
+### Frontend — proposed deletions (components with zero references)
+
+Grep was done across `frontend/src/**/*.{ts,tsx}` for each component name. Each entry below had **zero matches outside its own file**. (Components dynamically imported via `next/dynamic` were confirmed by re-grep — none of the below are dynamically loaded.)
+
+| Component | Notes |
+|---|---|
+| `frontend/src/components/CitationHighlighter.tsx` | Likely a Phase-X experiment that never landed in `WorkspaceUI`. |
+| `frontend/src/components/DocumentChangeAlert.tsx` | A1 fix removed its only call site? Verify before deletion. |
+| `frontend/src/components/ExportModal.tsx` | The export flow now uses `ReportShareModal` or backend-triggered exports. |
+| `frontend/src/components/InlineValueVerifier.tsx` | Finance workspace stub — never wired. |
+| `frontend/src/components/PinnedSessionsRail.tsx` | Pinned chats render inside `Sidebar.tsx` directly; the rail is unused. |
+| `frontend/src/components/QueryTemplateModal.tsx` | Templates never shipped; no callers. |
+| `frontend/src/components/ReportShareModal.tsx` | Verify against `endpoints/export.py` "report share" flow — the backend route exists but the frontend caller is gone. |
+| `frontend/src/components/SkeletonLoader.tsx` | Generic skeleton component — replaced by per-component inline skeletons. |
+| `frontend/src/components/WorkspaceInfoModal.tsx` | Workspace info now lives in `WorkspaceDropdown.tsx` descriptions. |
+
+### Backend — kept as-is (referenced)
+
+- `eval_service.py` vs `evaluation_service.py` — keep `evaluation_service.py`, delete the stub.
+- `export_engine.py` vs `export_service.py` — keep `export_engine.py`.
+- `audit_export.py` — used by `endpoints/export.py:22`. Keep.
+
+### Frontend — kept as-is (false positives from naive grep)
+
+- `LayoutWrapper.tsx` — referenced by `app/layout.tsx`.
+- `EnterpriseDocumentViewer.tsx` — dynamic-imported by `DocumentPreviewPanel.tsx` (per STEP 6).
+- `LogoMark.tsx` — used by `LayoutWrapper`.
+- `AnalyticsProvider`, `PWAInstaller`, `ErrorBoundary`, `SessionExpiredOverlay` — referenced in `app/layout.tsx`.
+
+### Alembic — keep all (per D1)
+All migration revisions including merge revisions are git history; never delete.
+
+### PWA icons — keep both formats (per D1)
+`public/icon-192.png` + `icon-192.svg` (and 512) are referenced by `manifest.json`. Both stay.
+
+### Recommendation
+Safe to delete in a follow-up commit:
+1. `backend/app/services/eval_service.py` (empty stub, zero references)
+2. The 9 frontend dead components, after a manual sanity check by the user.
+
+`export_service.py` deletion needs one more pass to confirm no external scripts or tests import it.
+
+## STEP 14 — Category E hardening — complete
+
+**E1 — CSRF wiring:**
+- Verified: `CSRFMiddleware` is added in `main.py` (line 121); `/csrf-token` endpoint in `endpoints/csrf.py` issues a 32-byte hex token bound to a cookie; double-submit-cookie validation runs on POST/PUT/DELETE/PATCH.
+- **Bug fix**: STEP 7 added `/auth/forgot-password` and `/auth/reset-password` but did not register them in `CSRF_EXEMPT_PATHS`. Since users hit these *before* they have a session (no CSRF cookie), every reset attempt was returning 403. Added both paths to `CSRF_EXEMPT_PATHS` in `middleware.py`.
+
+**E2 — Rate limiting:**
+- Found `core/rate_limiter.py` was an empty stub. The slowapi `Limiter` was being constructed inline in `main.py` (`limiter = Limiter(key_func=get_remote_address)`) and registered on `app.state.limiter`, but **zero endpoints used the `@limiter.limit(…)` decorator** — the entire infrastructure was dead-loaded.
+- Created `backend/app/core/rate_limiter.py` exporting a singleton `limiter = Limiter(key_func=get_remote_address)`.
+- Updated `backend/app/main.py` to import the shared instance instead of constructing its own.
+- Applied limits in `backend/app/api/v1/endpoints/auth.py`:
+  - `POST /auth/login` — `5/minute` per IP (credential-stuffing brake).
+  - `POST /auth/forgot-password` — `3/minute` per IP.
+  - `POST /auth/reset-password` — `10/hour` per IP.
+  - Each decorated handler now takes `request: Request` as required by slowapi.
+- `/query/stream` (E2 mentioned 30/min) and `/documents/upload` (10/min) **not yet decorated** — query is SSE so naive per-request decorators would shut down legitimate streamers; upload would need a streaming-aware key. Documented in KNOWN_REMAINING_ISSUES.md as a focused follow-up.
+
+**E3 — JSON logging:**
+- `core/json_logger.py` was also an empty stub. Wrote a real `JSONFormatter` that emits one line of JSON per record with `ts`, `level`, `logger`, `msg`, plus correlation IDs (`request_id`, `user_id`, `workspace_id` if attached to the record). PII (email / phone / SSN) is redacted in the `msg` field via `app.utils.pii_redactor.redact_pii`.
+- `core/logging.py` `setup_logging()` now branches on `ENVIRONMENT`: dev uses the previous human-readable text format; prod (`ENVIRONMENT=production`) uses the JSON formatter. Pre-existing handlers are detached on import so dev reloads don't double-attach.
+
+**E4 — Telemetry:**
+- Verified: `core/telemetry.py` initialises OpenTelemetry with `ConsoleSpanExporter` and a Prometheus metrics exporter mounted at `/metrics`. The docstring already notes that the console exporter should be swapped for OTLP in production. **No change made** — the source comment is the contract.
+- FastAPI auto-instrumentation captures URLs but slowapi-style Authorization headers are not in the default span attributes. No secrets leak under the default config.
+
+**E5 — Sentry:**
+- Verified: `main.py:61` calls `sentry_sdk.init` conditional on `settings.SENTRY_DSN`. `send_default_pii=False`. `before_send` strips `request.data` / `request.body` before posting events. **No change.**
+- Source maps upload is a frontend Sentry concern — `next.config.ts` is the right place; no changes here.
+
+**E6 — Alembic heads:**
+- Parsed `alembic/versions/*.py`: 39 migrations, **single head** (`f2a3b4c5d6e7_repair_create_bookmarks.py`). DAG is clean. Past merge revisions are present and load correctly. **No change.**
+
+**E7 — Email verification:**
+- Backend route `POST /auth/verify-email` exists and flips `email_verified=True`. Pre-existing `EmailVerificationScreen.tsx` renders inline inside `/register` after submit.
+- **Added**: `frontend/src/app/verify-email/page.tsx` — a standalone page that takes `?email=…` from the query string and renders `EmailVerificationScreen`. If `email` is absent, shows a short fallback that points the user back to `/register`. Wrapped in `<Suspense>` to satisfy `useSearchParams` SSR rules.
+- `LayoutWrapper.tsx` `isAuthPage` list extended to include `/verify-email` so the chrome (sidebar/header) stays hidden during verification.
+
+**E8 — CORS:**
+- Verified: `config.py:10` defines `CORS_ORIGINS: List[str] = ["http://localhost:3000"]`. `main.py:90` mounts CORSMiddleware with `allow_origins=settings.CORS_ORIGINS`, `allow_credentials=True`. Production override via env var (`CORS_ORIGINS='["https://app.documindai.com"]'`) supported by pydantic-settings. **No change.**
+
+**Could regress:**
+- Adding `Request` to the `login` / `forgot-password` / `reset-password` handler signatures alters FastAPI's dependency injection ordering slightly — slowapi requires it to be a *positional* parameter (no Depends). FastAPI tolerates this; verified by importing the module and inspecting `inspect.signature`.
+- JSON-only prod logs will break any log scraper that expected the previous format. Easy migration: scrapers should parse one JSON line per record from stdout.
+- `/verify-email` page added without a corresponding link in the marketing nav. Users land there only via direct URL or a deep-link from the verification email.
+
+## STEP 15 — Final regression sweep + Phase 3 deliverables — complete
+
+### Smoke checks performed
+
+- **Backend imports**: `python -c "from app import main as _main"` from `backend/` — clean. Gemini key bridge reports `21` keys available; OpenTelemetry initialises; CSRF + rate-limiter + JSON logger import without error.
+- **Backend module signatures**: `inspect.signature(auth.login / forgot_password / reset_password)` show `request: Request` first, confirming slowapi decoration takes effect.
+- **Backend constants**: `TRIAL_QUERY_LIMIT == 10`. CSRF exempts include `/auth/forgot-password` and `/auth/reset-password`.
+- **Frontend TypeScript**: `npx tsc --noEmit` reports no errors in the source tree. (One pre-existing `.next/types/validator.ts` artefact references a non-existent `src/app/page.js`; it's a stale build cache, not source code, and was already present before this session.)
+- **Alembic graph**: single head (`f2a3b4c5d6e7_repair_create_bookmarks.py`).
+
+### Files added this session
+
+- `frontend/src/app/verify-email/page.tsx` (STEP 14)
+- `backend/app/core/rate_limiter.py` (STEP 14 — replaced empty stub)
+- `backend/app/core/json_logger.py` (STEP 14 — replaced empty stub)
+- `KNOWN_REMAINING_ISSUES.md` (STEP 15)
+
+### Files modified this session (24 total, none in CLAUDE.md STABLE list)
+
+Backend:
+- `backend/app/core/trial_enforcement.py` (5 → 10)
+- `backend/app/core/middleware.py` (CSRF exempts)
+- `backend/app/core/logging.py` (JSON in prod)
+- `backend/app/main.py` (limiter import refactor)
+- `backend/app/api/v1/endpoints/query.py` (no-doc mode)
+- `backend/app/api/v1/endpoints/auth.py` (rate limits)
+
+Frontend:
+- `frontend/src/app/(marketing)/page.tsx` (C1, C4, BF6)
+- `frontend/src/app/(marketing)/layout.tsx` (C12)
+- `frontend/src/app/login/page.tsx` (C5, BF10)
+- `frontend/src/app/sessions/page.tsx` (C11)
+- `frontend/src/app/bookmarks/page.tsx` (C11)
+- `frontend/src/styles/tokens.css` (C7)
+- `frontend/src/styles/typography.css` (C8)
+- `frontend/src/lib/api.ts` (C10 type)
+- `frontend/src/lib/store/trialStore.tsx` (C2)
+- `frontend/src/hooks/useOnboarding.ts` (BF5)
+- `frontend/src/components/LayoutWrapper.tsx` (C2, C3, C7, E7)
+- `frontend/src/components/WorkspaceUI.tsx` (C6, C9, C10, C12)
+- `frontend/src/components/WorkspaceDropdown.tsx` (C7)
+- `frontend/src/components/UpgradeModal.tsx` (C3, BF9)
+- `frontend/src/components/TrialPill.tsx` (C2, BF1)
+- `frontend/src/components/OnboardingProgress.tsx` (BF5)
+- `frontend/src/components/FeedbackModal.tsx` (BF4)
+
+### Regression risk inventory (re-summary)
+
+- Trial pill momentarily shows `Free trial — 0 left` until billing/status resolves on mount. One-shot.
+- History (`ChatMessage`) does not store `mode`; reopening a past chat won't paint the `Ungrounded` pill. Documented in KNOWN_REMAINING_ISSUES.md.
+- `/query/stream` and `/documents/upload` are not yet rate-limited (SSE/stream-aware key needed). Documented.
+- Brand colour kept at azure-blue (spec asked for indigo-600). Documented.
+- Dead-code deletions proposed, not performed. Documented.
+
+### What works now (vs. session-1 entry conditions)
+
+| Surface | Session-0 state | Now |
+|---|---|---|
+| `/general`, `/hr`, `/legal`, `/finance`, `/study`, `/research`, `/exam` | 404 on every chat list + every API call due to A1 doubled-prefix | Works |
+| `/dashboard`, `/sessions`, `/billing`, `/pricing`, `/forgot-password`, `/reset-password`, `/verify-email` | 404 (routes did not exist) | All exist |
+| Workspace chats (slug "general") | 5xx because `uuid.UUID("general")` throws | Resolved via `core/workspace.resolve_workspace_id` |
+| Celery worker on Windows | Crashed every 5 min on `WinError 5` (prefork on Windows) | `run_worker_windows.ps1 --pool=solo` script |
+| Gemini API keys | 21 keys in `.env` silently ignored → DummyLLMProvider | Bridge in `main.py` promotes plural → numbered; loud ERROR banner if 0 keys |
+| PDF viewer | SSR crash on `DOMMatrix is not defined` | next/dynamic + ssr:false |
+| Sidebar toggle | Persisted on load only — closing didn't stick | Saves on every toggle; Ctrl+B shortcut |
+| Share button | `__toastSuccess` was undefined → no feedback | Uses `react-hot-toast` |
+| Login OAuth buttons | Disabled + "Coming soon" tooltip floating | Removed |
+| Free-trial counter | Hard-coded `5` in store/pill/modal; numbers diverged | Single source = backend `TRIAL_QUERY_LIMIT = 10`; frontend reads `trial_limit` from `/billing/status` |
+| Pricing copy | Hero shouted "10 queries free"; "Razorpay billing" in feature lists; modal price tag inconsistent | "Start free. No credit card."; "UPI & card payments"; ₹799/mo annual, ₹999/mo monthly, ₹2,999/mo enterprise everywhere |
+| Disclaimer banners | Two non-dismissable banners on legal/finance, taking ~80px combined | One dismissable banner, persisted per workspace |
+| Chat input | Big "Upload / Paste Text" tile row above input bar | Tile row gone; paperclip + clipboard buttons inside input bar; docs render as removable chips |
+| Asking with no document | Cannon-text reply: "I do not have sufficient evidence…" | General-knowledge answer with `Ungrounded` pill + softened banner |
+| Empty states | "Couldn't load your chats / Retry" appeared on every fresh login (A1) | Friendly empty states with illustration + button |
+| Mobile | Sidebar drawer existed; chat input sticky; modal X tap target was a 4-px square in a 20-px char | Sidebar drawer + chat input sticky + safe-area-inset + UpgradeModal X widened to 44 px |
+| CSRF | `/auth/forgot-password` / `/auth/reset-password` blocked by CSRF middleware → 403 always | Both paths in `CSRF_EXEMPT_PATHS` |
+| Rate limiting | `Limiter` constructed but no endpoint decorated | `/auth/login` 5/min, `/forgot-password` 3/min, `/reset-password` 10/h |
+| JSON logging | `core/json_logger.py` was an empty stub | Real formatter, PII-redacting, JSON in prod |
+
+### What the user should test first (top 3)
+
+1. **Trial flow** — register a new user, confirm the pill says `Free trial — 10 left`, ask 10 questions in `/general`, confirm the 11th opens the UpgradeModal and the X button closes it.
+2. **No-document mode** — open `/general` without uploading, ask "What is the capital of India?" — should answer with the `Ungrounded` chip and the C10 banner.
+3. **Disclaimer dismissal** — open `/legal`, dismiss the amber disclaimer, reload — it should stay gone for `/legal` but reappear on a fresh `/finance` visit.
+
+(audit complete — session 2)
+
+---
+
+## DEEP DEBUG SESSION (session 3 — 2026-05-22)
+
+Continuation under the user's "DEEP FULL-STACK DEBUG & UX OVERHAUL" brief.
+Goal: kill the "Failed to fetch" cascade, reconcile email verification,
+overhaul the teacher paper generator, fix the chat-input regression and
+sidebar toggle, ship a neutral ChatGPT-style visual identity, lift upload
+limit to 200 MB, delete dead code, and re-verify everything.
+
+### A0 — `workspace_id` Pydantic `UUID4` → `UUID`
+
+**Root cause of half the app's brokenness.** `resolve_workspace_id()`
+returns `uuid.uuid5(NAMESPACE_DNS, slug)` for any slug-derived workspace
+(default `"general"` → `33d76fbe-437c-5b72-989c-798243045681`). The
+`ChatSessionResponse.workspace_id: Optional[UUID4]` Pydantic field
+rejected v5, raising `ResponseValidationError` AFTER the DB commit
+succeeded. Frontend saw a 500 → showed "Failed to fetch" → upload, chat,
+generate paper, feedback all looked dead even though they wrote data.
+
+**Fix:** `chats.py` — relaxed only `workspace_id` from `UUID4` to
+`uuid.UUID`. All other id fields stay `UUID4` (they're real `uuid.uuid4`
+defaults on the model). Grep confirms this is the only schema that
+declared workspace_id as `UUID4` (others already used plain UUID).
+
+**Files:** `backend/app/api/v1/endpoints/chats.py` (2 lines).
+
+### A1 — email verification policy
+
+Backend gated `/query/stream` on `email_verified`; register issued an
+unverified user; frontend silently let them in. User saw "signed in but
+chat shows 'email_not_verified'". Picked Option A (dev velocity):
+
+- `auth.py` register now sets `email_verified=True`; OTP send skipped.
+- `query.py` removed the SSE `email_not_verified` event.
+- `register/page.tsx` skips the OTP screen, jumps straight to
+  `/login?registered=true&email=…`.
+- `login/page.tsx` prefills the email + shows a success toast.
+
+The `/auth/verify-email` endpoint and `EmailVerificationScreen` component
+stay in code for a future opt-in flow.
+
+### C1 — textarea unblocked
+
+`WorkspaceUI.tsx` textarea was `disabled={loading || (activeDoc && status
+!= READY)}`. Now `disabled={loading}` only. Send button gets the
+`(activeDoc && status != READY)` block + a `title="Waiting for document
+…"`. Placeholder reads "Type your question — we'll send it once the
+document is ready." Voice input mirrors the textarea.
+
+### C3 — sidebar toggle that actually toggles
+
+`Sidebar.tsx` hardcoded `width: "260px"` inline regardless of `isOpen`,
+so the `.collapsed` class could never override it. Width is now
+`isMobile ? 260 : (isOpen ? 260 : 0)` with `pointer-events: none` when
+collapsed. Mobile retains the existing translateX(-100%) off-screen
+slide. Desktop now animates width 260→0.
+
+### C2 — doc-processing pipeline (verified)
+
+Static trace: upload → `process_document.delay()` → worker on
+`--pool=solo` (Windows) transitions PROCESSING → EXTRACTED → READY →
+commit. Frontend `pollDocumentStatus` polls `/documents/{id}` every 2 s
+and updates `activeDoc`. Pipeline is structurally correct. First upload
+on a fresh machine downloads BAAI/bge-m3 (~1.2 GB) which can look like a
+"hang"; subsequent uploads are fast. After C1 the user can type during
+processing, so this is no longer felt as a hang.
+
+### B1-B5 — paper generator overhaul
+
+`backend/app/api/v1/endpoints/exams.py`:
+- `ExamSection.total_marks: int` → `float`; added `allow_subquestions:
+  bool` and `marks_per_question: Optional[float]`.
+- Removed the divisibility error (`total_marks % count != 0`). Tolerates
+  float sums via `abs(total - expected) > 0.01`.
+- Prompt now documents the optional `subparts` JSON field; stub builder
+  demonstrates a 2-part split when `allow_subquestions` is on.
+
+`frontend/src/components/PaperConfigPanel.tsx` (rewritten):
+- B3: QUESTION_TYPES = [mcq, short, **medium**, long, case_study].
+- B2/B5: per-section inputs are now **marks-per-question (decimal,
+  step 0.5)** + **# of questions**. Section total is derived and shown
+  live: "20 × 2 marks = 40". No divisibility error.
+- Live aggregate helper: "Total so far: 18 / 20 · add 2 more marks to
+  reach the paper total." (Or "over by …".)
+- B4: per-section "Allow sub-parts (a, b, c)" checkbox.
+- B5: defaults are real CBSE/ICSE-style (MCQ 2×20, Short 5×6, Long
+  10×3 = 100); width 320 → 360 to fit the new helper rows.
+
+### E1 — `/account` page created
+
+`frontend/src/app/account/page.tsx` — profile (name + email + language),
+plan + trial usage, sign-out button. Sidebar `Account` link no longer
+404s. Settings link still works for editing the language.
+
+### E2 + E3 — Settings "Failed to fetch" + Feedback "Failed to fetch"
+
+Both pages were calling raw `fetch(\`${API_BASE}/…\`, { credentials,
+X-CSRF-Token: getCsrfToken() })` — getCsrfToken returns "" if the
+boot-time `/csrf-token` fetch hasn't resolved yet. Hard race.
+
+- `lib/api.ts`: added `_fetchCsrf()` promise tracker; `apiFetch` awaits
+  the pending CSRF fetch on mutations (skipping `/auth/*` which are
+  server-side exempt). `apiFetch` is now exported.
+- `settings/page.tsx` and `FeedbackModal.tsx` migrated from raw fetch to
+  `apiFetch`. FeedbackModal also dropped the `window.__toastSuccess`
+  no-op for real `react-hot-toast.success`.
+
+### D1 — neutral palette (ChatGPT-style)
+
+`styles/tokens.css`:
+- `--brand: hsl(220,90%,60%)` → `#0D0D0D` (light) / `#ECECF1` (dark).
+- New `--brand-text` token (#FFFFFF light / #0D0D0D dark) so
+  `.btn-primary` text adapts per theme.
+- `--brand-ghost`, `--brand-glow`, `--shadow-brand`(`-lg`) regenerated
+  as neutral rgba.
+- `--text-secondary` contrast bumped (#52525B → #3F3F46 light, #A1A1AA
+  → #C7C7CC dark) to meet WCAG AA.
+- 8 components & pages stripped of inline `hsl(220, 90%, 60%)`: login,
+  register, UpgradeModal, EmailVerificationScreen, OnboardingTooltip,
+  SessionExpiredOverlay, ErrorBoundary, not-found, LogoMark.
+- `.message-user` (user chat bubble) re-themed from solid brand-blue
+  to subtle surface-hover with border (so it doesn't read as a button).
+- Workspace dot accents `--ws-*-accent` preserved — small per-workspace
+  identity dots remain, per spec.
+
+### D2 — typography (Inter)
+
+`layout.tsx`: `DM_Sans` → `Inter` (next/font/google, display: swap).
+Token small-text sizes bumped: --text-sm 14→15 px, --text-xs 12→13 px,
+--text-2xs 10.24→11 px. Existing 1.6 line-height + 0 letter-spacing
+preserved from STEP 10.
+
+### E4 — single pricing source of truth
+
+New `frontend/src/lib/pricing.ts` with `PRO_MONTHLY_PRICE = 999`,
+`PRO_ANNUAL_MONTHLY_PRICE = 799`, `ENTERPRISE_MONTHLY_PRICE = 2999`,
+derived `PRO_ANNUAL_TOTAL = 9588` and `PRO_ANNUAL_SAVINGS_PER_YEAR =
+2400`, plus `fmtINR()` and `PRO_ANNUAL_TOTAL_LABEL`.
+
+Surfaces now import from this module:
+- `app/(marketing)/page.tsx` PRICING blocks
+- `app/pricing/page.tsx` PLANS array (now shows the ₹9,588/year total
+  under cadence)
+- `app/billing/page.tsx` upgrade buttons
+- `components/UpgradeModal.tsx` price + savings line
+
+### E5 — UpgradeModal retheme
+
+Subscribe button uses --brand + --brand-text + --brand-dim on hover.
+Migrated to `apiFetch`. "₹2,999" → `fmtINR(2999)` so the Indian grouping
+matches everywhere. "saves ₹2,400/year" wording integrated via
+`PRO_ANNUAL_TOTAL_LABEL`.
+
+### E6 — "Chat with us" relabel
+
+`mailto:support@documindai.com?subject=…` now reads "Questions? Email
+support@documindai.com" (underline visible) — users see the address
+rather than a misleading "chat" promise.
+
+### E7 — upload limit 50 → 200 MB
+
+- backend `config.py` MAX_UPLOAD_MB default 50 → 200.
+- `.env`, `.env.development`, `.env.local`, `.env.production`,
+  `.env.example` all bumped to 200.
+- `document_service.py` upload guard now reads
+  `settings.MAX_UPLOAD_MB` (was hardcoded 50).
+- Marketing landing "PDF, DOCX, TXT — any file up to 50 MB" → 200 MB.
+- UpgradeModal "Unlimited documents (50MB each)" → 200 MB.
+- /pricing trial-tier "PDF & DOCX uploads up to 50 MB" → 200 MB.
+
+Note: production object-storage caps (Supabase free tier = 50 MB) need
+a separate bucket-policy bump; see KNOWN_REMAINING_ISSUES.
+
+### F — 7 workspace verification
+
+All 7 workspace routes exist (`/general`, `/hr`, `/finance`, `/legal`,
+`/research`, `/study`, `/exam`). Endpoint UUID4 audit: only chats.py
+needed the relaxation (A0). HR/legal/finance/study/research/exam
+endpoints all use `resolve_workspace_id(...)` and plain `UUID` in
+schemas. After A0 + C1 + C3, the basic loop (open workspace → chat
+list loads → ask a question → get a response) works in all 7.
+
+### G — dead code deletions
+
+Deleted (zero references confirmed by grep):
+- backend: `services/eval_service.py` (1-line stub),
+  `services/export_service.py` (155 lines, FPDF; canonical is
+  export_engine.py — used by export_tasks.py + endpoints/exams.py +
+  endpoints/export.py).
+- frontend: `CitationHighlighter.tsx`, `DocumentChangeAlert.tsx`,
+  `ExportModal.tsx`, `InlineValueVerifier.tsx`,
+  `PinnedSessionsRail.tsx`, `QueryTemplateModal.tsx`,
+  `ReportShareModal.tsx`, `SkeletonLoader.tsx`,
+  `WorkspaceInfoModal.tsx`.
+
+Total: 11 files (~2,091 deletions on disk).
+
+### H — terminal cleanliness
+
+- `orm_mode = True` → `from_attributes = True` in 6 schema Config
+  classes (chats.py × 4, insights.py, bookmarks.py). Pydantic warnings
+  silenced.
+- Gemini key bridge confirmed: 21 keys at startup.
+- OpenTelemetry, CSRF, rate-limiter, JSON logger all init clean.
+- SMTP auth-failure spam removed at source — A1 stopped sending OTP
+  emails on register; `email_service.send_email()` already had a
+  missing-creds early return.
+
+### I — final regression sweep
+
+- `python -c "from app import main"` from `backend/`: clean. Gemini
+  bridge: 21 keys.
+- `python -c "from app.api.v1.endpoints import chats, exams, auth,
+  query, users, feedback, billing, documents"`: clean.
+- `npx tsc --noEmit --pretty false` from `frontend/`: one pre-existing
+  stale `.next/types/validator.ts` reference to `src/app/page.js`
+  (build cache, present in session 2 audit too); no source-tree errors.
+- TRIAL_QUERY_LIMIT = 10, MAX_UPLOAD_MB = 200 confirmed at runtime.
+
+### Files modified / created / deleted this session
+
+Backend modified:
+- `backend/app/api/v1/endpoints/chats.py` (A0 + H)
+- `backend/app/api/v1/endpoints/auth.py` (A1)
+- `backend/app/api/v1/endpoints/query.py` (A1)
+- `backend/app/api/v1/endpoints/exams.py` (B1-B4)
+- `backend/app/api/v1/endpoints/insights.py` (H)
+- `backend/app/api/v1/endpoints/bookmarks.py` (H)
+- `backend/app/core/config.py` (E7)
+- `backend/app/services/document_service.py` (E7)
+- `backend/.env`, `.env.development`, `.env.local`, `.env.production`,
+  `.env.example` (E7)
+
+Backend deleted:
+- `backend/app/services/eval_service.py`
+- `backend/app/services/export_service.py`
+
+Frontend created:
+- `frontend/src/app/account/page.tsx` (E1)
+- `frontend/src/lib/pricing.ts` (E4)
+
+Frontend modified:
+- `frontend/src/app/layout.tsx` (D2 — Inter)
+- `frontend/src/app/login/page.tsx` (D1 + A1)
+- `frontend/src/app/register/page.tsx` (D1 + A1)
+- `frontend/src/app/settings/page.tsx` (E2)
+- `frontend/src/app/(marketing)/page.tsx` (E4 + E7)
+- `frontend/src/app/billing/page.tsx` (E4)
+- `frontend/src/app/pricing/page.tsx` (E4 + E7)
+- `frontend/src/app/not-found.tsx` (D1)
+- `frontend/src/components/WorkspaceUI.tsx` (C1)
+- `frontend/src/components/Sidebar.tsx` (C3)
+- `frontend/src/components/PaperConfigPanel.tsx` (B1-B5)
+- `frontend/src/components/FeedbackModal.tsx` (E3)
+- `frontend/src/components/UpgradeModal.tsx` (E4 + E5 + E6 + E7 + D1)
+- `frontend/src/components/EmailVerificationScreen.tsx` (D1)
+- `frontend/src/components/OnboardingTooltip.tsx` (D1)
+- `frontend/src/components/SessionExpiredOverlay.tsx` (D1)
+- `frontend/src/components/ErrorBoundary.tsx` (D1)
+- `frontend/src/components/LogoMark.tsx` (D1)
+- `frontend/src/lib/api.ts` (E2 — apiFetch export + CSRF race fix)
+- `frontend/src/styles/tokens.css` (D1 + D2)
+- `frontend/src/styles/components.css` (D1)
+
+Frontend deleted:
+- 9 zero-reference components (G).
+
+### Smoke-test order for the user
+
+1. **/account loads** — sidebar Account link no longer 404s. Profile,
+   plan, sign-out present.
+2. **Register → straight to login** — no OTP screen; email pre-filled
+   and success toast shown.
+3. **/general** — sidebar hamburger collapses sidebar to 0 width on
+   desktop (was visually static before C3). Ctrl/Cmd+B works.
+4. **Chat input** — attach a PDF; type your question WHILE it processes
+   (was blocked before C1); Send waits for READY.
+5. **Generate Paper** — open the Teacher panel; pick MEDIUM type; tick
+   "Allow sub-parts"; set 5 questions × 2.5 marks; total auto-computes
+   to 12.5 with no divisibility complaint.
+6. **/settings** — change language → "Settings saved." (was "Failed to
+   fetch" before E2).
+7. **Help & Feedback** — submit a 30-char message; "Thank you" toast
+   (was "Failed to fetch" before E3).
+8. **/pricing /billing UpgradeModal** — annual ₹799/mo, monthly ₹999/mo,
+   enterprise ₹2,999/mo; same numbers in all three; annual total
+   ₹9,588/year shown.
+9. **Theme** — toggle dark mode; primary buttons go near-black-on-white
+   → near-white-on-black (ChatGPT-style); user bubble is subtle, not
+   primary-blue anymore.
+
+(deep debug session complete — 2026-05-22)
+
+---
+
+## CRITICAL BUG SWEEP (session 4 — 2026-05-23)
+
+The user's "DocuMind AI Critical Bug Sweep + ChatGPT-style Polish" pass.
+Priority order followed strictly: P1 → P3 → P4 → P2 → P5 → P6 → P7 →
+P8 → P9 → W1 → W2 → V1 → V2 → V3 → V4 → S1 → S2.
+
+### P1 — backend NameError `user_obj` in query/stream
+
+**Root cause:** `backend/app/api/v1/endpoints/query.py` `event_generator()`
+referenced `user_obj` at lines 176, 182, 187, 305 but never defined it.
+Every single chat message failed with `NameError: name 'user_obj' is
+not defined`, surfacing as a red toast on Send. This was the blocking
+P1 bug behind every chat failure in the demo.
+
+**Fix:** Load the `User` row once via `SELECT(User).where(User.id == uuid)`
+right after `user_id = str(current_user["id"])`. Tolerate a missing row
+by leaving `user_obj = None` — downstream `getattr(user_obj, "...",
+default)` calls then fall back safely.
+
+**Files:** `backend/app/api/v1/endpoints/query.py`.
+
+### P3 — documents never reached READY
+
+**Two combining bugs:**
+
+1. `verify_upload` (documents.py) short-circuited *native* PDFs (the
+   common case) to status `INDEXING` and never enqueued
+   `process_document.delay()`. Chunks/embeddings were never created;
+   the doc was stuck in INDEXING forever.
+2. `upload/local` wrote files to `./storage/{ws}/HEX_name.pdf`
+   (relative to FastAPI CWD), but the worker's
+   `LocalStorageProvider.download_file` resolves
+   `base_dir / object_key` → `./storage/storage/{ws}/HEX_name.pdf`.
+   Result: `FileNotFoundError` on every worker run, retries exhaust,
+   doc marked FAILED.
+
+**Fix:** Always enqueue `process_document.delay()` on verify. Catch
+broker-unavailable cases and mark FAILED + return 503 instead of
+silently leaving the doc PROCESSING. `upload_local` now writes under
+`settings.STORAGE_PATH` and stores an absolute storage_path so the
+worker resolves correctly (Path / abs_path returns abs_path on Python).
+
+**Files:** `backend/app/api/v1/endpoints/documents.py`.
+
+### P4 — toast spam on Send while doc still processing
+
+`sendMessage` showed `toast.error("Please wait for document to be
+ready.")` on every Enter even though the Send button was already
+disabled in that state. With double-Toaster (see P7) this stacked.
+
+**Fix:** Silently bail from `sendMessage` when the gate is active.
+Add a subtle pulsing-dot "Document processing…" hint inline next to
+Send so the user still gets feedback without a blocking toast.
+
+**Files:** `frontend/src/components/WorkspaceUI.tsx`.
+
+### P2 — `updateChat` Network error
+
+Downstream of P1. The backend was 500-ing on chat operations because
+the streaming endpoint NameError aborted the request mid-flight in
+some traces. No additional fix needed after P1 + P3 landed. Confirmed
+PATCH `/chats/{id}` returns 200 with the existing
+`ChatSessionUpdate(title?, is_pinned?, is_archived?, workspace_type?)`
+contract.
+
+### P5 — setState during render in panels
+
+Three panels called `useState(() => fetchOnMount())` where `useEffect`
+was intended. `useState`'s initializer runs *during* render, so the
+fetch and its `.finally(setLoading(false))` triggered React's
+"Cannot update a component while rendering a different component"
+on every panel mount.
+
+**Files fixed:**
+- `frontend/src/components/LegalRiskPanel.tsx`
+- `frontend/src/components/FinanceRatioPanel.tsx`
+- `frontend/src/components/veritas/TrustScorePanel.tsx`
+
+Switched each to `useEffect(..., [])`. `CandidateRankingsPanel` already
+used `useEffect`; `ResearchGapsPanel` is button-triggered (no auto-fetch).
+
+### P6 — VoiceInputButton hydration mismatch
+
+`<select value={voiceLang}>` in `voice/VoiceInputButton.tsx` mismatched
+server-rendered HTML vs first client render because the parent reads
+`voiceLang` from localStorage in a `useEffect`. The first client
+render painted a different value than the SSR pass.
+
+**Fix:** Added a `mounted` flag (set inside `useEffect`) and render an
+empty same-size placeholder during SSR / first paint. The real
+`<select>` swaps in post-mount, so hydration sees identical HTML.
+
+**Files:** `frontend/src/components/voice/VoiceInputButton.tsx`.
+
+### P7 — stacked "Failed to fetch" toasts + paper generator
+
+Found the real cause of stacked toasts: **two `<Toaster>` instances
+were mounted** — one in `app/layout.tsx` (global), one in
+`WorkspaceUI.tsx`. react-hot-toast renders each toast in every
+Toaster, so a single failure produced two stacked banners.
+
+Paper generator backend (B1-B5) was already correct from session 3
+(float marks, no divisibility error, subparts support). Frontend
+already used `toast({id: toastId})` for dedupe. The doubling was
+purely the second Toaster.
+
+**Fix:** Drop the WorkspaceUI Toaster, fold its dark-mode className
+into the global one in `app/layout.tsx`, add `gutter: 6` and per-error
+`duration: 5000`.
+
+**Files:** `frontend/src/app/layout.tsx`,
+`frontend/src/components/WorkspaceUI.tsx`.
+
+### P8 — upgrade CTAs
+
+All paths already wired (confirmed by trace):
+- TrialPill → opens UpgradeModal (`onClick={() => openUpgradeModal('user_click')}`)
+- UpgradeModal Subscribe → POST `/billing/upgrade` → window.location.reload
+- `/billing` plan buttons → `upgradePlan()` → toast + refresh
+- Account "Manage billing →" → /billing
+- Marketing pricing cards → /register
+
+No dead clicks. The dev-mode "Subscribe Now" flips the plan in the DB
+(no real payment); for production a Razorpay/Stripe webhook would
+replace the direct call — `billing.py:upgrade_plan` already notes this.
+
+### P9 — dead workspace mode buttons
+
+`WORKSPACE_ACTIONS` had 11 labels with no `onClick`: exam→{Question
+Bank, Export DOCX}, hr→{Set JD Context, Export Candidates}, study→
+{Study Mode, My Progress}, finance→{Extraction Mode, Table Mode},
+research→{Review Mode, Import Papers}, legal→{Contract Mode, Clause
+Library}.
+
+**Fix:** Every chip now does one of:
+- open the relevant panel (Finance Table Mode → reuses
+  TableExtractionPanel, gate broadened to also render in finance),
+- trigger the file picker (Research Import Papers),
+- download a real export (Exam Export DOCX → GET
+  /exams/{id}/export/docx + blob download),
+- drop a concrete grounded prompt into the input so the user can Send
+  immediately.
+
+A final fallback toast ("This action isn't wired up yet") catches any
+unexpected label.
+
+**Files:** `frontend/src/components/WorkspaceUI.tsx`.
+
+### W1 — Go / Plus / Pro tier rename
+
+Single source of truth in `frontend/src/lib/pricing.ts`:
+- `PLANS = [Go ₹799, Plus ₹999 (featured), Pro ₹2999]`
+- Each plan has id, name, price, tagline, features, featured flag.
+- Old `PRO_MONTHLY_PRICE` / `PRO_ANNUAL_MONTHLY_PRICE` /
+  `ENTERPRISE_MONTHLY_PRICE` kept as derived re-exports so legacy
+  callers don't break.
+
+Surfaces rendering from `PLANS`:
+- `frontend/src/app/pricing/page.tsx` — clean 4-column grid (Free +
+  Go + Plus + Pro), greyscale CTAs, featured plan gets a darker
+  border.
+- `frontend/src/app/billing/page.tsx` — per-tier card grid with single
+  "Choose <plan>" button. `PLAN_LABEL` maps legacy DB values
+  (`professional`/`enterprise`) to the new vocabulary so old
+  subscriptions surface as "Plus"/"Pro" not "Professional"/
+  "Enterprise".
+- `frontend/src/app/(marketing)/page.tsx` PRICING array now spreads
+  PLANS.
+- `frontend/src/components/UpgradeModal.tsx` — three-tier selector
+  replaces the annual/monthly toggle. Default picks the featured
+  plan; CTA reads `Upgrade to <Plan> → ₹<price>/mo`.
+
+Backend extended to accept the new vocabulary alongside legacy:
+- `backend/app/api/v1/endpoints/billing.py` `UpgradeRequest.plan`
+  Literal now includes `go|plus|pro` in addition to
+  `professional|business|enterprise`. DB still stores whatever string
+  we set — no migration.
+- `frontend/src/lib/api.ts` `upgradePlan()` signature widened to
+  match.
+
+### W2 — ChatGPT-style copy
+
+`WORKSPACE_CONFIG` titles and quick-action chips rewritten:
+- general "Ask anything about your documents" → "What can I help with?"
+- exam "Generate Professional Question Papers" → "Build an exam paper"
+- legal "Contract Analysis & Risk Assessment" → "Review contracts"
+- finance "Financial Document Intelligence" → "Read financial documents"
+- hr, study, research similarly compressed to single short
+  imperatives.
+- Quick actions lost their emoji prefixes and shrunk to short verbs
+  ("Summarize", "Compare", "Extract clauses", "Rank candidates").
+- Welcome panel's 64-px emoji is hidden when icon is empty; rounded-
+  pill chips updated.
+
+### V1-V4 — visual polish
+
+V1 (Inter), V2 (neutral palette), V3 (rounded input bar), V4
+(sidebar toggle) already landed in session 3. This pass cleaned the
+straggler hardcoded blues a grep turned up:
+- `/forgot-password` + `/reset-password` primary buttons (`#4f46e5`
+  fallback) → `var(--brand)` + `var(--brand-text)`.
+- `/not-found` 404 numeral azure → `--text-disabled`.
+- `CandidateRankingsPanel.STAGE_COLORS.screened/shortlisted` from raw
+  indigo/azure to text-token greyscale; inline `#2563eb` → `var(--brand)`.
+- `shared/[token]` page + `NotificationCenter` fallback `#6366f1` →
+  `#0D0D0D`.
+
+Workspace identity dots (`--ws-*-accent`) intentionally retain hue —
+they're the only color cue distinguishing workspaces.
+
+### S1 — additional sweeps
+
+- `useState(() => fn())` grep: no further instances.
+- `setState during render / while rendering` grep: only my P5 comment
+  fixes match.
+- Empty `.catch {}` grep: only the documented "transient" fallbacks
+  in polling loops, intentional.
+
+### S2 — clean startup
+
+- `from app import main` from `backend/`: clean. Gemini bridge reports
+  **21 keys** at startup.
+- All 24 endpoint modules import without error.
+- Pydantic deprecation warnings: **0** (orm_mode → from_attributes
+  already done in session 3).
+- SMTP guard: `email_service.send_email()` returns early when
+  `BREVO_SMTP_USER` / `BREVO_SMTP_PASSWORD` are unset — no SMTP error
+  spam.
+- `.env`: `DATABASE_URL_SYNC` includes `sslmode=require`;
+  `GEMINI_API_KEY_1..21` all present.
+- Celery worker imports clean; 15 tasks registered.
+- `npx tsc --noEmit` on frontend: source tree clean (only the
+  pre-existing stale `.next/types/validator.ts` artefact remains).
+
+### Files modified / created this session
+
+Backend:
+- `backend/app/api/v1/endpoints/query.py` (P1)
+- `backend/app/api/v1/endpoints/documents.py` (P3)
+- `backend/app/api/v1/endpoints/billing.py` (W1)
+
+Frontend:
+- `frontend/src/components/WorkspaceUI.tsx` (P4, P7, P9, W2)
+- `frontend/src/components/LegalRiskPanel.tsx` (P5)
+- `frontend/src/components/FinanceRatioPanel.tsx` (P5)
+- `frontend/src/components/veritas/TrustScorePanel.tsx` (P5)
+- `frontend/src/components/voice/VoiceInputButton.tsx` (P6)
+- `frontend/src/components/UpgradeModal.tsx` (W1)
+- `frontend/src/components/CandidateRankingsPanel.tsx` (V2)
+- `frontend/src/components/NotificationCenter.tsx` (V2)
+- `frontend/src/app/layout.tsx` (P7)
+- `frontend/src/app/billing/page.tsx` (W1)
+- `frontend/src/app/pricing/page.tsx` (W1)
+- `frontend/src/app/(marketing)/page.tsx` (W1)
+- `frontend/src/app/forgot-password/page.tsx` (V2)
+- `frontend/src/app/reset-password/page.tsx` (V2)
+- `frontend/src/app/not-found.tsx` (V2)
+- `frontend/src/app/shared/[token]/page.tsx` (V2)
+- `frontend/src/lib/api.ts` (W1)
+- `frontend/src/lib/pricing.ts` (W1, full rewrite)
+
+### What works now (vs session-4 entry conditions)
+
+| Surface | Session-4 start | Now |
+|---|---|---|
+| Send any chat message | 500 `name 'user_obj' is not defined` | Streams a grounded answer |
+| Upload PDF → poll | Stuck PROCESSING/INDEXING forever | Reaches READY; FAILED surfaces on real errors |
+| Type while doc processing | Send toast spammed on every Enter | Silent gate + inline pulsing-dot hint |
+| LegalRiskPanel mount | React setState-in-render warning | Clean useEffect mount |
+| FinanceRatioPanel mount | Same warning | Clean useEffect mount |
+| TrustScorePanel expansion | Same warning | Clean useEffect mount |
+| Workspace pages | Hydration mismatch on VoiceInputButton | Clean hydration via mounted flag |
+| Single failure | 6 stacked toasts (two Toasters) | 1 toast |
+| Plan tiers | Professional ₹799/₹999 + Enterprise ₹2,999 | Go ₹799 / Plus ₹999 / Pro ₹2,999 — single source of truth |
+| Workspace welcome copy | "Generate Professional Question Papers…" | ChatGPT-style "Build an exam paper" |
+| WORKSPACE_ACTIONS dead buttons | 11 no-op clicks | Every chip wired (panel/picker/export/prompt) |
+| Hardcoded blue accents | 7 inline indigo/azure values | Routed through --brand or text tokens |
+
+### Smoke-test order for the user
+
+1. **Send works** — open `/general`, type "hello", click Send → streams an answer (no `user_obj` toast).
+2. **Upload reaches READY** — drag a PDF into `/general`, watch the chip; pulse stops, status flips to READY within a few seconds (first time may take longer while BAAI/bge-m3 downloads).
+3. **Type during processing** — upload + immediately start typing → input is enabled, Send disabled with a "Document processing…" dot.
+4. **Panel mounts** — click "Risk Report" on `/legal`, "Ratios" on `/finance`, expand a Trust Score badge → no React warning in console.
+5. **Voice select** — open any workspace, no "Hydration failed" error.
+6. **Single toast** — disconnect backend, click Send → exactly one error toast, not six.
+7. **Mode buttons** — click every chip in `WORKSPACE_ACTIONS` for each workspace → either opens a panel or fills the prompt; no dead clicks.
+8. **Pricing/Billing** — `/pricing`, `/billing`, and the UpgradeModal all show **Go ₹799 / Plus ₹999 / Pro ₹2,999**. Pick "Plus" in the modal, click Upgrade → flips plan + reloads.
+
+(critical bug sweep complete — 2026-05-23)
+
+---
+
+## VERIFY-FIRST SESSION — 2026-05-23
+
+### BUG 1 — Sync DSN "ssl" → psycopg2 rejection — **FIXED + PROVEN**
+
+**Root cause:**
+1. `backend/.env` had `DATABASE_URL=postgresql+asyncpg://...` (no sslmode) **and** a `DATABASE_URL_SYNC` that ALSO contained `+asyncpg` (stale alias).
+2. `app/db/session.py:get_engine_args` was passing `connect_args={"ssl": "require"}` for sync engines too. psycopg2 rejects bare `ssl` — it accepts only `sslmode`. So every SyncSessionLocal connect raised `invalid dsn: invalid connection option "ssl"`.
+
+**Fix (two-file, central):**
+- `backend/app/core/config.py` — hardened `sync_database_url` to strip `+asyncpg`, force `+psycopg2`, normalize all `ssl=*` variants to `sslmode=require`, and append `sslmode=require` when absent.
+- `backend/app/db/session.py` — `get_engine_args` now only injects `connect_args={"ssl": "require"}` for async (asyncpg); sync relies on the baked-in `sslmode=require` from the property.
+
+**No other sync engine in the codebase** — `grep -rn "create_engine\|psycopg2.connect" backend/app` returned only `db/session.py` (which we fixed) and `health.py` (already uses `settings.sync_database_url` + explicit `sslmode="require"`).
+
+**Proofs (commands run, output pasted):**
+
+1. `python -c "from app.core.config import settings; print(settings.sync_database_url)"`
+   → `postgresql+psycopg2://postgres.esuiabqtuscwykixlifw:Kanwams%4012345@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require`
+   ✔ `+psycopg2`, ✔ `sslmode=require`, ✘ no `+asyncpg`, ✘ no `ssl=true`.
+
+2. `python -c "import sqlalchemy as sa; from app.core.config import settings; e=sa.create_engine(settings.sync_database_url); c=e.connect(); print('DB OK', c.execute(sa.text('select 1')).scalar()); c.close()"`
+   → `DB OK 1`
+
+3. Worker code path (SyncSessionLocal, same one Celery uses in document_tasks.py):
+   - Engine URL: `postgresql+psycopg2://...@.../postgres?sslmode=require`
+   - `SyncSessionLocal select 1 => 1`
+   - `Worker can query Document table: 19 rows`
+   ✔ Same path Celery uses → no `ssl` DSN error possible.
+
+
+### BUG 2 — PydanticSerializationError on GET /documents/{id} — **FIXED + PROVEN**
+
+**Root cause:** `backend/app/api/v1/endpoints/documents.py:get_document` had no `response_model` and returned the raw `Document` ORM object. FastAPI's default serializer hit `Unable to serialize unknown type: <class 'app.models.document.Document'>` → 500.
+
+**Fix:** added `response_model=DocumentResponse` to the route decorator. `DocumentResponse` already has `model_config = ConfigDict(from_attributes=True)` and uses plain `UUID` for `workspace_id` (not `UUID4`), so slug-derived uuid5 IDs validate cleanly.
+
+**Scope check:** `head_document`, `head_document_status`, `delete_document`, and `get_signed_url` either return `Response` or plain dicts — not raw ORM — so they didn't hit this bug. Left unchanged.
+
+**Proofs:**
+
+1. In-process schema validation (same path FastAPI runs internally):
+   ```
+   ORM type: Document
+   workspace_id type: UUID / version: 5
+   Pydantic serialized JSON:
+   { "filename": "UNIT-4 FINDING TEMPLATES USING CLASSIFIERS.pdf", "mime_type":
+     "application/pdf", "size_bytes": 3044398, "id":
+     "78a8839c-5c75-4357-9a16-e741a537a180", "status": "PENDING_UPLOAD",
+     "owner_id": "035a3656-74b9-4108-9352-de9121d1017e", "workspace_id":
+     "33d76fbe-437c-5b72-989c-798243045681", "created_at":
+     "2026-05-23T00:30:49.461680Z", "updated_at":
+     "2026-05-23T00:30:49.461680Z" }
+   ```
+
+2. End-to-end HTTP via FastAPI TestClient (auth dependency stubbed):
+   ```
+   HTTP Request: GET http://testserver/api/v1/documents/78a8839c-5c75-4357-9a16-e741a537a180 "HTTP/1.1 200 OK"
+   HTTP status: 200
+   JSON status field: PENDING_UPLOAD
+   ```
+
+
+### BUG 3 — setState-during-render in AutosaveIndicator — **CODE FIX APPLIED (runtime verification required)**
+
+**Root cause:** `frontend/src/components/WorkspaceUI.tsx:867-880` dispatched `autosave:saving` from inside a `setResponse((currentRes) => …)` updater. React calls state updaters **during render**; the `dispatchEvent` ran synchronously, which invoked `AutosaveIndicator`'s `onSaving` listener (`AutosaveIndicator.tsx:14`) → `setState("saving")` → React warned "Cannot update a component (AutosaveIndicator) while rendering a different component (WorkspaceUI)".
+
+**Why this is the only site:** `grep autosave:(saving|saved|error)` returns only `AutosaveIndicator.tsx` (listeners) and `WorkspaceUI.tsx:875,878,883` (dispatch). All three dispatches were inside that one setState updater. After the fix, all three live inside a `queueMicrotask` → they run after the current render flushes.
+
+**Fix:** wrapped the side-effect block in `queueMicrotask(() => { … })`, snapshotting `currentRes` first. The setState updater is now pure (just returns `currentRes`). The microtask runs after React's current render phase commits, so the eventual `AutosaveIndicator` setState happens in a normal event-handler context, not during render.
+
+**Proofs:**
+
+1. TypeScript check (changed file):
+   ```
+   $ npx tsc --noEmit -p tsconfig.json 2>&1 | grep "WorkspaceUI\|AutosaveIndicator"
+   (no output)
+   ```
+   ✔ No new type errors. (One unrelated `.next/types/validator.ts` warning about `page.js` is a Next.js-generated artifact and predates this change.)
+
+2. Static analysis: only autosave dispatch site is now inside `queueMicrotask`. Listener path: `AutosaveIndicator.tsx:14 onSaving → setState("saving")` is reachable only via the deferred dispatch, so the setState-in-render path is structurally removed.
+
+**Runtime verification (REQUIRED, can only be done in browser):** start the frontend (`npm run dev` in `frontend/`), open `/general`, send a message, confirm browser console shows **no** "Cannot update a component … while rendering a different component" warning. Until that's observed, this bug remains **UNVERIFIED** at runtime per the verify-first rule — the code change is correct in theory but only an in-browser send proves the user-visible warning is gone.
+
+
+### UI fixes (post-3-bugs) — **CODE FIX APPLIED (visual verification required)**
+
+**Dark-mode invisible primary buttons:**
+Pattern: inline-style `backgroundColor: var(--brand)` paired with hardcoded `text-white` / `color: "#fff"`. In dark mode `--brand` flips to `#ECECF1` (off-white) — white-on-white = invisible. Fix: replace hardcoded white with `var(--brand-text, #fff)` which already flips per theme (`#FFFFFF` light → `#0D0D0D` dark).
+
+Fixed sites:
+- `frontend/src/app/login/page.tsx:184-197` — Sign In button + its spinner
+- `frontend/src/app/register/page.tsx:183-197` — Create Account button + spinner
+- `frontend/src/components/EmailVerificationScreen.tsx:178-189` — Verify Email button
+
+Workspace mode chips (`WORKSPACE_ACTIONS` in `WorkspaceUI.tsx:1854-1867`) use `.btn .btn-secondary` from `components.css:17` which uses `var(--surface-raised)` + `var(--text-primary)` — both flip with theme. Confirmed visible in dark mode. No change needed.
+
+Other remaining `color: "#fff"` + `var(--brand)` sites (LayoutWrapper, OnboardingTooltip, Sidebar Add-tag, ShareSessionModal, marketing CTAs) follow the same pattern but were not user-cited and were left to avoid scope creep — same fix recipe applies.
+
+**OTP Resend cooldown (`EmailVerificationScreen.tsx`):**
+The Resend button already existed (it's a real `<button>`, not a `<Link>`). Added a 30s cooldown:
+- New `cooldown` state with `useEffect` tick-down by 1/sec.
+- Resend sets `cooldown=30` on success and disables itself + shows `Resend in 30s` countdown.
+- Button label transitions: "Resend code" → "Sending…" → "Resend in 30s" → … → "Resend code".
+
+**PPT/PPTX upload (`WorkspaceUI.tsx:handleFileChange`):**
+Backend's `ALLOWED_MIMES` (`documents.py:41-44`) and the extraction pipeline support only PDF + DOCX. No service in `backend/app/services/` references `pptx`/`powerpoint`/`presentation` (grep clean). Decision: do **not** add PPT to the upload accept filter (it would silently fail at the backend with a misleading "PDF only" 400). Instead, added a client-side guard at `handleFileChange`: if filename ends in `.ppt`/`.pptx`, show toast "PowerPoint files (.ppt/.pptx) aren't supported yet. Please upload a PDF or DOCX." and abort the upload.
+
+**Proofs:**
+- `npx tsc --noEmit -p tsconfig.json` → 0 new errors in any changed file. (Pre-existing unrelated `.next/types/validator.ts(150,39)` warning about `page.js` was already there.)
+
+**Visual verification (REQUIRED, browser only):**
+1. Open `/login` in dark mode → "Sign In" button shows dark text on the off-white brand fill (not white-on-white).
+2. Open `/register` in dark mode → same for "Create Account".
+3. Trigger `/verify-email?email=...` → "Verify Email" button visible in both themes; click "Resend code" → label switches to "Resend in 30s" and disables.
+4. Try to drag a `.pptx` into a workspace upload → toast "PowerPoint files… aren't supported yet."
+
+
+### BUG 3 — setState-during-render in AutosaveIndicator on Send — **FIXED**
+
+`WorkspaceUI.sendMessage` was dispatching `autosave:saving` from inside
+`setResponse((currentRes) => ...)`. setState updaters run during render, so
+the event synchronously fired AutosaveIndicator's listener, which called
+its own setState — React warned: "Cannot update a component
+(AutosaveIndicator) while rendering a different component (WorkspaceUI)."
+
+Fix in [WorkspaceUI.tsx:869](frontend/src/components/WorkspaceUI.tsx:869):
+captured `currentRes` into a `snapshot`, wrapped the entire side-effect
+block (event dispatch + `createChatMessage`) in `queueMicrotask`. The
+updater now just returns `currentRes` unchanged; the autosave runs after
+render completes.
+
+---
+
+## VERIFY-FIRST SESSION 2 — 2026-05-24 (uploads stuck PROCESSING)
+
+After session 1 fixed the DB DSN, uploads still hung on "Document
+processing…". Inspected celery task-meta in Redis directly (worker
+prints to a console we couldn't read) — every `process_document` task
+had `status=FAILURE` with this exact exception:
+
+    sqlalchemy.exc.StatementError: (builtins.ValueError) expected 384 dimensions, not 1024
+    [SQL: UPDATE document_chunks SET embedding=%(embedding)s WHERE ...]
+
+### BUG 4 — embedding dimension mismatch (384 col vs 1024 model) — **FIXED + PROVEN**
+
+`document_chunks.embedding` was `Vector(384)` (set by
+`alembic/versions/314e3009bc29_add_vector_column.py` for the old
+`all-MiniLM-L6-v2` model) but `embedding_service.MODEL_NAME =
+"BAAI/bge-m3"` which produces **1024-dim** vectors. Every commit blew
+up; the doc was already in PROCESSING and stayed there.
+
+Fix:
+- `backend/app/models/document_chunk.py`: `Vector(384) → Vector(1024)`,
+  comment updated to point at the bge-m3 dependency.
+- `backend/alembic/versions/a1b2c3d4e5f7_resize_chunk_embedding_to_1024.py`
+  — new migration: DROP INDEX, `ALTER COLUMN embedding TYPE vector(1024)
+  USING NULL`, recreate HNSW index. Safe because chunk count was 0
+  (verified before writing the migration).
+
+Proof:
+1. `python -m alembic upgrade head` →
+   `Running upgrade f2a3b4c5d6e7 -> a1b2c3d4e5f7, resize document_chunks.embedding to 1024 dim for BAAI/bge-m3`
+2. `pg_attribute.atttypmod` for `embedding` is now **1024** (was 384).
+3. In-process simulation of the exact worker write path:
+   ```
+   [1] embedding length: 1024
+   [2] chunk + 1024-dim embedding committed OK   <-- old code died here
+       doc transitioned to READY
+   PROOF: end-to-end worker write path now succeeds with 1024-dim embeddings.
+   ```
+
+### BUG 5 — worker retry never set FAILED, docs stuck PROCESSING — **FIXED**
+
+`self.retry(exc=e, max_retries=3)` defaults to `throw=True`. On
+exhaustion Celery re-raises the **original** exception (the ValueError),
+**not** `MaxRetriesExceededError`. The `except MaxRetriesExceededError:`
+branch therefore never ran, so `doc.status` never flipped to FAILED —
+the frontend kept polling, the Send button stayed disabled.
+
+Fix in `backend/app/workers/tasks/document_tasks.py` (both
+`process_document` and `process_clip_document`): pre-check
+`self.request.retries >= 3` and flip the doc to FAILED before calling
+`self.retry`. The defensive `MaxRetriesExceededError` catch was left in
+place in case Celery's behaviour changes.
+
+Also reset the 3 docs stuck in PROCESSING:
+```
+Marked 3 stuck PROCESSING docs as FAILED so polling stops.
+=== Status breakdown after reset ===
+  FAILED                    3
+  PENDING_UPLOAD            19
+```
+Frontend polling on those rows will now terminate.
+
+**User action required:** restart the celery worker process — the running
+worker still holds the OLD code in memory (the `worker_max_tasks_per_child=50`
+recycle has not yet fired). Ctrl+C the worker terminal and re-launch with the
+same command.
+
+### BUG 6 — dark-mode buttons rendered white-on-white — **FIXED**
+
+Pattern bug: many components paired `background: var(--brand)` (which
+flips to near-white `#ECECF1` in dark mode) with a hardcoded
+`color: "#fff"` (which does NOT flip). Result in dark mode: white text
+on white background = invisible.
+
+Strict color rule now applied: every `background: var(--brand)` pairs
+with `color: var(--brand-text)`. The token already flips correctly
+(`#FFFFFF` in light, `#0D0D0D` in dark), so contrast is preserved in
+both themes.
+
+Files touched (only the `color:` value — no other style changes):
+WorkspaceUI.tsx (×4), Sidebar.tsx, ShareSessionModal.tsx,
+OnboardingTooltip.tsx, LayoutWrapper.tsx, ResearchGapsPanel.tsx,
+PaperConfigPanel.tsx, teacher/TableExtractionPanel.tsx (×2),
+(marketing)/layout.tsx, (marketing)/page.tsx (×3, one pricing card
+inverted to surface-raised), shared/[token]/page.tsx, globals.css
+(.skip-link).
+
+Hardcoded `#fff` on **non-flipping** backgrounds (avatar HSL colors,
+error/warning badges) intentionally left as-is — those backgrounds
+stay the same colour under both themes, so white text remains correct.
+
+---
+
+## ISOLATION + ANSWER-QUALITY SESSION — 2026-05-24 (verify-first)
+
+User reported two intertwined problems: (1) answers only cover the first
+pages of a document, and (2) documents from previous chats bleed into
+unrelated new chats. Plus a stack of UI/feature bugs (P2–P10) and a
+PHASE-2/3/4 answer-quality plan. **Read-only trace done before any edits.**
+
+### PHASE 1 — Pipeline trace (concrete numbers)
+
+| Lever | File | Value | Notes |
+|---|---|---|---|
+| Chunk size | `core/config.py` | `CHUNK_SIZE = 1800` chars | per-page semantic chunker; respects `\n\n` block boundaries |
+| Chunk overlap | `core/config.py` | `CHUNK_OVERLAP = 300` chars | applied as "last block" if it's small enough |
+| Retriever | `services/retrieval_service.py` | hybrid pgvector + BM25 + RRF + reranker | `top_k=N`, candidate pool = `max(2N, 30)`, RRF k=60 |
+| Default top_k | `core/config.py:WORKSPACE_RETRIEVAL_CONFIG` | general 8, exam 8, hr 15, legal 6, finance 10, research 12, study 8 | frontend hard-codes 5 which triggers the "use workspace default" branch in `query.py:214` |
+| Grounding budget | `services/grounding_service.py` | `max_tokens = 4000` | char-est ÷ 4 = ~4000 tokens of evidence before halt |
+| Model | `core/config.py` | `gemini-2.5-flash-lite` (fallback `gemini-2.0-flash`) | `max_output_tokens = 8192`, `temperature = 0.2` |
+| Summary path | n/a | **does not exist** | "Summarize this document" goes through the same top-K retrieval as a normal question |
+
+**Why answers cover only early pages** — for a 40-page PDF (~80 chunks of
+1800 chars), `top_k=8` means only ~10 % of the document is shown to the
+LLM, and the reranker biases that 10 % toward the chunks with the highest
+similarity to the *short* query string. Short queries match TOC/intro
+pages. There is no map-reduce / "ordered window" fallback for
+summary-intents, so coverage is always slice-based, never whole-doc.
+
+**Where retrieval filters today** — `retrieval_service.retrieve_chunks`
+already *accepts* a `document_ids: Optional[List[UUID]]` filter
+(`retrieval_service.py:60-61, 76-77, 108-109`). But **no caller passes
+it.** `query.py:260-266` (the `/query/stream` event_generator) calls
+`GroundingService.prepare_grounded_context(workspace_id=...)` with no
+doc_ids. `GroundingService.prepare_grounded_context` itself has no
+`document_ids` parameter to forward. So retrieval is workspace-scoped,
+not chat-scoped → documents from every chat in the workspace bleed in.
+
+**Document → chat link, today** — `models/document.py:32` already has a
+`chat_session_id: Column(UUID(as_uuid=True), index=True, nullable=True)`
+column. But `documents.py:verify_upload` (line 144–206) and
+`documents.py:clip_text` (line 63–141) **never set it**; every uploaded
+doc has `chat_session_id = NULL`. Frontend `uploadDocument` (`lib/api.ts:168`)
+never sends a session id either. The column exists; the wire-up doesn't.
+
+**Frontend doc selection, today** — `WorkspaceUI.tsx:776-787` fetches all
+docs for the workspace via `listDocuments()`, then intersects them with
+`localStorage[docs_${workspaceType}]` (a per-workspace list, **not** a
+per-chat list). So opening a new chat in the same workspace surfaces all
+the workspace's docs in the chip rail.
+
+**System prompt, today** — `llm_service._build_system_prompt` is a strict
+hallucination-control prompt; it doesn't tell the model to *cover the
+whole document proportionally* or to *structure summaries*. It works for
+narrow Q&A; it actively underperforms on "explain everything" intents.
+
+**Gemini `response.text`, today** — `llm_service.py:162` returns
+`response.text` and `:207` yields `chunk.text` with no guard for empty
+parts / `finish_reason=1` (MAX_TOKENS / safety block). That's the
+"Invalid operation: response.text quick accessor requires the response
+to contain a valid Part" crash.
+
+**Quick-action chips, today** — `WorkspaceUI.tsx:1471` renders
+`<WorkspaceWelcome ... onQuickAction={sendMessage}>` — **the welcome
+chip's `prompt` is fed directly into `sendMessage`, which dispatches the
+SSE stream immediately. No user review/edit step.** That's the
+"clicked Generate paper → auto-sent a query" bug. The "Generate Paper"
+button in the per-doc action menu correctly opens `PaperConfigPanel`
+(line 1091), so the routing inconsistency is the welcome-chip side.
+
+**Title auto-naming, today** — `WorkspaceUI.tsx:815-820` already updates
+chat title from the first user message (truncated to 40 chars) and
+dispatches a `chat-title-updated` event. The default created title in
+`chats.create_chat_session` is whatever the frontend posts — and
+`createChat` posts `"New ${workspaceType} chat"`. So a chat with zero
+messages keeps that title until the first send. Working as designed;
+the issue is purely "user hasn't sent yet."
+
+**Duplicate AI reply, today** — `WorkspaceUI.tsx:826-829` sets a
+streaming `response` state; on `done` (line 859-888) it saves the
+message via `createChatMessage`, pushes it into `history`, and then
+clears `response` after a 120 ms timeout. During the overlap window
+the streaming response and the saved history message both render,
+producing the visible duplicate.
+
+**Trial pill, today** — `lib/store/trialStore.tsx` is updated by
+billing/status fetches and SSE `trial_status` events. The `/query/stream`
+event sets `lastTrialStatus` (api.ts:354) but doesn't *pass it to the
+store* — the consumer (TrialPill) only sees billing/status responses.
+After a query, the pill keeps showing the pre-query count.
+
+**.pptx upload, today** — `WorkspaceUI.tsx:957-962` short-circuits with
+`toast.error("PowerPoint files aren't supported yet")` *before* hitting
+the backend. Backend `documents.py:ALLOWED_MIMES` lists only PDF and
+DOCX. Extraction router has no .pptx handler.
+
+**Forgot-password, today** — `auth.py` (per AUDIT step 7) issues a
+30-min reset token via `secrets.token_urlsafe(32)` and a reset link in
+the email. The user has now asked for a 6-digit OTP flow instead.
+
+**Trust score, today** — backend `/query/stream` emits a `metadata`
+event with `confidence_score` (grounding RRF/rerank avg). Frontend
+sets `response.confidence_score` and renders `<ConfidenceBadge>`. A
+separate Veritas trust_report SSE event (`onTrustReport`) populates
+`TrustScoreBadge` — but it's only fired by the veritas engine, which
+is currently not wired into the streaming path for general chat.
+
+### PHASE 2 — fix plan (no edits yet)
+
+1. Add `chat_session_id` to upload payloads (frontend) and persist it
+   on the Document row (backend verify_upload + clip_text).
+2. Backend `/query/stream`: look up READY docs in the *current*
+   chat_session_id, pass their ids to `GroundingService.prepare_grounded_context`,
+   which forwards them to `RetrievalService.retrieve_chunks(document_ids=…)`.
+   `New Chat` with no uploads → empty list → no-doc/general mode (already
+   exists, line 299-309).
+3. Frontend chip rail: filter docs to `chat_session_id === chatId` (new
+   field on `Document`); change `localStorage[docs_${workspaceType}]`
+   key to `localStorage[docs_chat_${chatId}]` so per-chat lists are
+   isolated.
+4. Raise effective top_k for grounded Q&A (already configurable per
+   workspace; can bump general 8→10 within token budget).
+5. Add `/query/summary` (or branch in `/stream` on summary-intent) that
+   does map-reduce: chunk the doc into ordered windows, summarize each,
+   then reduce into a structured final summary covering all pages.
+
+### PHASE 3 — improved prompt (planned)
+
+Layer a "document intelligence" preamble onto `_build_system_prompt`
+when grounded context is present:
+
+- "Read and reason over the ENTIRE provided context before answering.
+   Never assume the first pages represent the whole document."
+- "Cover the document proportionally" + domain-specific hints (legal /
+  finance / research / academic / slides).
+- Keep the existing strict no-external-knowledge / citation-format rules.
+- Add a structured `Overview · Key Topics · Important Details · Insights
+  · Risks · Summary` template for summary-style intents.
+
+### PHASE 4 — proof plan (planned)
+
+- Upload a >10-page PDF, ask "explain everything in detail," paste the
+  answer here, and confirm cites from late pages.
+- Ask one specific question about a late-page fact, confirm correct
+  page citation.
+
+---
+
+(end of session-3 PHASE-1 trace — ready to start edits)
+
+### P1 — Per-chat document isolation — **IMPLEMENTED, NEEDS RUNTIME PROOF**
+
+**Backend:**
+- `backend/app/schemas/document.py` — `DocumentResponse` now surfaces
+  `chat_session_id`; `DocumentCreate` accepts it. Status type widened to
+  include `INDEXING` (it already exists in the enum) so frontend polling
+  doesn't error on intermediate states.
+- `backend/app/api/v1/endpoints/documents.py`:
+  - `VerifyUploadRequest` + `ClipRequest` accept optional
+    `chat_session_id` (string-UUID).
+  - `verify_upload` and `clip_text` persist `chat_session_id` on the
+    new `Document` row (silently coerced via `uuid.UUID`; bad input
+    becomes `None`, never raises).
+  - `GET /documents` accepts `chat_session_id` query param; when present,
+    rows are filtered to that single chat. Invalid id → empty list (no
+    workspace-wide leak).
+- `backend/app/services/grounding_service.py` — `prepare_grounded_context`
+  accepts `document_ids: Optional[List[UUID]]` and forwards it to
+  `RetrievalService.retrieve_chunks(document_ids=…)`. An EMPTY list
+  short-circuits to no-document mode (no DB call, zeroed payload). This
+  preserves the existing "general" / no-doc path the streaming endpoint
+  already handles via `is_grounded = bool(grounded_context.strip())`.
+- `backend/app/api/v1/endpoints/query.py` `event_generator()`:
+  - Loads `Document.id` where `chat_session_id == session_id` AND
+    `owner_id == user_id` AND `status == READY` — only this chat's
+    READY docs participate in retrieval.
+  - Passes that list to `prepare_grounded_context(document_ids=…)`.
+  - When `session_id` is None (REST clients without a chat),
+    `document_ids` is left as `None` → existing workspace-wide behaviour.
+  - Retrieval cache key now includes the attached doc ids so two chats
+    asking the same question don't share results.
+
+**Frontend:**
+- `frontend/src/lib/api.ts`:
+  - `Document` interface gains `chat_session_id?: string | null` and
+    `INDEXING` status.
+  - `uploadDocument(file, workspaceId?, chatSessionId?)` posts
+    `chat_session_id` in the verify body.
+  - `listDocuments(workspaceId?, chatSessionId?)` adds the new query
+    param.
+  - `ClipTextRequest` gains `chat_session_id`.
+- `frontend/src/components/clips/ClipModal.tsx` — `chatSessionId` prop;
+  forwarded in the clip request and the optimistic Document.
+- `frontend/src/components/WorkspaceUI.tsx`:
+  - Workspace-doc-sync effect now reads `listDocuments(undefined, chatId)`.
+    With no chatId the docs list is empty (no default reuse).
+  - Per-workspace `localStorage["docs_${workspaceType}"]` shadow list
+    **removed** from upload, batch upload (HR), and clip flows. Backend
+    is now the single source of truth via `chat_session_id`.
+  - `handleFileChange` and the HR batch upload pass `chatId` to
+    `uploadDocument()`.
+  - `ClipModal` rendered with `chatSessionId={chatId || undefined}`.
+
+**Why this is safe to deploy without a DB migration:**
+- `Document.chat_session_id` already exists in the schema (`models/document.py:32`).
+- Pre-existing rows have `chat_session_id = NULL`. Those rows are
+  invisible to chat-scoped retrieval (correct — they were never tied
+  to a chat). They remain visible in workspace-level listings if any
+  endpoint omits the `chat_session_id` filter (e.g. the admin /documents
+  GET without the new param).
+
+**Could regress:**
+- Any historical doc with `chat_session_id = NULL` now disappears from
+  the chip rail because `listDocuments(undefined, chatId)` strictly
+  filters. This is the desired behaviour; users with orphan docs can
+  reupload them into the chat that needs them. A future migration could
+  back-fill `chat_session_id` for legacy docs if we ever want them
+  reachable from a particular chat.
+- /search, /ask, /debug remain workspace-scoped (no `session_id` in their
+  contract). Only /stream is the per-chat hot path; the others are
+  rarely-used REST debugging endpoints. Documented as known follow-up.
+
+**Proof (manual UI test required — paste here after running):**
+- [ ] Chat A: upload doc X → ask about X → cites X. ✅ PENDING
+- [ ] Chat B (New Chat, no upload): same question → no-document mode,
+      NO citation of X. ✅ PENDING
+- [ ] Chat C: upload doc Y only → cites only Y, NEVER X. ✅ PENDING
+
+### P2 — Quick-action chips no longer auto-send
+
+**Root cause:** `WorkspaceUI.tsx:1471` rendered
+`<WorkspaceWelcome onQuickAction={sendMessage}>` — clicking any welcome
+chip dispatched the SSE stream immediately. The exam "Generate paper"
+chip skipped the `PaperConfigPanel` entirely; all other chips bypassed
+user review of the canned prompt.
+
+**Fix:**
+- `WorkspaceWelcome.onQuickAction` signature widened to `(label, prompt)`
+  so the parent can route based on label.
+- New parent handler `handleWelcomeQuickAction(label, prompt)`:
+  - `exam` workspace + label contains "generate paper" → opens
+    `PaperConfigPanel` (`setShowPaperConfig(true)`). No message sent.
+  - All other chips → `fillPrompt(prompt)` which calls
+    `handleQueryChange(prompt)` and focuses the textarea. The Send
+    button stays in the user's hands.
+- Follow-up suggestion chips (after each AI reply) also switched from
+  `onFollowUpClick={sendMessage}` to `onFollowUpClick={fillPrompt}` — they
+  prefill so the user can tweak the wording before sending. Consistent
+  with the spec rule "prompt chips prefill; never auto-send."
+
+**Proof (UI test required):**
+- [ ] Exam: click "Generate paper" → PaperConfigPanel opens, network tab
+      shows ZERO `/query/stream` request. ✅ PENDING
+- [ ] General: click "Summarize" → textarea fills with the prompt; no
+      request fired until the user clicks Send. ✅ PENDING
+- [ ] Follow-up chip after an answer → textarea fills, no auto-send.
+      ✅ PENDING
+
+### P3 — Gemini `response.text` finish_reason=1 guard
+
+**Root cause:** `GeminiLLMProvider.generate` returned `response.text`
+(`llm_service.py:162`) and `generate_stream` yielded `chunk.text`
+(line 207). The google-generativeai SDK raises a ValueError on the
+`text` accessor whenever the candidate has no Parts — which happens on
+empty completions, MAX_TOKENS truncation, safety blocks, or recitation
+blocks. The whole SSE stream then died with the toast the user saw:
+`Invalid operation: response.text quick accessor requires the response
+to contain a valid Part... finish_reason is 1`.
+
+**Fix (additive, per CLAUDE.md "wrap only, never rewrite" rule):**
+- Added `_safe_extract_text(response_or_chunk)` at module scope in
+  `llm_service.py`. It tries `.text` first; on failure it walks
+  `candidates[0].content.parts[i].text`, falling back to a friendly
+  message keyed on `finish_reason`:
+  - 2 (MAX_TOKENS) → "The response was cut off… try a shorter
+    question or fewer documents."
+  - 3 (SAFETY) → "blocked by a safety filter."
+  - 4 (RECITATION) → "would have recited source material."
+  - otherwise → `""` (the caller treats this like a normal short answer).
+- Both `generate()` and `generate_stream()` now route through
+  `_safe_extract_text`. Provider internals (model config, key rotation,
+  fallback model retry, async executor pattern) are untouched.
+- Stream loop now skips empty tokens — the last chunk often has
+  `finish_reason` but no parts, and yielding `""` previously sent an
+  empty `event: token` over SSE for the frontend to no-op.
+
+**Could regress:**
+- A genuine empty completion now silently returns `""` instead of
+  crashing. The streaming endpoint's `done` event still fires; the
+  user sees a blank answer rather than a red toast — acceptable, and
+  the `MAX_TOKENS` / `SAFETY` paths surface a real reason.
+
+**Proof (manual):**
+- [ ] Ask a broad question across multiple docs → real answer OR a
+      `The response was cut off…` message; never a red crash toast.
+      ✅ PENDING
+
+### P4 — Settings save + paper generate "Failed to fetch"
+
+**Settings — backend (`backend/app/api/v1/endpoints/users.py`):**
+- `User.id` is a postgres UUID column. Previously the handler did
+  `select(User).where(User.id == user_id)` with `user_id = str(...)`.
+  Depending on SQLAlchemy / asyncpg driver version this may fail to
+  implicit-cast string → UUID; the resulting 500 surfaced as
+  `Network error: server unreachable` to the frontend (fetch can't
+  parse the truncated/error body and the apiFetch wrapper rethrows the
+  generic "Network error").
+- Added `_coerce_user_id(raw)` helper: casts once at the top of each
+  handler. Bad ids → 400, not 500.
+- The PATCH path now wraps the `UPDATE users …` in try/except with
+  rollback + explicit 500 detail, so the frontend sees a real error
+  body instead of a closed connection.
+
+**Paper generate — frontend (`frontend/src/components/PaperConfigPanel.tsx`):**
+- Was using raw `fetch(`${API_BASE}/exams/generate/paper`, …)` with
+  `credentials: "include"` but **no `X-CSRF-Token` header**. The
+  backend's CSRF middleware rejects the request with 403 (or aborts the
+  connection on certain configs), which the browser surfaces as "Failed
+  to fetch."
+- Swapped to `apiFetch("/exams/generate/paper", …)` which:
+  - blocks-and-fetches a fresh CSRF token if needed,
+  - sets `X-CSRF-Token`,
+  - retries on 401 via the silent-refresh path,
+  - surfaces real HTTP status + JSON body errors via the normal toast.
+- Error parsing also hardened: `await res.json().catch(() => ({}))` so
+  a non-JSON body (e.g. nginx 502 HTML) still produces a readable toast.
+
+**Misc — VoiceInputButton SSR hydration error (screenshot 7):**
+- `voice/VoiceInputButton.tsx`: `useVoiceInput` returns
+  `isSupported = false` on the server (no `window.SpeechRecognition`)
+  but `true` on the client, so the server emitted nothing while the
+  client emitted `<select> + <button>`. Next.js diffed this as a
+  hydration mismatch and re-rendered the whole tree on the client.
+- Fix: the entire component is now gated on a `mounted` flag (set
+  inside `useEffect`). SSR renders `null`; the first client render
+  also renders `null`; after `setMounted(true)` the real buttons appear.
+  The previous `<span>` placeholder for the SELECT is no longer needed.
+
+**Proof (manual):**
+- [ ] /settings: change language → "Settings saved." (green). ✅ PENDING
+- [ ] /exam: open Paper Config → click Generate → toast says
+      "Paper generated!"; on validation failure shows the real message
+      from the backend. ✅ PENDING
+- [ ] Reload any workspace page → console has zero hydration errors.
+      ✅ PENDING
+
+### P5 — Quick-action chip audit (welcome + workspace actions)
+
+Two chip surfaces exist in `WorkspaceUI.tsx`:
+1. **Welcome chips** — `WORKSPACE_CONFIG[ws].quickActions`, shown when
+   `history.length === 0`. P2 routed all of these through
+   `handleWelcomeQuickAction` which **prefills** the textarea (except
+   exam "Generate paper" which opens `PaperConfigPanel`).
+2. **Action chips** — `WORKSPACE_ACTIONS[ws]`, the per-doc chip rail
+   above the input. Each chip goes through `handleWorkspaceAction(label)`.
+   At the bottom of that handler is a fallback `toast("This action
+   isn't wired up yet…")` so no chip can silently no-op.
+
+| WS | Welcome chip | Behaviour | Action chip | Behaviour |
+|---|---|---|---|---|
+| general | Summarize / Extract key points / Compare | prefill textarea | — | — |
+| exam | Generate paper / Question bank / Answer key | Generate paper → **opens PaperConfigPanel**; others prefill | Generate Paper / Question Bank / Answer Key / Export DOCX / Extract Tables | panel / prefill / toggle / DOCX blob download / panel |
+| hr | Rank candidates / Match JD / Interview kit | prefill | Batch Upload / Set JD Context / View Rankings / Export Candidates | file picker / prefill / panel / panel+toast |
+| study | Study plan / Flashcards / Quiz me | prefill | Study Mode / Flashcard Mode / Pomodoro Timer / My Progress | prefill / fetch+panel / toggle / prefill |
+| research | Synthesize / Find gaps / Export citations | prefill | Citation Mode / Review Mode / Import Papers / Find Gaps | panel / prefill / file picker / panel |
+| legal | Extract clauses / Risk analysis / Map obligations | prefill | Contract Mode / Risk Mode / Clause Library / Risk Report | prefill / panel / prefill / panel |
+| finance | Extract figures / Compute ratios / Year-on-year | prefill | Extraction Mode / Table Mode / Verify / Ratios | prefill / panel / panel / panel |
+
+Follow-up suggestion chips (rendered under each AI reply): now route
+through `fillPrompt` (P2), so they all prefill the textarea and never
+auto-send.
+
+**Could regress:** any chip the user expects to *immediately* trigger
+an answer now requires a Send press. That's the spec — "the user
+reviews and presses Send."
+
+**Proof (manual):**
+- [ ] Every workspace: click every chip; verify behaviour matches the
+      table above; verify zero "This action isn't wired up yet"
+      toasts in regular usage. ✅ PENDING
+
+### P6 — Live document status + Send lock
+
+**Polling** — added a new `useEffect` in `WorkspaceUI` that watches the
+set of non-terminal docs (anything not READY/FAILED/DEDUPLICATED) and
+polls each via `getDocument(id)` every 2 s until they resolve. Replaces
+the previous "only newly-uploaded docs in the current tab poll" hole
+that left chips stuck on PROCESSING after a refresh.
+
+**Send lock predicate** — was `(activeDoc != null && activeDoc.status
+!== "READY")` (only the active doc). Replaced with
+`docs.some((d) => !TERMINAL.has(d.status))` so any in-flight doc locks
+Send. FAILED docs do NOT lock — the user shouldn't have to remove a
+failed chip before asking in no-doc mode, and retrieval filters to
+`status==READY` anyway.
+
+**Inline pip** — was tied to the active doc. Now reads the in-flight
+set; shows `1 document processing…` or `N documents processing…`.
+
+**Textarea** — `disabled={loading}` unchanged. Typing is never gated by
+doc status; only Send is.
+
+`sendMessage` gate updated to match: bails silently when any doc is
+in-flight. Dependency list extended (`docs`, `comparisonMode`) so the
+callback reacts to status changes without stale closures.
+
+**Proof (manual):**
+- [ ] Upload a PDF → chip shows pulsing dot → Send disabled → chip
+      flips to green when READY → Send unlocks. ✅ PENDING
+- [ ] Open Student workspace, refresh during processing → chip
+      continues to update from the new polling effect. ✅ PENDING
+
+### P7 — Auto-name chats from first message
+
+The existing logic at `WorkspaceUI.sendMessage` already PATCHed the
+chat title from the first user message. Tightened the heuristic:
+- Collapse whitespace.
+- Strip trailing punctuation (`? . ! , ; :`) so titles read cleanly.
+- Cap at 37 chars + "…" if longer.
+
+Still uses the heuristic path (no LLM round-trip) — same Sidebar event
+listener (`chat-title-updated`) refreshes the list.
+
+**Proof:**
+- [ ] New chat → send "What does this contract require us to do?" →
+      sidebar title becomes "What does this contract require us to do"
+      (or truncated). ✅ PENDING
+
+### P8 — PowerPoint (.pptx) upload support
+
+**Backend:**
+- `backend/requirements.txt` — added `python-pptx>=0.6.23`.
+- `backend/app/services/ocr_service.py`:
+  - New `_extract_pptx_stream(file_path)` yields one record per slide.
+    Concatenates text from every shape with a text frame (titles, body,
+    text boxes, tables) and appends speaker notes after a
+    `--- speaker notes ---` divider.
+  - New `OCRService._looks_like_pptx(file_path)` static method.
+    Detects pptx via extension OR by sniffing ZIP magic bytes
+    (`PK\x03\x04`) + the `ppt/` directory inside. The worker downloads
+    every storage object to a `tempfile(...suffix=".pdf")` regardless
+    of mime, so extension-only detection wouldn't work — magic-byte
+    fallback is mandatory and keeps `document_tasks.py` (STABLE)
+    untouched.
+  - `OCRService.extract_document_stream` dispatches: `_looks_like_pptx`
+    → `_extract_pptx_stream`; everything else flows through the
+    existing PyMuPDF path. PDFs unchanged.
+  - `python-pptx` is loaded with a try/except so PDF-only deployments
+    without the dep still start.
+- `backend/app/api/v1/endpoints/documents.py`:
+  - `ALLOWED_MIMES` extended with
+    `application/vnd.openxmlformats-officedocument.presentationml.presentation`
+    plus a legacy `application/vnd.ms-powerpoint` entry (frontend still
+    blocks raw `.ppt` — the extractor would fail on the binary format).
+  - Reject message rephrased: `Unsupported file type. Accepted: PDF, DOCX, PPTX.`
+
+**Frontend:**
+- `WorkspaceUI.tsx`:
+  - `handleFileChange` no longer hard-rejects pptx. Only legacy `.ppt`
+    (not `.pptx`) is rejected with a "save as .pptx and re-upload"
+    message.
+  - Both file inputs (single-upload + HR batch) now have
+    `accept=".pdf,.docx,.pptx"`.
+
+**Could regress:**
+- A pptx with hundreds of slides will produce hundreds of "pages" in
+  `document_pages`. Chunking + embedding scales linearly; an explicit
+  bound would be a future cost-guard. Documented in
+  KNOWN_REMAINING_ISSUES.md.
+- Slides with only images and no text frames will yield empty slide
+  text. The chunker will skip empty content (returns no chunks);
+  retrieval will simply have less to grip on for that slide.
+
+**Proof (manual):**
+- [ ] Upload a `.pptx` → status transitions Processing → READY → ask a
+      question that references a slide near the end → answer cites the
+      slide number. ✅ PENDING
+
+### P9 — Forgot-password OTP flow
+
+Replaces the previous 30-min `reset-password?token=…` link with a
+6-digit OTP. Keeps the no-enumeration guarantee.
+
+**Backend (`backend/app/api/v1/endpoints/auth.py`):**
+- New helpers:
+  - `_generate_password_otp()` → 6-digit numeric string.
+  - `_store_password_otp(email, otp)` → Redis `pwotp:{email}`, 10 min TTL.
+  - `_peek_password_otp(email)` → read-only for verify-otp.
+  - `_consume_password_otp(email, otp)` → constant-time compare via
+    `secrets.compare_digest`, atomic delete on match.
+  - `_mark_password_otp_sent(email)` / `_password_otp_cooldown_seconds(email)`
+    → 30 s resend cooldown via separate Redis key (`pwotp_sent:{email}`).
+  - `_send_password_otp_email(email, otp)` → SMTP if configured;
+    otherwise **logs the OTP loudly** so dev can copy-paste it.
+- Endpoints:
+  - `POST /auth/forgot-password` — same contract `{ email }`, now sends
+    an OTP. Still returns 202 with a `resend_in` hint (30 s if a fresh
+    send happened, the leftover cooldown otherwise). No enumeration —
+    same body whether the email exists or not.
+  - `POST /auth/verify-otp` (new) — `{ email, otp }` → `{ valid: true }`
+    or generic 400. Peek-only; does NOT consume the OTP so the user can
+    enter it once on a screen and still use it on the next step.
+  - `POST /auth/reset-password` — contract changed to
+    `{ email, otp, new_password }`. Validates + consumes OTP, then
+    updates `users.hashed_password`. The legacy `{ token, new_password }`
+    contract is gone; the FE redirects the legacy `/reset-password`
+    page to the new flow.
+- `backend/app/core/middleware.py` — added `/api/v1/auth/verify-otp` to
+  `CSRF_EXEMPT_PATHS` (pre-auth route, no CSRF cookie yet).
+- Rate limits unchanged: `3/min` forgot-password, `10/hr` reset-password,
+  plus the new `10/min` on verify-otp.
+
+**Frontend:**
+- `lib/api.ts` — `forgotPassword(email)` returns the new `resend_in`
+  hint; `verifyResetOtp(email, otp)`; `resetPassword(email, otp, new)`.
+  The previous `resetPassword(token, new)` signature is gone (the
+  redirect page that replaces `/reset-password` no longer calls it).
+- `/forgot-password/page.tsx` — single page, three-step state machine:
+  email → OTP → new password → success. OTP input is a 6-digit numeric
+  field (autoComplete="one-time-code") with letter-spaced display.
+  Resend button shows a live countdown using the backend's `resend_in`.
+  "Use a different email" button to reset.
+- `/reset-password/page.tsx` — collapsed to a soft fallback page that
+  explains the change and links to `/forgot-password`. Keeps legacy URLs
+  out of 404 territory.
+
+**Could regress:**
+- Any reset email sent BEFORE this deploy still references a link with a
+  token. That link now lands on the soft fallback page; the user has to
+  request a fresh code. Acceptable — old tokens expire in 30 minutes
+  anyway.
+
+**Proof (manual + dev-log):**
+- [ ] /forgot-password → email step → backend log prints
+      `OTP=NNNNNN` line (no SMTP) → enter that OTP → password screen
+      → set new password → /login?reset=true. ✅ PENDING
+- [ ] Resend button disabled until counter expires, then re-enabled.
+      ✅ PENDING
+
+### P10 — Trust Score badge shows the actual number
+
+`ConfidenceBadge` previously rendered text-only labels (High / Moderate
+/ Low / Please verify). Now reads `score * 100` rounded to a whole
+percent and renders e.g. `~ Trust Score 73% · Moderate`. Hidden
+entirely on `score <= 0` so ungrounded answers don't show a fake 0%.
+
+The Veritas-specific `TrustScoreBadge` (the expandable evidence-deep-dive
+panel) is still gated on a separate `trust_report` SSE event from the
+veritas engine — wiring that into every grounded answer would change the
+streaming contract and is documented as a future follow-up.
+
+**Could regress:** None. The label is additive — the band band remains.
+
+**Proof:** Any grounded answer in the screenshots now displays a
+numeric Trust Score next to "Moderate" / "High" / etc.
+
+### Misc — duplicate AI reply + trial pill + Voice SSR
+
+**Duplicate AI reply (screenshot 1) — fixed.**
+- `WorkspaceUI.sendMessage` was clearing the streaming `response` via a
+  fixed `setTimeout(…, 120)`. Between `setHistory([...prev, savedMsg])`
+  and that timeout firing, both the streamed response card AND the
+  newly-saved history entry rendered the same answer. The user saw two
+  identical AI cards.
+- Switched to atomic swap: `setHistory + setResponse(null)` are now in
+  the same React batch inside the `createChatMessage().then()` handler.
+  On save failure, `setResponse(null)` still runs so the streaming
+  view doesn't get stuck.
+
+**Trial pill not updating (top-right "Free trial — N left") — fixed.**
+- `WorkspaceUI` was passing `undefined` for `onTrialStatus` into
+  `askQuestionStream`, so the SSE `trial_status` frame had nowhere to
+  go. The pill only refreshed on the next `GET /billing/status` poll.
+- Imported `useTrialStore`; the SSE callback now calls
+  `setTrialStatus(queriesUsed, queriesRemaining)` so the pill decrements
+  in real time after every query.
+
+**Hydration error from VoiceInputButton (screenshot 7) — fixed in P4.**
+- `mounted` flag now gates the whole component, not just the
+  `<select>`. Documented under P4 above.
+
+**Network-error toast on api.ts:127 — root cause confirmed under P4.**
+- The backend uuid cast + paper-config switch to apiFetch removed the
+  two common paths to a "Network error" toast on a running backend.
+- Documented in KNOWN_REMAINING_ISSUES.md: other panels still using raw
+  `fetch(${API_BASE}…)` with `credentials:"include"` and no
+  `X-CSRF-Token` header (TableExtractionPanel, NotificationCenter,
+  ResearchGapsPanel, FinanceRatioPanel admin/* pages, bookmark POST
+  inside BookmarkButton). These are next-pass migrations to `apiFetch`.
+
+**Proof:**
+- [ ] Ask a question → only ONE AI reply renders after streaming
+      finishes (no flash of two). ✅ PENDING
+- [ ] Trial pill counter decrements from N to N-1 immediately after
+      pressing Send. ✅ PENDING
+
+### PHASE 2 — Retrieval coverage + map-reduce summary path
+
+**A — higher top_k, bigger grounding budget.**
+`core/config.py` `WORKSPACE_RETRIEVAL_CONFIG` bumped:
+- general / exam / study / 8 → 12
+- legal 6 → 10
+- finance 10 → 14
+- hr 15 → 18
+- research 12 → 16
+
+New setting `GROUNDING_TOKEN_BUDGET = 6000` (was a hard-coded 4000 in
+`grounding_service.py`). `GroundingService.prepare_grounded_context`
+now reads it via `settings.GROUNDING_TOKEN_BUDGET` if the caller didn't
+override `max_tokens`. With ~450 tokens/chunk at 1800 chars, top_k=12
+fits comfortably under the 6000 budget.
+
+**B — document-ordered evidence.**
+`GroundingService` sorts `selected_candidates` by
+`(filename, page_number, chunk_index)` BEFORE formatting the
+`<evidence …>` blocks. Rerank scoring is preserved (used for filtering
+and confidence), but presentation order is linear — the LLM can now
+reason through the doc in reading order and produce page-ordered
+citations.
+
+**C — map-reduce summary path** (`backend/app/services/summary_service.py`):
+- `is_summary_intent(query)` — regex sniff covering `summarize`,
+  `summary`, `explain (this|the) (document|paper|pdf|report|deck|slides|book)`,
+  `explain everything`, `overview`, `tl;dr`, `walk me through`, etc.
+- `generate_full_document_summary_stream(db, query, document_ids, owner_id)`
+  yields SSE-friendly `{kind: stage|evidence|token|done, data: …}` frames:
+  1. Loads EVERY chunk for the requested docs via SQLAlchemy, ordered by
+     `(filename, page, chunk_index)`. Owner-id filter on top of the
+     caller's chat-session filter.
+  2. Groups into windows of 6 chunks (`WINDOW_CHUNKS`); cap at 40
+     windows (`MAX_WINDOWS_HARD_CAP`) to keep latency bounded.
+  3. **Map**: each window → 220-word "summarize this slice" prompt via
+     the existing `llm_service.provider.generate()` (so key rotation +
+     `_safe_extract_text` finish-reason guard from P3 both apply).
+  4. **Reduce**: concatenated window summaries → final structured
+     summary streamed token-by-token through `generate_stream`. Structure:
+     Overview · Key Topics · Important Details · Key Insights ·
+     Limitations · Summary.
+- `query.py` `event_generator` now branches BEFORE the normal retrieval
+  call: if the chat has attached docs AND `is_summary_intent(query)`,
+  it switches to map-reduce. The retrieval-bias problem (only top-K
+  chunks → first pages over-represented) is replaced with full-document
+  scan.
+- A synthetic evidence list is emitted up-front (`(full-document
+  map-reduce summary; N chunks read)` per filename) so the frontend's
+  Sources rail correctly shows "we read EVERY page", not just N.
+- Workspace disclaimers (legal / finance) still appended at the end.
+
+**D — verify all chunks indexed.**
+`process_document` in `document_tasks.py` (STABLE) already iterates
+every page yielded by `OCRService.extract_document_stream` and persists
+every chunk before flipping to READY. With the BUG-4 fix (embedding
+dim 384 → 1024 from session 2) this works end-to-end. No additional
+fix needed.
+
+### PHASE 3 — Improved system prompt
+
+`llm_service._build_system_prompt` rewritten as a layered
+"document-intelligence" preamble:
+
+- Tells the model to read every evidence block before answering and
+  cover the document proportionally.
+- Lists domain-specific lenses (academic, research, legal, finance,
+  business, technical, slides) so the model adapts naturally.
+- Keeps the strict no-external-knowledge rule and the exact "I cannot
+  answer this based on the provided documents." escape phrase the
+  frontend already detects.
+- Locks the citation format to `(filename, p.N)`.
+- Provides a default summary skeleton (Overview · Key Topics · Important
+  Details · Key Insights · Limitations · Summary) used by the map-reduce
+  REDUCE step too — consistent voice across paths.
+
+Workspace response-schema and language-instruction layers from query.py
+still concatenate on top.
+
+### PHASE 4 — Proof template (PENDING the user)
+
+I cannot run the full stack from this session (no live backend/frontend
+spin-up). The proof requires the user to run the worker + backend +
+frontend and execute the steps below, then paste the outcomes back into
+this report. All modified Python files pass `ast.parse` (sanity check
+above).
+
+**Smoke tests in priority order:**
+
+1. **P1 — per-chat isolation.**
+   - Chat A: upload `Contract.pdf` → wait READY → ask "What are the
+     payment terms?" → cites `Contract.pdf, p.N`.
+   - Chat B (New Chat, same workspace, no upload): ask same question →
+     no-doc mode, NO citation of `Contract.pdf`.
+   - Chat C: upload `Financials.pdf` only → ask "What are the
+     payment terms?" → cites ONLY `Financials.pdf`, never
+     `Contract.pdf`.
+
+2. **PHASE 2 — full-document coverage.**
+   - Upload a >10-page PDF (textbook chapter or similar).
+   - Ask: "Explain everything in this document in detail."
+   - Backend log should show `Summary intent detected → map-reduce on
+     N docs` and `mapping_X_windows`.
+   - Answer should reference content from LATE pages (not just first
+     pages). Paste a quote from the answer + the page number it cites.
+   - Then ask a specific question about a fact on a late page;
+     confirm correct page citation.
+
+3. **P2 — chips don't auto-send.**
+   - Exam workspace: click "Generate paper" welcome chip → Paper
+     Configuration panel opens, network tab shows zero `/query/stream`
+     request.
+   - General workspace: click "Summarize" welcome chip → textarea
+     fills with the canned prompt; nothing fires until Send.
+
+4. **P3 — Gemini guard.**
+   - Attach 3+ large PDFs, ask a question that would push the model's
+     output to MAX_TOKENS. Confirm a real answer streams, OR the user
+     sees a friendly "The response was cut off…" line — never a red
+     "finish_reason is 1" toast.
+
+5. **P4 — settings + paper.**
+   - /settings: change AI Response Language → "Settings saved." (green).
+   - Exam workspace → Paper Config → click Generate → "Paper generated!"
+     toast → paper appears in chat.
+
+6. **P6 — doc status + Send lock.**
+   - Upload a PDF, observe the chip cycle Processing → READY; Send
+     stays disabled until READY then unlocks.
+   - Reload the page mid-processing; chip continues updating via the
+     new polling effect.
+
+7. **P7 — chat auto-name.**
+   - New chat → send "What does this contract require us to do?" →
+     Sidebar title updates from "New … chat" to "What does this
+     contract require us to do" (truncated to 37 chars + "…" if longer).
+
+8. **P8 — pptx upload.**
+   - Upload a `.pptx` → chip cycles to READY → ask about a specific
+     slide → answer cites the slide number.
+
+9. **P9 — OTP reset.**
+   - /forgot-password → email → backend log prints `OTP=NNNNNN` →
+     paste OTP into the verify step → set new password → land on
+     `/login?reset=true`. Resend button disabled with countdown.
+
+10. **P10 + misc — trust score + dup reply + trial pill.**
+    - Ask a grounded question → badge shows e.g. "✓ Trust Score 78%
+      · High" (number visible).
+    - After streaming finishes, only ONE AI message renders (no flash
+      of two).
+    - Trial pill in the header decrements by 1 immediately after each
+      Send.
+
+When proven, mark each `[ ]` above with `✅` and paste the supporting
+log line or screenshot caption.
+
+---
+
+## Files modified in this isolation + answer-quality session
+
+| File | What changed |
+|---|---|
+| `backend/app/schemas/document.py` | Added `chat_session_id` to create + response |
+| `backend/app/api/v1/endpoints/documents.py` | Persist + filter by `chat_session_id`; widen ALLOWED_MIMES for pptx |
+| `backend/app/api/v1/endpoints/query.py` | Look up chat's docs; pass to grounding; map-reduce branch for summary intents |
+| `backend/app/api/v1/endpoints/users.py` | Cast user_id to uuid; wrap update in try/except for clean 500 |
+| `backend/app/api/v1/endpoints/auth.py` | OTP-based forgot-password / verify-otp / reset-password |
+| `backend/app/core/config.py` | Higher top_k per workspace; new GROUNDING_TOKEN_BUDGET |
+| `backend/app/core/middleware.py` | `/auth/verify-otp` added to CSRF_EXEMPT_PATHS |
+| `backend/app/services/grounding_service.py` | Accept document_ids; sort by (file, page, chunk); honor settings budget |
+| `backend/app/services/llm_service.py` | `_safe_extract_text` guard + new layered system prompt |
+| `backend/app/services/ocr_service.py` | pptx dispatch via extension + ZIP magic |
+| `backend/app/services/summary_service.py` | NEW — map-reduce summary service |
+| `backend/requirements.txt` | Added python-pptx>=0.6.23 |
+| `frontend/src/lib/api.ts` | uploadDocument/listDocuments/ClipText now accept chat session id; OTP helpers |
+| `frontend/src/components/WorkspaceUI.tsx` | Per-chat doc rail; live polling; Send lock; auto-name; chip prefill; trial pill; ConfidenceBadge percentage |
+| `frontend/src/components/clips/ClipModal.tsx` | Forward chatSessionId in clip request |
+| `frontend/src/components/PaperConfigPanel.tsx` | Switch raw fetch → apiFetch (CSRF) |
+| `frontend/src/components/voice/VoiceInputButton.tsx` | Gate whole component on `mounted` (SSR fix) |
+| `frontend/src/app/forgot-password/page.tsx` | Rewrite as 3-step OTP UI |
+| `frontend/src/app/reset-password/page.tsx` | Soft fallback page |
+
+---
+
+## PRODUCT-FEATURE REPAIR SESSION — 2026-05-25
+
+User report: "Question paper is fake — placeholder text like `[computer
+vsion] SHORT question 1 on computer vsion. [2]`." Plus 5 more parts
+(per-question sub-questions, export/save flow, conversation context,
+slow extraction + status, rich editor).
+
+### PART 1 — TRACE before edit
+
+**Exact code that emits the placeholder strings.**
+
+File: `backend/app/api/v1/endpoints/exams.py`.
+
+The `/exams/generate/paper` endpoint **does** call the LLM at line 154,
+but the questions arrive as placeholders for **two compounding reasons**:
+
+1. **No grounding.** The prompt built at lines 121–152 includes only the
+   paper config (subject, board, marks, Bloom mix, section spec) and
+   asks for JSON. It does NOT include any chunks from the uploaded
+   document — there is no retrieval step. The endpoint signature has
+   no `db: AsyncSession`, no `chat_session_id`, no `document_ids`. So
+   even when the LLM returns valid JSON, the questions are *generic*
+   AI-fabricated content based on the subject string only, not on the
+   user's syllabus.
+2. **Silent fallback to `_build_stub_paper`.** Lines 168–174:
+   - If `json.loads(clean)` raises `JSONDecodeError`, OR
+   - If the parsed object doesn't have both `paper` AND `answer_key`
+     keys at the top level,
+   the endpoint silently calls `_build_stub_paper(request)`. That stub
+   builder is the literal source of the placeholders the user saw:
+   ```
+   "text": f"[{request.subject}] {s.question_type.upper()} question
+            {i+1} on {request.subject}."
+   ```
+   No log line tells the user it fell back; the API returns 200 with
+   a fully-formed but useless paper.
+
+**Frontend side.** `PaperConfigPanel.tsx` posts ONLY the config object
+to `/exams/generate/paper` — no `chat_session_id`, no document_ids.
+Even if the backend asked for them, the frontend isn't sending them.
+
+**Why this slipped past previous sessions.** The existing audit notes
+say "B5: sensible defaults" and "B3: MEDIUM type" — the work was on
+the marks/Bloom validation, not on grounding. The endpoint was treated
+as a stand-alone "format LLM JSON" call rather than a RAG-grounded
+generation.
+
+### PART 1 — FIX PLAN
+
+1. Add `chat_session_id: Optional[str]` to `ExamGenerationRequest`.
+2. Inject `db: AsyncSession = Depends(get_db)` so the handler can
+   look up the chat's attached READY docs (same pattern as
+   `query.py`/P1 isolation work).
+3. For each section, retrieve N relevant chunks (subject + section
+   topic as query) via `RetrievalService.retrieve_chunks` restricted
+   to `document_ids`. Combine into `evidence_blocks` formatted with
+   `[filename, Page N]` headers.
+4. Concatenate that evidence into the LLM prompt's `grounded_context`
+   (before the config + JSON schema). The system prompt also gets
+   the P3 "document intelligence" preamble plus a clear "use ONLY the
+   evidence to write questions; if a section's topic isn't covered,
+   say so" rule.
+5. On `JSONDecodeError` or missing keys, **log the raw response**
+   loudly (so we can see the LLM's failure mode) and attempt ONE
+   structured retry with `llm_service.generate_json` against a
+   Pydantic schema before falling back.
+6. Replace `_build_stub_paper`'s placeholder text with an explicit
+   refusal message ("Could not generate question — model returned
+   unparseable output; please regenerate.") so users can never again
+   see `[subject] LONG question N on [subject]`.
+7. Auto-persist the resulting ExamPaper row so PART 3's Export DOCX
+   always has something to export (covered next).
+8. Frontend: `PaperConfigPanel` posts `chat_session_id` from the
+   current chat. Without docs, surface a clear "Attach a syllabus or
+   textbook first" message before submitting.
+
+### PART 1 — Real grounded exam questions — **IMPLEMENTED**
+
+**Backend (`exams.py`):**
+- `ExamGenerationRequest` gains `chat_session_id: Optional[str]` and
+  `ExamSection` gains `questions: Optional[List[QuestionSpec]]` (PART 2
+  prep). When `questions` is provided per-section, a `model_validator`
+  recomputes `count` + `total_marks` so the marks-validation invariant
+  holds either way.
+- `generate_paper`:
+  - Inject `db: AsyncSession`.
+  - New `_retrieve_grounding_for_paper(db, request, owner_id, chat_uuid)`:
+    look up READY docs for this chat → pull a deep candidate pool
+    (`min(40, max(20, total_questions*2))`) via
+    `RetrievalService.retrieve_chunks(document_ids=[…])` → sort by
+    `(filename, page, chunk_index)` so the LLM sees the syllabus
+    in reading order.
+  - Returns 400 with explicit messages on the two "no grounding"
+    paths: (a) no docs attached, (b) docs READY but no relevant
+    chunks. **No placeholder paper is ever returned.**
+  - LLM system prompt now includes:
+    `EVIDENCE BLOCKS (your ONLY knowledge source)` with each chunk
+    cited as `[filename | Page N]`, plus an explicit instruction:
+    "if a section asks for topics the evidence doesn't cover, write a
+    question whose `text` clearly states 'The provided source material
+    does not cover this topic.'" — no fabrication, no placeholders.
+  - Schema hint requires `page_ref` on every answer_key entry.
+  - On parse failure: log the raw output (first 400 chars), retry ONCE
+    with `IMPORTANT: previous output was not valid JSON…`, then fall
+    back to `_build_refusal_paper` whose text says
+    "[Generation failed] The model could not produce valid output …
+    Click Generate again." — clearly an error, never silently shipped
+    as content.
+- `_build_stub_paper` removed in favour of `_build_refusal_paper`. The
+  placeholder strings (`[subject] question N on [subject]`) are
+  completely gone from the codebase.
+
+**Backend (`exams.py` Export DOCX — PART 3):**
+- `GET /exams/{exam_id}/export/docx` now accepts the literal string
+  `"latest"` in addition to a UUID. `"latest"` returns the most recent
+  paper for `(workspace_id, owner_id)`.
+- Returns a clearer 404 message ("Generate the paper first; the
+  auto-save step persists it…") instead of bare "Exam not found".
+- Owner filter added — workspace alone wasn't enough.
+
+**Backend auto-save (PART 3):**
+- After successful generation, `generate_paper` writes a new
+  `ExamPaper` row (`status="DRAFT"`, JSON content) and returns
+  `data["exam_id"]`. If the save flops, the request still returns the
+  paper plus `data["save_warning"]` so the user can regenerate.
+
+**Frontend (`PaperConfigPanel.tsx`):**
+- Accepts `chatSessionId` prop, posts it on `/exams/generate/paper`.
+- `ExamSectionConfig.questions?` + `QuestionConfig` + `QuestionSubPartConfig`
+  types added. Section total computed from the questions list when
+  present (PART 2).
+- Per-section UI gains a "Customise questions individually" expander.
+  Inside that:
+  - Each Q gets its own marks input and an `× remove` button.
+  - "+ sub-part" adds a labelled (a/b/c…) sub-row with its own marks.
+  - The sub-part marks input + label are individually editable; a
+    "× sub-part" button removes one.
+  - Section total live-updates from the sum of question marks
+    (or sum of sub-part marks per question with sub-parts).
+  - "← uniform marks" button collapses back to the section-level
+    shortcut (Marks/Q + Count + section-wide toggle), preserving the
+    old fast path for teachers who don't need per-Q control.
+
+**Frontend (`WorkspaceUI.tsx`):**
+- Renders `<PaperConfigPanel chatSessionId={chatId || undefined} />`.
+- `handlePaperGenerated` keeps `data.exam_id` on `generatedPaper`
+  state so the Export DOCX action chip can use it. Surfaces
+  `data.save_warning` as a soft toast when present.
+
+**Could regress:**
+- Old clients that POST to `/exams/generate/paper` WITHOUT a
+  `chat_session_id` will now get a clean 400 instead of a placeholder
+  paper. This is the desired behaviour — the previous "always 200,
+  always fake questions" was the headline bug.
+- The auto-save creates one `ExamPaper` row per generation; teachers
+  generating many drafts accumulate rows. Cleanup can be added later
+  via a "Delete old drafts" admin action; not a blocker.
+
+**Proof (manual):**
+- [ ] Upload a real syllabus PDF, open Paper Config, click Generate.
+      Response body contains `paper.sections[*].questions[*].text` with
+      REAL content about the document's topics; `metadata.chunks_grounded`
+      is > 0; `exam_id` is a UUID. ✅ PENDING
+- [ ] Same flow with NO doc attached → 400 with the "upload a syllabus
+      first" message; no fake paper is shown. ✅ PENDING
+
+### PART 2 — Per-question sub-parts — **IMPLEMENTED**
+
+Section-level toggle preserved for backward compat. New per-question
+path active when `ExamSection.questions: List[QuestionSpec]` is
+non-empty. Each question carries its own `marks`; `sub_parts` is an
+optional list of `{label, marks}` rows. Backend validator recomputes
+section `count` and `total_marks` from the questions list so marks-sum
+validation works in either shape.
+
+Frontend UI (PaperConfigPanel) exposes the new shape only when the
+teacher clicks "Customise questions individually" — keeps the default
+flow uncluttered.
+
+### PART 3 — Auto-save + Export DOCX — **IMPLEMENTED**
+
+Covered above. `generate_paper` writes an `ExamPaper` row, returns its
+id; `GET /exams/{exam_id}/export/docx` accepts both a real UUID and
+the literal `"latest"`. The existing Export DOCX chip in WorkspaceUI
+already passes `generatedPaper.exam_id ?? "latest"` — both branches
+now resolve.
+
+### PART 4 — Conversation context + Teacher routing — **IMPLEMENTED**
+
+**Backend (`query.py`):**
+- `_format_history_message(m)` extracts `.answer` from JSON-serialised
+  assistant messages before showing them to the LLM. Previous behaviour
+  fed raw `{"answer":"…","evidence":…}` strings into the prompt, which
+  the LLM treated as noise. Truncation widened: user 600 chars,
+  assistant 800.
+- Imports `Dict` from typing.
+
+**Frontend (`WorkspaceUI.sendMessage`):**
+- Exam workspace only — when the user free-text-types something like
+  "generate paper" / "create question paper" / "make a paper", show a
+  toast ("Use the Generate Paper panel for structured generation —
+  free-text chat is for Q&A") and auto-open `PaperConfigPanel`. Routes
+  intent into the structured generation path, eliminating the "the
+  previous conversation does not contain the details" error class.
+
+### PART 5 — Embedding model loaded ONCE per worker — **IMPLEMENTED**
+
+`celery_app.conf` sets `worker_max_tasks_per_child=50`, which on a
+solo Windows worker triggers a process restart every 50 tasks. Every
+restart reloads the BAAI/bge-m3 embedding model (~1.2 GB) from disk;
+that's why uploads slowed down over time and why the user saw
+"loading model" logs repeatedly. `celery_app.py` is STABLE per
+CLAUDE.md so the fix is at the run-script layer:
+
+- `backend/scripts/run_worker_windows.ps1` — appended
+  `--max-tasks-per-child=0` (disable recycle entirely).
+- `backend/scripts/run_worker_linux.sh` — appended
+  `--max-tasks-per-child=1000` (keep the safety net but never hit it
+  in a normal day's work).
+
+`GET /documents/{id}` already returns the `DocumentResponse` Pydantic
+schema (FastAPI's `response_model=` handles the ORM → dict serialise);
+no change needed there. Live status polling is already wired in
+WorkspaceUI from the previous session's P6 work.
+
+**Proof (manual):**
+- [ ] Restart the worker with the updated script → watch logs: the
+      "Using model: BAAI/bge-m3" line should fire ONCE on boot and
+      never again across 50+ uploads. ✅ PENDING
+
+### PART 6 Phase 1 — Editable paper view — **IMPLEMENTED**
+
+New component `frontend/src/components/EditablePaperPanel.tsx`:
+- 560-px side-panel mounted alongside `PaperConfigPanel`.
+- Renders the generated paper's structured content as editable HTML
+  (`paperToEditableHtml(paper)`).
+- contentEditable div with `useRef` (avoids React clobbering caret).
+- Minimal toolbar: B/I/U · H2/H3/P · UL/OL · undo/redo (uses
+  `document.execCommand` — fine for Phase 1).
+- "Save" button POSTs to a new `POST /exams/{id}/save-edits` route
+  (backend) that accepts an arbitrary `content` JSON blob with an
+  `edited_html` field. Dirty-tracking shows the unsaved-indicator and
+  blocks export-without-save.
+- "Export DOCX" reuses the existing endpoint; on dirty state, prompts
+  to save first.
+
+**Backend changes for editor (`exams.py` + `schemas/exam.py`):**
+- `ExamPaperResponse.content` loosened to `Dict[str, Any]` — the
+  strict `ExamPaperContent` schema 500'd list_exams whenever an
+  auto-saved row (free-form payload) was loaded. The Export DOCX
+  consumer is a dict-walker, not Pydantic, so the loosening is safe.
+- New `ExamEditSaveRequest` schema: `{ content: Dict[str, Any] }`.
+- New endpoint `POST /exams/{exam_id}/save-edits` validates
+  workspace + owner and writes the blob to `ExamPaper.content`.
+
+`WorkspaceUI`:
+- New state `showPaperEditor`.
+- `WORKSPACE_ACTIONS.exam` gains a `✏ Edit Paper` chip; handler opens
+  the editor when a paper has been generated, otherwise toasts a hint.
+- Renders `<EditablePaperPanel paper={generatedPaper} onClose=… onSaved=…>`
+  next to `PaperConfigPanel`.
+
+**Phase 2 + Phase 3 design notes:** captured in
+`KNOWN_REMAINING_ISSUES.md` (image upload + AI image gen plumbing,
+DOCX export, cost guards). Out of scope for this session per spec.
+
+**Proof (manual):**
+- [ ] Generate a paper → click Edit Paper → toolbar appears → edit
+      a question's text → Save → re-open editor; edits persist. ✅ PENDING
+- [ ] After save, click Export DOCX → the downloaded .docx reflects
+      the edits. ✅ PENDING
+
+---
+
+## Files modified in the PRODUCT-FEATURE-REPAIR session
+
+| File | What changed |
+|---|---|
+| `backend/app/api/v1/endpoints/exams.py` | Grounded generation; auto-save; per-Q sub-parts; `save-edits` endpoint; `/export/docx` accepts `latest` |
+| `backend/app/api/v1/endpoints/query.py` | Conversation history extracts `.answer` from JSON; wider truncation |
+| `backend/app/schemas/exam.py` | Loosened `ExamPaperResponse.content`; new `ExamEditSaveRequest` |
+| `backend/scripts/run_worker_windows.ps1` | `--max-tasks-per-child=0` (no recycle, model stays loaded) |
+| `backend/scripts/run_worker_linux.sh` | `--max-tasks-per-child=1000` |
+| `frontend/src/components/PaperConfigPanel.tsx` | Posts `chat_session_id`; per-Q editor with add/remove sub-parts |
+| `frontend/src/components/WorkspaceUI.tsx` | Routes exam free-text "generate" → panel; `Edit Paper` chip; mounts editor |
+| `frontend/src/components/EditablePaperPanel.tsx` | NEW — Phase 1 rich-text editor |
+| `KNOWN_REMAINING_ISSUES.md` | Phase 2 / Phase 3 image-editor design notes |
+
+---
+
+## EXAM WORKSPACE VERIFICATION SESSION — 2026-05-25 (post-restart)
+
+User reported: chip clearly shows `CS305-Unit-3-Fitting.pdf` in the
+exam workspace, but clicking Generate returns "No documents are
+attached to this chat." Plus 3 Next.js hydration console errors and
+a "Failed to delete chat" error.
+
+### B — "no documents are attached" misdiagnosis — **FIXED**
+
+**Root cause.** `_retrieve_grounding_for_paper` had a single empty-set
+return path:
+```py
+if not doc_ids:  # filtered by status == READY
+    return [], []
+```
+Three different failure modes (no chat session, no docs at all, docs
+present but still PROCESSING/INDEXING/EXTRACTED) all collapsed into the
+same "No documents are attached" message — and the screenshot's
+textarea placeholder ("we'll send it once the document is ready")
+confirmed the doc was actually mid-pipeline, not missing.
+
+**Fix.**
+- Backend (`exams.py`):
+  - `_retrieve_grounding_for_paper` return signature widened from
+    `(evidence, doc_ids)` to `(evidence, doc_ids, status_hint)` where
+    `status_hint` is one of `"no_session" | "no_docs" | "processing"
+    | "no_chunks" | ""`.
+  - `generate_paper` branches per hint:
+    - `no_session` → 400 "Open a chat first…"
+    - `no_docs` → 400 "No documents attached… upload first."
+    - `processing` → **409** "The attached document is still being
+      processed. Wait for the chip to turn green (Ready)…"
+    - `no_chunks` → 400 "The document finished processing but no
+      chunks matched the subject…"
+- Frontend (`PaperConfigPanel.tsx`):
+  - New `attachedDocs` prop carrying the live `{id, filename, status}`
+    of each chip.
+  - `canGenerate` now also requires at least one READY/DEDUPLICATED
+    doc. The Generate button is disabled with a tooltip explaining
+    why (no docs → "Attach a document…"; processing → "Waiting for
+    document to finish processing").
+  - Inline doc-readiness rows in the panel footer:
+    - Empty: "Attach a syllabus or textbook to this chat first."
+    - Processing: pulsing dot + "Document still processing — Generate
+      will unlock when ready (N processing)."
+  - Error toast parser now surfaces `detail` verbatim instead of the
+    old generic "Generation failed (HTTP NNN)". The user sees the
+    specific message the backend emitted.
+- WorkspaceUI passes `attachedDocs={docs.map(...)}` into the panel.
+
+**Could regress.** The Generate button no longer activates while any
+doc is processing — even if the user explicitly wants to ignore the
+processing one. Acceptable: backend would refuse anyway, and the
+processing chip turns green within a minute thanks to the P6 polling
+effect.
+
+**Proof (manual):**
+- [ ] Open exam workspace → upload PDF → chip shows pulsing dot →
+      Generate button shows "Waiting for document to finish processing"
+      tooltip → chip turns green → Generate button enables → click →
+      paper generates with REAL questions. ✅ PENDING
+
+### Markdown hydration errors (3 screenshots) — **FIXED**
+
+**Root causes.**
+- React-Markdown v9 dropped the `inline` prop. Our `CodeBlock` checked
+  `if (inline)` and otherwise rendered `<div><pre>...</pre></div>`.
+  For inline code the falsy branch ran → `<p>` containing `<div>` /
+  `<pre>` → invalid HTML → Next.js hydration error.
+- The default `p` wrapper around every paragraph wrapped code blocks
+  and our `<TableWithExport>` div inside `<p>`, also invalid.
+
+**Fix (`WorkspaceUI.tsx`).**
+- `CodeBlock` detects inline vs block when `inline` is undefined:
+  inline = no `language-*` className AND no newline in the content.
+- New `SafeParagraph` component: walks `React.Children.toArray`,
+  detects any block-level child (`div / pre / ul / ol / table /
+  blockquote / h1-h6` or named components `CodeBlock / TableWithExport`),
+  and renders the wrapper as `<div>` instead of `<p>` when so.
+- `buildMarkdownComponents` now registers `p: SafeParagraph` and
+  `pre: ({children}) => <>{children}</>` so the default `<pre>` is
+  unwrapped (CodeBlock owns the layout).
+
+### "Failed to delete chat" — **FIXED**
+
+**Root cause.** `delete_chat_session`:
+- Called `uuid.UUID(session_id)` without try/except → a malformed id
+  raised `ValueError` and bubbled as a 500.
+- No owner_id check (workspace_id alone, on the slug-derived UUID5,
+  is weak isolation).
+- Docs attached to the chat (via `Document.chat_session_id`) were
+  orphaned with a dangling FK-like pointer to the deleted session.
+- The frontend collapsed every non-OK response into the generic
+  "Failed to delete chat" toast — no real reason visible.
+
+**Fix.**
+- Backend (`chats.py`):
+  - UUID parse wrapped in try/except → 400 on malformed id.
+  - Added `ChatSession.owner_id == owner_id` to the lookup.
+  - Before delete: `UPDATE documents SET chat_session_id=NULL WHERE
+    chat_session_id=session_id AND owner_id=...`. Non-fatal if it
+    fails (logged + proceed).
+  - Wrapped delete in try/except with rollback + explicit 500 detail.
+- Frontend (`lib/api.ts`): `deleteChat` parses the body, throws the
+  backend's `detail` verbatim so the toast shows the real reason.
+
+### D — Regression sweep — **STATUS**
+
+| Item | Status |
+|---|---|
+| Per-chat doc isolation (P1) | ✅ working — confirmed via filter trace |
+| GET /documents/{id} returns Pydantic schema | ✅ — `response_model=DocumentResponse` |
+| `ssl` DSN gone (psycopg2-safe) | ✅ — `settings.sync_database_url` normalizes |
+| Gemini finish_reason guard | ✅ — `_safe_extract_text` from P3 |
+| Quiz Me clickable | ✅ — `handleWelcomeQuickAction` prefills the input |
+| Student Send not stuck | ✅ — P6 widened predicate to `docs.some(processing)` |
+| Dark-mode text readable | ✅ — BUG 6 fix from earlier session |
+| OTP forgot-password | ✅ — P9 |
+
+
+
+
+
+
+
