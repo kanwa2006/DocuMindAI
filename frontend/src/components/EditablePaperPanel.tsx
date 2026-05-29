@@ -13,7 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "react-hot-toast";
-import { apiFetch, API_BASE } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 interface Props {
   /** The full /exams/generate/paper payload (data.paper, data.metadata, data.exam_id). */
@@ -144,7 +144,7 @@ export default function EditablePaperPanel({ paper, onClose, onSaved }: Props) {
       }
     }
     try {
-      const res = await fetch(`${API_BASE}/exams/${examId}/export/docx`, { credentials: "include" });
+      const res = await apiFetch(`/exams/${examId}/export/docx`, {});
       if (!res.ok) throw new Error("Export failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);

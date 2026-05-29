@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "react-hot-toast";
-import { API_BASE } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -138,7 +138,7 @@ export default function CandidateRankingsPanel({ onClose }: Props) {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/hr/jobs`, { credentials: "include" });
+        const res = await apiFetch("/hr/jobs", {});
         if (res.ok) {
           const data: JobRole[] = await res.json();
           setJobs(data);
@@ -158,10 +158,7 @@ export default function CandidateRankingsPanel({ onClose }: Props) {
     setLoadingCandidates(true);
     (async () => {
       try {
-        const res = await fetch(
-          `${API_BASE}/hr/jobs/${selectedJob}/candidates`,
-          { credentials: "include" }
-        );
+        const res = await apiFetch(`/hr/jobs/${selectedJob}/candidates`, {});
         if (res.ok) {
           const data: CandidateRow[] = await res.json();
           setCandidates(data);
@@ -197,8 +194,8 @@ export default function CandidateRankingsPanel({ onClose }: Props) {
 
   const updateStage = useCallback(async (candidateId: string, stage: string) => {
     try {
-      const res = await fetch(`${API_BASE}/hr/candidates/${candidateId}/stage`, {
-        method: "PATCH", credentials: "include",
+      const res = await apiFetch(`/hr/candidates/${candidateId}/stage`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage }),
       });
@@ -219,10 +216,7 @@ export default function CandidateRankingsPanel({ onClose }: Props) {
   const triggerScore = useCallback(async (row: CandidateRow) => {
     setScoringId(row.profile.id);
     try {
-      const res = await fetch(
-        `${API_BASE}/hr/jobs/${selectedJob}/candidates/${row.profile.id}/score`,
-        { method: "POST", credentials: "include" }
-      );
+      const res = await apiFetch(`/hr/jobs/${selectedJob}/candidates/${row.profile.id}/score`, { method: "POST" });
       if (!res.ok) throw new Error("Scoring failed");
       const data = await res.json();
       setCandidates((prev) =>

@@ -9,7 +9,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { toast } from "react-hot-toast";
-import { API_BASE } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -284,9 +284,8 @@ export default function FinanceRatioPanel({ documentIds, onClose }: Props) {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/finance/ratios`, {
+      const res = await apiFetch("/finance/ratios", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ document_ids: documentIds }),
       });

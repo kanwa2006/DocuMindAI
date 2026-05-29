@@ -41,7 +41,19 @@
       "Bash(echo \"Exit: $?\")",
       "Bash(tasklist)",
       "Bash(python -m alembic upgrade head)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(awk 'NR<=20{next} 1' \"C:\\\\Users\\\\acer\\\\.gemini\\\\antigravity\\\\scratch\\\\isolated_project\\\\AUDIT_REPORT.md\")",
+      "Bash(python -c 'import ast; [ast.parse\\(open\\(p, encoding='\\\\''utf-8'\\\\''\\).read\\(\\)\\) for p in [ *)",
+      "Bash(python -c \"from app.api.v1.endpoints.exams import ExamGenerationRequest, generate_paper; print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/api/v1/endpoints/exams.py', encoding='utf-8'\\).read\\(\\)\\); print\\('exams.py OK'\\)\")",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(p, encoding='utf-8'\\).read\\(\\)\\) for p in ['backend/app/api/v1/endpoints/exams.py', 'backend/app/api/v1/endpoints/query.py', 'backend/app/schemas/exam.py']]; print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/api/v1/endpoints/chats.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('backend/app/api/v1/endpoints/exams.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Bash(gh api *)",
+      "WebFetch(domain:github.com)",
+      "PowerShell(claude mcp add magic --scope user --env API_KEY=\"35f4f2332b6f6ab4819450d79e3957699965cfe6f02acbdfd2939718e0c5eca7\" -- npx -y @21st-dev/magic@latest 2>&1)",
+      "Bash(findstr mcp *)"
     ]
   }
 }

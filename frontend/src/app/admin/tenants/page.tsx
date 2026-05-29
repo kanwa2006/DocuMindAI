@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { API_BASE, getCsrfToken } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { toast } from "react-hot-toast";
 
 interface Tenant {
@@ -37,8 +37,8 @@ export default function AdminTenantsPage() {
     async function load() {
       try {
         const [tRes, vRes] = await Promise.all([
-          fetch(`${API_BASE}/admin/tenants`, { credentials: "include" }),
-          fetch(`${API_BASE}/admin/tenants/violations`, { credentials: "include" }),
+          apiFetch("/admin/tenants", {}),
+          apiFetch("/admin/tenants/violations", {}),
         ]);
         if (tRes.ok) setTenants(await tRes.json());
         if (vRes.ok) setViolations(await vRes.json());
@@ -54,11 +54,7 @@ export default function AdminTenantsPage() {
   async function handleSuspend(tenantId: string) {
     setActionLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/tenants/${tenantId}/suspend`, {
-        method: "POST",
-        headers: { "X-CSRF-Token": getCsrfToken() },
-        credentials: "include",
-      });
+      const res = await apiFetch(`/admin/tenants/${tenantId}/suspend`, { method: "POST" });
       if (!res.ok) throw new Error();
       toast.success("Tenant suspended");
       setTenants((prev) =>
@@ -75,11 +71,7 @@ export default function AdminTenantsPage() {
     setActionLoading(true);
     setConfirmAction(null);
     try {
-      const res = await fetch(`${API_BASE}/admin/tenants/${tenantId}/rotate-keys`, {
-        method: "POST",
-        headers: { "X-CSRF-Token": getCsrfToken() },
-        credentials: "include",
-      });
+      const res = await apiFetch(`/admin/tenants/${tenantId}/rotate-keys`, { method: "POST" });
       if (!res.ok) throw new Error();
       toast.success("Key rotation initiated");
     } catch {

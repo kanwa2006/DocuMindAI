@@ -416,6 +416,12 @@ async def get_shared_session(token: str, db: AsyncSession = Depends(get_db)):
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=404, detail="Shared session not found or sharing has been disabled")
+    # Enforce 30-day share-link expiry
+    if session.shared_at:
+        from datetime import timedelta
+        expiry = session.shared_at + timedelta(days=30)
+        if datetime.utcnow() > expiry:
+            raise HTTPException(status_code=410, detail="This share link has expired")
     return session
 
 
@@ -433,6 +439,12 @@ async def ask_in_shared_session(token: str, body: SharedAskRequest, db: AsyncSes
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=404, detail="Shared session not found")
+    # Enforce 30-day share-link expiry
+    if session.shared_at:
+        from datetime import timedelta
+        expiry = session.shared_at + timedelta(days=30)
+        if datetime.utcnow() > expiry:
+            raise HTTPException(status_code=410, detail="This share link has expired")
     if session.share_permissions != "view_and_ask":
         raise HTTPException(status_code=403, detail="This session is view-only")
 

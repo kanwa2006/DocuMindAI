@@ -55,6 +55,11 @@ services:
     volumes:
       - ../backend:/app
       - storage_data:/tmp/documind_storage
+    # Loads GEMINI_API_KEY_1..N (and all other backend settings) straight into
+    # the container env so GeminiKeyRotator finds them. `environment:` below
+    # still overrides any duplicate keys (e.g. POSTGRES_SERVER=pgbouncer).
+    env_file:
+      - ../backend/.env
     environment:
       # Gemini API keys — auto-detected by GeminiKeyRotator (Phase 12).
       # Add GEMINI_API_KEY_1, GEMINI_API_KEY_2, _3, etc. as needed — no code changes required.
@@ -87,6 +92,11 @@ services:
     volumes:
       - ../backend:/app
       - storage_data:/tmp/documind_storage
+    # The Celery worker imports celery_app.py, never main.py, so it relies on
+    # this env_file (plus the in-code bridge in get_key_rotator) to obtain the
+    # Gemini keys. Without it, worker-side LLM tasks fall back to the mock.
+    env_file:
+      - ../backend/.env
     environment:
       - POSTGRES_SERVER=pgbouncer
       - POSTGRES_PORT=6432

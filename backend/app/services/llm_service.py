@@ -288,14 +288,38 @@ class LLMService:
         without changing the orchestration pipeline.
         """
         if provider is None:
+            # Auto-fallback to the mock provider is permitted ONLY in the test
+            # environment. Everywhere else a missing or broken Gemini provider
+            # must FAIL LOUD instead of silently serving fabricated, generic
+            # "fully grounded and operational" answers (DummyLLMProvider). An
+            # explicitly injected provider (the `else` branch below) is always
+            # honored, so tests can still pass DummyLLMProvider() directly.
+            allow_dummy = settings.ENVIRONMENT == "test"
+
             if genai:
                 try:
                     self.provider = GeminiLLMProvider()
-                except RuntimeError:
-                    logger.warning("No Gemini API keys configured; falling back to DummyLLMProvider.")
-                    self.provider = DummyLLMProvider()
+                except RuntimeError as e:
+                    if allow_dummy:
+                        logger.warning("No Gemini API keys configured; falling back to DummyLLMProvider (ENVIRONMENT=test).")
+                        self.provider = DummyLLMProvider()
+                    else:
+                        raise RuntimeError(
+                            "Gemini LLM provider unavailable and DummyLLMProvider is disabled in "
+                            f"ENVIRONMENT={settings.ENVIRONMENT!r}. No usable Gemini API keys were found. "
+                            "Set GEMINI_API_KEY_1 (and _2, _3, ...) in backend/.env, then restart. "
+                            "Refusing to serve mock 'grounded' responses."
+                        ) from e
             else:
-                self.provider = DummyLLMProvider()
+                if allow_dummy:
+                    self.provider = DummyLLMProvider()
+                else:
+                    raise RuntimeError(
+                        "The 'google-generativeai' package is not installed and DummyLLMProvider is "
+                        f"disabled in ENVIRONMENT={settings.ENVIRONMENT!r}. Install it "
+                        "(pip install google-generativeai) and configure GEMINI_API_KEY_1.. in "
+                        "backend/.env. Refusing to serve mock 'grounded' responses."
+                    )
         else:
             self.provider = provider
         

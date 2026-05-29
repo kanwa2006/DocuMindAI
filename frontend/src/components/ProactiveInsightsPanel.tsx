@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { API_BASE } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 interface Insight {
   id: string;
@@ -43,9 +43,7 @@ export default function ProactiveInsightsPanel({ sessionId, hasDocuments, onAskA
     if (!sessionId) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/insights?session_id=${sessionId}`, {
-        credentials: "include",
-      });
+      const res = await apiFetch(`/insights?session_id=${sessionId}`, {});
       if (res.ok) {
         const data: InsightsByDocument[] = await res.json();
         setGroups(data);
@@ -71,10 +69,7 @@ export default function ProactiveInsightsPanel({ sessionId, hasDocuments, onAskA
   const handleAskAbout = async (insight: Insight) => {
     // Mark as clicked
     try {
-      await fetch(`${API_BASE}/insights/${insight.id}/clicked`, {
-        method: "PATCH",
-        credentials: "include",
-      });
+      await apiFetch(`/insights/${insight.id}/clicked`, { method: "PATCH" });
     } catch {
       // non-fatal
     }

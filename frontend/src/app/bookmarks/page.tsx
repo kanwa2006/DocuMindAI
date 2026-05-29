@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { API_BASE, getCsrfToken } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 
 interface Bookmark {
   id: string;
@@ -37,7 +37,7 @@ export default function BookmarksPage() {
   const router = useRouter();
 
   useEffect(() => {
-    fetch(`${API_BASE}/bookmarks`, { credentials: "include" })
+    apiFetch("/bookmarks", {})
       .then((r) => r.json())
       .then((data) => { setBookmarks(data || []); setLoading(false); })
       .catch(() => setLoading(false));
@@ -57,11 +57,7 @@ export default function BookmarksPage() {
   }
 
   const removeBookmark = async (id: string) => {
-    await fetch(`${API_BASE}/bookmarks/${id}`, {
-      method: "DELETE",
-      credentials: "include",
-      headers: { "X-CSRF-Token": getCsrfToken() },
-    });
+    await apiFetch(`/bookmarks/${id}`, { method: "DELETE" });
     setBookmarks((prev) => prev.filter((b) => b.id !== id));
   };
 

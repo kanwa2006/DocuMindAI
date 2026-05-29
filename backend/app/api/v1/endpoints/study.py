@@ -127,20 +127,40 @@ async def ai_tutor_chat(
     """
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
-    # Simple semantic context retrieval
-    query_embedding = await llm_service.get_embedding(query)
-    stmt = select(StudyNote).where(StudyNote.workspace_id == workspace_id).order_by(StudyNote.embedding.l2_distance(query_embedding)).limit(3)
-    notes = (await db.execute(stmt)).scalars().all()
+    # Semantic context retrieval with recency fallback
+    try:
+        query_embedding = await llm_service.get_embedding(query)
+        stmt = select(StudyNote).where(
+            StudyNote.workspace_id == workspace_id
+        ).order_by(StudyNote.embedding.l2_distance(query_embedding)).limit(3)
+        notes = (await db.execute(stmt)).scalars().all()
+    except Exception as exc:
+        logger.warning("[Study Tutor] Vector search failed, falling back to recency: %s", exc)
+        stmt = select(StudyNote).where(
+            StudyNote.workspace_id == workspace_id
+        ).order_by(StudyNote.created_at.desc()).limit(3)
+        notes = (await db.execute(stmt)).scalars().all()
     context = "\n".join([f"{n.title}: {n.content}" for n in notes])
     
+    system_prompt = (
+        "You are a patient, encouraging AI tutor. Use the provided study notes as your primary "
+        "source of truth. Explain concepts clearly, use examples, and never invent facts. "
+        "If the notes don't cover the topic, say so honestly and offer what general knowledge you can."
+    )
+    user_prompt = (
+        f"Relevant study notes:\n{context}\n\n"
+        f"Student question: {query}\n\n"
+        "Please give a clear, structured explanation."
+    )
+
     async def chat_stream_generator():
-        prompt = f"Context: {context}\nUser: {query}\n\nAct as a tutor. Do not hallucinate."
-        # Simulating a streaming LLM response
-        response = f"Based on your notes:\n\n{context}\n\nLet me break that down for you step-by-step..."
-        words = response.split(" ")
-        for word in words:
-            await asyncio.sleep(0.1)
-            yield f"data: {word} \n\n"
+        try:
+            async for token in llm_service.provider.generate_stream(system_prompt, user_prompt):
+                if token:
+                    yield f"data: {token}\n\n"
+        except Exception as e:
+            logger.error(f"[Study Tutor] LLM stream error: {e}")
+            yield f"data: [ERROR] Unable to generate response.\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(chat_stream_generator(), media_type="text/event-stream")

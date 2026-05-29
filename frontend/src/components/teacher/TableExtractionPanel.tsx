@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { toast } from "react-hot-toast";
-import { API_BASE } from "../../lib/api";
+import { apiFetch } from "../../lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -85,9 +85,8 @@ function TableView({ table }: { table: ExtractedTable }) {
   // ── Copy as HTML ──────────────────────────────────────────────────────────
   const copyAsHtml = async () => {
     try {
-      const res = await fetch(`${API_BASE}/exams/export/table`, {
+      const res = await apiFetch("/exams/export/table", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ table: buildTableDict(), format: "html" }),
       });
@@ -130,9 +129,8 @@ function TableView({ table }: { table: ExtractedTable }) {
     if (docxLoading) return;
     setDocxLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/exams/export/table`, {
+      const res = await apiFetch("/exams/export/table", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ table: buildTableDict(), format: "docx" }),
       });
@@ -363,9 +361,8 @@ export default function TableExtractionPanel({ documentId, documentName, onClose
     setActiveIdx(0);
     setLoading(true);
 
-    fetch(`${API_BASE}/exams/extract-tables`, {
+    apiFetch("/exams/extract-tables", {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ document_id: documentId }),
     })

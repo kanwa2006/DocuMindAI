@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { API_BASE, getCsrfToken } from "@/lib/api";
+import { apiFetch, API_BASE } from "@/lib/api";
 import { toast } from "react-hot-toast";
 import {
   BarChart,
@@ -95,8 +95,8 @@ export default function AdminCorrectionsPage() {
       params.set("page_size", "50");
 
       const [cRes, tRes] = await Promise.all([
-        fetch(`${API_BASE}/corrections/admin?${params}`, { credentials: "include" }),
-        fetch(`${API_BASE}/corrections/admin/trends`, { credentials: "include" }),
+        apiFetch(`/corrections/admin?${params}`, {}),
+        apiFetch("/corrections/admin/trends", {}),
       ]);
       if (cRes.ok) setCorrections(await cRes.json());
       if (tRes.ok) setTrends(await tRes.json());
@@ -116,13 +116,9 @@ export default function AdminCorrectionsPage() {
   ) {
     setActionLoading(correctionId);
     try {
-      const res = await fetch(`${API_BASE}/corrections/admin/${correctionId}`, {
+      const res = await apiFetch(`/corrections/admin/${correctionId}`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": getCsrfToken(),
-        },
-        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, note: note || undefined }),
       });
       if (!res.ok) throw new Error();
@@ -151,13 +147,9 @@ export default function AdminCorrectionsPage() {
     if (!note) return;
     setActionLoading(correctionId);
     try {
-      const res = await fetch(`${API_BASE}/corrections/admin/${correctionId}/note`, {
+      const res = await apiFetch(`/corrections/admin/${correctionId}/note`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": getCsrfToken(),
-        },
-        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ note_text: note }),
       });
       if (!res.ok) throw new Error();

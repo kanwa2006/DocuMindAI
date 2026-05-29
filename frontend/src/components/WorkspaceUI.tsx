@@ -9,7 +9,7 @@ import React from "react";
 import {
   uploadDocument, askQuestionStream, listDocuments, getDocument,
   Document, QueryResponse, getChats, createChat, getChatMessages,
-  createChatMessage, ChatMessage, updateChat, API_BASE,
+  createChatMessage, ChatMessage, updateChat, apiFetch,
 } from "../lib/api";
 import PaperConfigPanel from "./PaperConfigPanel";
 import EditablePaperPanel from "./EditablePaperPanel";
@@ -263,8 +263,8 @@ function TableWithExport({ children, workspaceType }: { children: React.ReactNod
       const dataRows = rows.slice(1).map((r) =>
         Array.from(r.querySelectorAll("td")).map((c) => c.textContent || "")
       );
-      const res = await fetch(`${API_BASE}/exams/export/table-docx`, {
-        method: "POST", credentials: "include",
+      const res = await apiFetch("/exams/export/table-docx", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: "Table Export", headers, rows: dataRows }),
       });
@@ -758,6 +758,51 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const pollingIntervalsRef = useRef<NodeJS.Timeout[]>([]);
   const thinkingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // ─── FIX: streaming-token memory leak ────────────────────────────────────
+  // Before: per-token setResponse triggered a full React re-render AND a fresh
+  // ReactMarkdown + remarkGfm parse of the entire growing answer (O(n²)
+  // string + AST allocation). For long answers this drove dev-server heap
+  // above 8 GB. Now: tokens accumulate in a ref and we flush via rAF, so
+  // re-renders are capped at one per animation frame and token concat runs
+  // on a plain string (cheap) instead of through React state.
+  const tokenBufferRef = useRef<string>("");
+  const rafIdRef = useRef<number | null>(null);
+  const flushTokens = useCallback(() => {
+    rafIdRef.current = null;
+    const pending = tokenBufferRef.current;
+    if (!pending) return;
+    tokenBufferRef.current = "";
+    setResponse((prev) => (prev ? { ...prev, answer: prev.answer + pending } : null));
+  }, []);
+  const scheduleTokenFlush = useCallback(() => {
+    if (rafIdRef.current != null) return;
+    rafIdRef.current = typeof window !== "undefined" && window.requestAnimationFrame
+      ? window.requestAnimationFrame(flushTokens)
+      : (setTimeout(flushTokens, 16) as unknown as number);
+  }, [flushTokens]);
+  const flushTokensSync = useCallback(() => {
+    if (rafIdRef.current != null) {
+      if (typeof window !== "undefined" && window.cancelAnimationFrame) {
+        window.cancelAnimationFrame(rafIdRef.current);
+      } else {
+        clearTimeout(rafIdRef.current as unknown as NodeJS.Timeout);
+      }
+      rafIdRef.current = null;
+    }
+    flushTokens();
+  }, [flushTokens]);
+  useEffect(() => () => {
+    if (rafIdRef.current != null) {
+      if (typeof window !== "undefined" && window.cancelAnimationFrame) {
+        window.cancelAnimationFrame(rafIdRef.current);
+      } else {
+        clearTimeout(rafIdRef.current as unknown as NodeJS.Timeout);
+      }
+      rafIdRef.current = null;
+    }
+    tokenBufferRef.current = "";
+  }, []);
+
   // Voice state
   const [voiceLang, setVoiceLang] = useState("en-IN");
   const [voiceInterim, setVoiceInterim] = useState("");
@@ -900,11 +945,19 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       }
     }, 2000);
     pollingIntervalsRef.current.push(interval);
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      const i = pollingIntervalsRef.current.indexOf(interval);
+      if (i >= 0) pollingIntervalsRef.current.splice(i, 1);
+    };
     // We re-run when the SET of in-flight ids changes; depending on docs
     // directly would restart every time the chip rerenders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docs.map((d) => `${d.id}:${d.status}`).join(",")]);
+  // FIX: depend ONLY on the SET of in-flight IDs, not their statuses,
+  // so each per-tick status update doesn't tear down + remount the effect
+  // (which was pushing a fresh interval into pollingIntervalsRef every poll).
+  }, [docs.filter((d) => !new Set(["READY","FAILED","DEDUPLICATED"]).has(d.status)).map((d) => d.id).sort().join(",")]);
 
   const handleQueryChange = (val: string) => {
     setQuery(val);
@@ -995,9 +1048,12 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           if (thinkingTimerRef.current) { clearTimeout(thinkingTimerRef.current); thinkingTimerRef.current = null; }
           setShowThinkingLabel(false);
           setThinkingStage(null);
-          setResponse((prev) => prev ? { ...prev, answer: prev.answer + token } : null);
+          // FIX: buffer tokens; flush at most once per animation frame.
+          tokenBufferRef.current += token;
+          scheduleTokenFlush();
         },
         (err) => {
+          flushTokensSync();
           if (err !== "Request cancelled.") toast.error(err, { id: toastId });
           setLoading(false);
           setThinkingStage(null);
@@ -1006,6 +1062,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         },
         async () => {
           if (!abortControllerRef.current) return;
+          flushTokensSync();
           toast.success("Response complete.", { id: toastId });
           setLoading(false);
           setThinkingStage(null);
@@ -1151,8 +1208,8 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
             const statusDoc = await getDocument(uploadedDoc.id);
             setActiveDoc(statusDoc);
             setDocs((prev) => prev.map((d) => d.id === statusDoc.id ? statusDoc : d));
-            if (statusDoc.status === "READY") { toast.success("Extraction complete!", { id: toastId }); clearInterval(interval); setLoading(false); }
-            else if (statusDoc.status === "FAILED") { toast.error("Extraction failed.", { id: toastId }); clearInterval(interval); setLoading(false); }
+            if (statusDoc.status === "READY") { toast.success("Extraction complete!", { id: toastId }); clearInterval(interval); { const i = pollingIntervalsRef.current.indexOf(interval); if (i >= 0) pollingIntervalsRef.current.splice(i, 1); } setLoading(false); }
+            else if (statusDoc.status === "FAILED") { toast.error("Extraction failed.", { id: toastId }); clearInterval(interval); { const i = pollingIntervalsRef.current.indexOf(interval); if (i >= 0) pollingIntervalsRef.current.splice(i, 1); } setLoading(false); }
           } catch { /* transient */ }
         }, 2000);
         pollingIntervalsRef.current.push(interval);
@@ -1209,9 +1266,13 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           if (updated.status === "READY") {
             toast.success("📋 Clip ready — you can now ask questions!", { duration: 4000 });
             clearInterval(interval);
+            const i = pollingIntervalsRef.current.indexOf(interval);
+            if (i >= 0) pollingIntervalsRef.current.splice(i, 1);
           } else if (updated.status === "FAILED") {
             toast.error("Clip processing failed.");
             clearInterval(interval);
+            const i = pollingIntervalsRef.current.indexOf(interval);
+            if (i >= 0) pollingIntervalsRef.current.splice(i, 1);
           }
         } catch { /* transient */ }
       }, 2000);
@@ -1301,9 +1362,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           return;
         }
         try {
-          const res = await fetch(`${API_BASE}/exams/${generatedPaper.exam_id ?? "latest"}/export/docx`, {
-            credentials: "include",
-          });
+          const res = await apiFetch(`/exams/${generatedPaper.exam_id ?? "latest"}/export/docx`, {});
           if (!res.ok) throw new Error("Export failed");
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
@@ -1348,12 +1407,12 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       if (label === "Flashcard Mode") {
         if (!flashcardMode) {
           try {
-            const res = await fetch(`${API_BASE}/study/decks`, { credentials: "include" });
+            const res = await apiFetch("/study/decks", {});
             if (res.ok) {
               const deckList = await res.json();
               const decksWithCards = await Promise.all(
                 deckList.map(async (d: any) => {
-                  const cr = await fetch(`${API_BASE}/study/decks/${d.id}/flashcards`, { credentials: "include" });
+                  const cr = await apiFetch(`/study/decks/${d.id}/flashcards`, {});
                   const cards = cr.ok ? await cr.json() : [];
                   return { ...d, cards };
                 })
@@ -1381,8 +1440,8 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
 
   const handleFlashcardReview = useCallback(async (cardId: string, quality: number) => {
     try {
-      await fetch(`${API_BASE}/study/flashcards/${cardId}/review`, {
-        method: "PATCH", credentials: "include",
+      await apiFetch(`/study/flashcards/${cardId}/review`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ quality }),
       });
@@ -1391,9 +1450,8 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
 
   const handleSecondOpinion = useCallback(async (query: string): Promise<string> => {
     try {
-      const res = await fetch(`${API_BASE}/query/ask`, {
+      const res = await apiFetch("/query/ask", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query,
@@ -1571,7 +1629,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           onClose={() => setShowLegalRisk(false)}
           onFetchContracts={async () => {
             try {
-              const res = await fetch(`${API_BASE}/legal/contracts`, { credentials: "include" });
+              const res = await apiFetch("/legal/contracts", {});
               if (res.ok) return await res.json();
             } catch { /* non-fatal */ }
             return [];

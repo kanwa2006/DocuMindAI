@@ -920,7 +920,27 @@ export const upgradePlan = async (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ plan, billing_cycle }),
   });
-  if (!res.ok) throw new Error("Upgrade failed");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).detail?.message || (err as any).detail || "Upgrade failed");
+  }
+  return res.json();
+};
+
+/** Creates a Razorpay order — returns order_id + key for the frontend checkout. */
+export const createRazorpayOrder = async (
+  plan: "go" | "plus" | "pro" = "plus",
+  billing_cycle: "monthly" | "annual" = "monthly"
+): Promise<{ order_id: string; amount: number; currency: string; razorpay_key: string }> => {
+  const res = await apiFetch("/billing/create-order", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ plan, billing_cycle }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).detail || "Could not create payment order");
+  }
   return res.json();
 };
 

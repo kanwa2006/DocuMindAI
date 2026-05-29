@@ -51,8 +51,8 @@ export default function SharedSessionPage() {
     if (!question.trim() || asking) return;
     setAsking(true);
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL;
-      const res = await fetch(`${API_BASE}/shared/${token}/ask`, {
+      const { apiFetch } = await import("@/lib/api");
+      const res = await apiFetch(`/shared/${token}/ask`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: question.trim() }),

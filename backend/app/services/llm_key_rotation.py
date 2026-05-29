@@ -31,6 +31,16 @@ class GeminiKeyRotator:
           GEMINI_API_KEY_1, GEMINI_API_KEY_2, ... (recommended, unlimited)
           GEMINI_API_KEY (single key, legacy)
         """
+        # Ensure the project's env file is bridged into os.environ before we read
+        # it. This is CWD-independent and runs for web, Celery worker, and scripts
+        # alike (pydantic-settings loads .env into `settings` but NOT os.environ,
+        # which is what this rotator reads). Never overrides existing env vars.
+        try:
+            from app.core.gemini_env import bridge_gemini_keys
+            bridge_gemini_keys()
+        except Exception as _e:  # pragma: no cover - defensive, never block startup
+            logger.warning("Gemini key bridge unavailable: %s", _e)
+
         keys = []
 
         # Read numbered keys (GEMINI_API_KEY_1, _2, _3, ...)

@@ -40,3 +40,4 @@ opentelemetry-instrumentation-fastapi>=0.41b0
 opentelemetry-instrumentation-celery>=0.41b0
 prometheus-client>=0.17.1
 opentelemetry-exporter-prometheus>=0.41b0
+razorpay>=1.4.1

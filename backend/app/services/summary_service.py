@@ -44,6 +44,14 @@ _SUMMARY_PATTERNS = [
     r"\bgive me (an?|a brief|a detailed) summary\b",
     r"\bwalk me through\b",
     r"\boutline (this|the) (document|paper|pdf)\b",
+    # Coverage-style asks that aren't literally "summarize" but still want the
+    # WHOLE document read — route them through map-reduce, not top-K retrieval.
+    r"\bnotes on (this|the|all|every)\b",
+    r"\b(make|give|create|generate|write|prepare|need|want)\b[^.?!]{0,24}\bnotes\b",
+    r"\b(revision|study|detailed|full|complete|comprehensive|short|brief)\s+notes\b",
+    r"\bexplain (all|every|each) (of )?(the )?(topics?|concepts?|sections?|chapters?)\b",
+    r"\bcover (all|every|each) (of )?(the )?(topics?|concepts?|sections?|chapters?)\b",
+    r"\b(detailed|comprehensive|complete|full)\s+(summary|overview|explanation|review|breakdown)\b",
 ]
 
 
@@ -151,6 +159,73 @@ _REDUCE_SYSTEM_GENERAL = (
     "didn't mention. If the document is short, keep the headings but be brief."
 )
 
+# Workspace-aware reduce prompts. The map step is identical across workspaces
+# (faithful extraction); only the FINAL structure differs so a Study "give me
+# notes" looks like notes, a Research summary surfaces methodology/gaps, etc.
+# Unknown / general / hr / exam workspaces use the general reducer.
+_REDUCE_SYSTEM_STUDY = (
+    "You are producing complete, topic-wise STUDY NOTES from ordered "
+    "window-summaries of a document. Read ALL window-summaries first, then cover "
+    "EVERY topic — never skip one. Use this structure:\n\n"
+    "## Overview\n"
+    "## Topic-by-Topic Notes  (## per topic, ### per sub-topic; key points as "
+    "bullets; put any formula/definition on its own line)\n"
+    "## Flashcards  (grouped by topic, 5-10 of '- Q: … / A: …')\n"
+    "## Quick Quiz  (a few MCQs with (A)(B)(C)(D); do NOT reveal answers)\n"
+    "## Revision Checkpoints  (checklist of 'you should now be able to …')\n\n"
+    "Preserve the document's conceptual order. Cite page numbers for specific "
+    "facts. Do not invent content the windows didn't mention."
+)
+
+_REDUCE_SYSTEM_RESEARCH = (
+    "You are synthesising a research document from ordered window-summaries. Read "
+    "ALL first. Use this structure:\n\n"
+    "## Overview\n"
+    "## Methodology  (design, data/sample, methods)\n"
+    "## Key Findings  (label each [Strong] / [Moderate] / [Limited])\n"
+    "## Contradictions & Open Questions\n"
+    "## Gaps & Limitations\n"
+    "## Summary\n\n"
+    "Cite page numbers. Do not invent content the windows didn't mention."
+)
+
+_REDUCE_SYSTEM_LEGAL = (
+    "You are producing a structured legal summary from ordered window-summaries "
+    "of a document. Read ALL first. Use this structure:\n\n"
+    "## Overview  (overall risk: Low/Medium/High/Critical + one-line reason)\n"
+    "## Clause-by-Clause Notes  (per clause: what it says · risk · concern)\n"
+    "## Obligations & Deadlines  (duty · responsible party · date/notice period)\n"
+    "## Key Risks\n"
+    "## Summary\n\n"
+    "Quote operative wording where it matters; cite page numbers. Do not invent "
+    "content. End with: '⚠ Verify all findings with a qualified legal professional.'"
+)
+
+_REDUCE_SYSTEM_FINANCE = (
+    "You are producing a structured financial summary from ordered "
+    "window-summaries of a document. Read ALL first. Use this structure:\n\n"
+    "## Overview\n"
+    "## Key Figures  (table: | Line Item | Value | Page |)\n"
+    "## Trends  (year-on-year where present; ↑/↓/→ per metric)\n"
+    "## Anomalies / Flags\n"
+    "## Summary\n\n"
+    "Use Indian number format (₹ lakh/crore). Cite page numbers. Do not invent "
+    "figures. End with: '⚠ Verify all figures against the source documents.'"
+)
+
+_REDUCE_SYSTEM_BY_WORKSPACE = {
+    "study": _REDUCE_SYSTEM_STUDY,
+    "research": _REDUCE_SYSTEM_RESEARCH,
+    "legal": _REDUCE_SYSTEM_LEGAL,
+    "finance": _REDUCE_SYSTEM_FINANCE,
+}
+
+
+def _select_reduce_system(workspace_type: str) -> str:
+    """Pick the reduce-step system prompt for a workspace, defaulting to general."""
+    key = (workspace_type or "general").lower().strip()
+    return _REDUCE_SYSTEM_BY_WORKSPACE.get(key, _REDUCE_SYSTEM_GENERAL)
+
 
 async def generate_full_document_summary_stream(
     db: AsyncSession,
@@ -158,6 +233,7 @@ async def generate_full_document_summary_stream(
     query: str,
     document_ids: List[UUID],
     owner_id: UUID,
+    workspace_type: str = "general",
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Yield SSE-friendly dicts for a map-reduce summary.
 
@@ -233,7 +309,8 @@ async def generate_full_document_summary_stream(
     )
 
     try:
-        async for token in llm_service.provider.generate_stream(_REDUCE_SYSTEM_GENERAL, reduce_user_prompt):
+        reduce_system = _select_reduce_system(workspace_type)
+        async for token in llm_service.provider.generate_stream(reduce_system, reduce_user_prompt):
             if token:
                 yield {"kind": "token", "data": token}
     except Exception as exc:

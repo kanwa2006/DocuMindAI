@@ -1,32 +1,55 @@
-# DocuMindAI — Claude Code Guide
+## HIGH-RISK CORE SYSTEMS
 
-## STABLE SYSTEMS — DO NOT MODIFY AFTER CREATION
+These systems are production-critical.
 
-These files were carefully built and stabilised. Make only additive/wrapper changes; never rewrite internals.
+Prefer additive fixes and wrappers first.
 
-| File | Phase | Notes |
-|------|-------|-------|
-| `backend/app/services/llm_key_rotation.py` | Phase 12 | GeminiKeyRotator singleton — STABLE after creation |
-| `backend/app/services/llm_service.py` | Phase 7 | Wrap only; never rewrite provider internals |
-| `backend/app/services/veritas_engine.py` | Phase 18 | STABLE after creation |
-| `backend/app/automation/auto_health_check.py` | Phase 20 | STABLE after creation |
-| `backend/app/automation/auto_daily_digest.py` | Phase 20 | STABLE after creation |
+Do NOT rewrite internals unless:
 
-Files that must **never** be modified regardless of phase:
-- `backend/app/services/retrieval_service.py`
-- `backend/app/services/grounding_service.py`
-- `backend/app/services/chunking_service.py`
-- `backend/app/workers/celery_app.py`
-- `backend/app/workers/tasks/hr_tasks.py`
+* runtime verification proves the subsystem is the root cause
+* the issue cannot be fixed externally
+* the change is minimal and production-safe
 
-## Phase 12 — API Key Rotation
+High-risk files:
 
-Keys are loaded from `.env` at startup by `GeminiKeyRotator`.  
-**To add a key:** add `GEMINI_API_KEY_2=...` (or `_3`, `_4`, ...) to `.env` and restart. No code changes.
+* backend/app/services/retrieval_service.py
+* backend/app/services/grounding_service.py
+* backend/app/services/chunking_service.py
+* backend/app/workers/celery_app.py
+* backend/app/workers/tasks/hr_tasks.py
 
-```
-GEMINI_API_KEY_1=...   # required
-GEMINI_API_KEY_2=...   # optional — uncomment to enable rotation
-```
+Any modification to high-risk systems MUST include:
 
-Health check: `GET /api/v1/health/detailed` → `api_keys.total / available / exhausted / invalid`
+* exact root cause
+* affected execution path
+* regression risks
+* runtime verification using real uploads and real outputs
+
+## MANDATORY RUNTIME VERIFICATION
+
+Do NOT claim a subsystem works unless verified using:
+
+* real uploads
+* real retrieval
+* real citations
+* real compare-mode outputs
+* real streaming responses
+* real structured generation
+
+Do NOT trust:
+
+* API 200 responses
+* rendered UI
+* placeholder trust scores
+* mock outputs
+* generic “system operational” responses
+
+For every fix:
+
+1. reproduce the issue
+2. identify exact root cause
+3. apply minimal production-grade fix
+4. verify with real uploads
+5. document remaining failures honestly
+
+Never generate fake “everything passed” audit reports.

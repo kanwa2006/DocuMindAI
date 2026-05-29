@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { API_BASE, getCsrfToken } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 
 export interface Notification {
   id: string;
@@ -34,7 +34,7 @@ export default function NotificationCenter({ onNavigate }: NotificationCenterPro
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/notifications`, { credentials: "include" });
+      const res = await apiFetch("/notifications", {});
       if (res.ok) setNotifications(await res.json());
     } catch {
       // network unavailable — keep stale list
@@ -81,11 +81,7 @@ export default function NotificationCenter({ onNavigate }: NotificationCenterPro
 
   async function markRead(id: string) {
     try {
-      await fetch(`${API_BASE}/notifications/${id}/read`, {
-        method: "POST",
-        headers: { "X-CSRF-Token": getCsrfToken() },
-        credentials: "include",
-      });
+      await apiFetch(`/notifications/${id}/read`, { method: "POST" });
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
       );
@@ -96,11 +92,7 @@ export default function NotificationCenter({ onNavigate }: NotificationCenterPro
 
   async function markAllRead() {
     try {
-      await fetch(`${API_BASE}/notifications/read-all`, {
-        method: "POST",
-        headers: { "X-CSRF-Token": getCsrfToken() },
-        credentials: "include",
-      });
+      await apiFetch("/notifications/read-all", { method: "POST" });
       setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
     } catch {
       // silent

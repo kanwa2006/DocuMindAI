@@ -318,6 +318,7 @@ async def ask_question_stream(
                     query=request.query,
                     document_ids=attached_doc_ids,
                     owner_id=owner_uuid,
+                    workspace_type=workspace_type,
                 ):
                     kind = frame["kind"]
                     if kind == "stage":

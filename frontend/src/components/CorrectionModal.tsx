@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "react-hot-toast";
-import { API_BASE, getCsrfToken } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import type { Citation } from "./FeedbackBar";
 
 interface CorrectionModalProps {
@@ -108,13 +108,9 @@ export default function CorrectionModal({
     };
 
     try {
-      const res = await fetch(`${API_BASE}/corrections`, {
+      const res = await apiFetch("/corrections", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": getCsrfToken(),
-        },
-        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error("Submission failed");

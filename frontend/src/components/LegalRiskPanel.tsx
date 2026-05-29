@@ -12,7 +12,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { toast } from "react-hot-toast";
-import { API_BASE } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -234,10 +234,7 @@ export default function LegalRiskPanel({
         return;
       }
 
-      const res = await fetch(
-        `${API_BASE}/legal/contracts/${cid}/risk-report`,
-        { method: "POST", credentials: "include" },
-      );
+      const res = await apiFetch(`/legal/contracts/${cid}/risk-report`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Risk report failed.");

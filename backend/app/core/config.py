@@ -93,14 +93,17 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: Optional[str] = None
     TWILIO_PHONE_NUMBER: Optional[str] = None
 
-    # Email / SMTP (legacy OTP emails — keep for auth.py)
-    SMTP_HOST: str = "smtp.gmail.com"
+    # Email / SMTP
+    # Primary: SendGrid (Student Pack) — set SMTP_HOST=smtp.sendgrid.net, SMTP_USER=apikey
+    # Fallback: Brevo — set BREVO_SMTP_* vars below
+    # Both are optional; OTP emails are skipped gracefully when unconfigured.
+    SMTP_HOST: str = "smtp.sendgrid.net"
     SMTP_PORT: int = 587
-    SMTP_USER: str = ""
-    SMTP_PASSWORD: str = ""
+    SMTP_USER: str = "apikey"   # SendGrid always uses literal "apikey" as user
+    SMTP_PASSWORD: str = ""     # Set to SG.xxx SendGrid API key
     EMAIL_FROM: str = ""
 
-    # Brevo SMTP — transactional emails (welcome, trial nudges, upgrade reminders)
+    # Brevo SMTP — fallback transactional email provider
     BREVO_SMTP_HOST: str = "smtp-relay.brevo.com"
     BREVO_SMTP_PORT: int = 587
     BREVO_SMTP_USER: str = ""

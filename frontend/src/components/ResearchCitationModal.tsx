@@ -8,7 +8,7 @@
 
 import { useState, useCallback } from "react";
 import { toast } from "react-hot-toast";
-import { API_BASE } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 const FORMATS = [
   { value: "APA",       label: "APA 7th Edition" },
@@ -37,9 +37,8 @@ export default function ResearchCitationModal({ documentIds, onClose }: Props) {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/research/citations`, {
+      const res = await apiFetch("/research/citations", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ doc_ids: documentIds, format: fmt }),
       });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { API_BASE, getCsrfToken } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { toast } from "react-hot-toast";
 
 interface BookmarkButtonProps {
@@ -32,19 +32,14 @@ export default function BookmarkButton({
     setLoading(true);
     try {
       if (bookmarked && bookmarkId) {
-        await fetch(`${API_BASE}/bookmarks/${bookmarkId}`, {
-          method: "DELETE",
-          credentials: "include",
-          headers: { "X-CSRF-Token": getCsrfToken() },
-        });
+        await apiFetch(`/bookmarks/${bookmarkId}`, { method: "DELETE" });
         setBookmarked(false);
         setBookmarkId(undefined);
         toast("Bookmark removed");
       } else {
-        const res = await fetch(`${API_BASE}/bookmarks`, {
+        const res = await apiFetch(`/bookmarks`, {
           method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             session_id: sessionId,
             message_id: messageId,
