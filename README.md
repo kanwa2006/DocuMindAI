@@ -43,15 +43,28 @@ DocuMindAI is a **full-stack AI document intelligence platform** built around a 
 
 ## Screenshots
 
-> The platform in action across different workspaces.
-
-| General Workspace — Grounded Q&A | HR Workspace — Candidate Rankings |
-|---|---|
-| *Streamed answer with inline page citations and Veritas trust score* | *Auto-ranked candidates with job-description match scores* |
-
-| Legal Workspace — Contract Risk | Exam Workspace — Paper Generation |
-|---|---|
-| *Clause-by-clause risk levels (HIGH / MEDIUM / LOW) with redline export* | *AI-generated exam paper with MCQ, short, long, and case-study sections* |
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/general-workspace.png" alt="General Workspace — Grounded Q&amp;A with Veritas Trust Score" width="100%"/>
+      <br/><em>Grounded Q&amp;A · inline page citations · Veritas Trust Score</em>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/hr-workspace.png" alt="HR Workspace — Candidate Rankings" width="100%"/>
+      <br/><em>Auto-ranked candidates · job-description match scores</em>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/legal-workspace.png" alt="Legal Workspace — Contract Risk Analysis" width="100%"/>
+      <br/><em>Clause-by-clause risk levels · redline export</em>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/exam-workspace.png" alt="Exam Workspace — Paper Generation" width="100%"/>
+      <br/><em>AI-generated exam paper · MCQ · short &amp; long answer · case study</em>
+    </td>
+  </tr>
+</table>
 
 ---
 
