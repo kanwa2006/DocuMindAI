@@ -15,10 +15,16 @@ class AuthProvider:
         For this architectural foundation, it decodes and strictly extracts identity claims.
         """
         try:
-            # Enforce cryptographic signature check for production
-            secret = getattr(settings, 'AUTH_SECRET_KEY', 'development_secret_do_not_use')
-            algorithms = ["HS256", "RS256"]
-            
+            # BUG-003 FIX: Use settings.AUTH_SECRET_KEY directly.
+            # Pydantic validates this field at startup — no fallback needed.
+            # The old getattr(..., 'development_secret_do_not_use') allowed attackers
+            # who know that string to forge valid JWTs for any user.
+            secret = settings.AUTH_SECRET_KEY
+
+            # BUG-013 FIX: Only accept the algorithm we actually issue.
+            # Accepting RS256 alongside HS256 enables algorithm-confusion attacks.
+            algorithms = [settings.JWT_ALGORITHM]
+
             claims = jwt.decode(token, secret, algorithms=algorithms, options={"verify_signature": True})
             
             user_id = claims.get("sub")

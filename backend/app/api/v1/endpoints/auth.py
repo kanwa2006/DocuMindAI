@@ -17,7 +17,7 @@ from sqlalchemy import update as sa_update
 
 from app.db.session import get_db
 from app.models.org import User
-from app.core.security import verify_password, create_access_token, hash_password
+from app.core.security import verify_password, create_access_token, create_refresh_token, hash_password
 from app.core.config import settings
 from app.core.auth import get_current_user
 from app.core.rate_limiter import limiter
@@ -58,7 +58,10 @@ async def login(
         roles=roles
     )
 
-    refresh_token = create_access_token(
+    # BUG-008 FIX: Use create_refresh_token() which sets REFRESH_TOKEN_EXPIRE_DAYS
+    # (7 days). The old code called create_access_token() for the refresh token,
+    # giving it the same 60-minute expiry as the access token.
+    refresh_token = create_refresh_token(
         subject=user.email,
         user_id=str(user.id),
         workspace_id=workspace_id,
@@ -101,6 +104,11 @@ async def refresh_session(request: Request, response: Response):
         user = AuthProvider.verify_token(refresh_token)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    # BUG-008 FIX: Reject access tokens used as refresh tokens.
+    # create_refresh_token() sets token_type='refresh'; access tokens have no such claim.
+    if user.get("token_type") != "refresh":
+        raise HTTPException(status_code=401, detail="Token is not a refresh token")
 
     access_token = create_access_token(
         subject=user["email"],

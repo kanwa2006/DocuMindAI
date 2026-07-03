@@ -29,6 +29,7 @@ from app.core.trial_enforcement import check_and_increment_trial
 from app.services.response_schemas import get_response_schema
 from app.services.language_detector import detect_query_language, get_language_instruction
 from app.services.email_service import send_trial_nudge_email, send_upgrade_reminder_email
+from app.core.rate_limiter import limiter
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -154,12 +155,19 @@ async def ask_question(
 
 
 @router.post("/stream")
+@limiter.limit("30/minute")  # BUG-010 FIX: Prevent runaway LLM cost + DoS
 async def ask_question_stream(
-    request: QueryRequest,
+    request: Request,
+    body: QueryRequest,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """SSE endpoint for live incremental token streaming and progress events."""
+    # SlowAPI requires `request: Request` as the first param for IP extraction.
+    # The query payload comes via `body: QueryRequest` (FastAPI auto-parses JSON body).
+    # All internal references to `request.query`, `request.session_id`, etc. are
+    # updated to use `body` below via the event_generator closure.
+    request_data = body  # alias used throughout event_generator
 
     async def event_generator():
         try:
@@ -204,7 +212,7 @@ async def ask_question_stream(
                             user_obj.email, user_obj.full_name,
                         )
 
-            workspace_type = (request.workspace_type or "general").lower().strip()
+            workspace_type = (body.workspace_type or "general").lower().strip()
 
             # Phase 14.10 — Stage 1: searching
             yield (
@@ -216,7 +224,7 @@ async def ask_question_stream(
             ws_config = settings.WORKSPACE_RETRIEVAL_CONFIG.get(
                 workspace_type, settings.WORKSPACE_RETRIEVAL_CONFIG["general"]
             )
-            effective_top_k = request.top_k if request.top_k != 5 else ws_config["top_k"]
+            effective_top_k = body.top_k if body.top_k != 5 else ws_config["top_k"]
 
             # Task 4.3 — fetch last 8 messages for conversation history
             # P1 — also fetch the documents attached to THIS chat session so
@@ -224,9 +232,9 @@ async def ask_question_stream(
             conversation_history = []
             attached_doc_ids: list = []  # P1: doc UUIDs for this chat only
             owner_uuid = uuid.UUID(user_id)
-            if request.session_id:
+            if body.session_id:
                 try:
-                    sess_uuid = uuid.UUID(request.session_id)
+                    sess_uuid = uuid.UUID(body.session_id)
                     stmt = (
                         select(ChatMessage)
                         .where(ChatMessage.session_id == sess_uuid)
@@ -242,7 +250,7 @@ async def ask_question_stream(
                     ]
                     logger.info(
                         f"[query/stream] Loaded {len(conversation_history)} history messages "
-                        f"for session {request.session_id}"
+                        f"for session {body.session_id}"
                     )
 
                     # P1: docs attached to this exact chat, READY only.
@@ -259,7 +267,7 @@ async def ask_question_stream(
                     doc_result = await db.execute(doc_stmt)
                     attached_doc_ids = [row[0] for row in doc_result.all()]
                     logger.info(
-                        f"[query/stream] Chat {request.session_id} has "
+                        f"[query/stream] Chat {body.session_id} has "
                         f"{len(attached_doc_ids)} attached READY docs"
                     )
                 except Exception as exc:
@@ -295,7 +303,7 @@ async def ask_question_stream(
             # via the summary_service. Top-K retrieval cannot summarize a
             # 40-page doc by definition — it only sees ~10% of it. Normal
             # questions still flow through the existing retrieval path.
-            if attached_doc_ids and is_summary_intent(request.query):
+            if attached_doc_ids and is_summary_intent(body.query):
                 logger.info(
                     f"[query/stream] Summary intent detected → map-reduce on "
                     f"{len(attached_doc_ids)} docs"
@@ -315,7 +323,7 @@ async def ask_question_stream(
 
                 async for frame in generate_full_document_summary_stream(
                     db=db,
-                    query=request.query,
+                    query=body.query,
                     document_ids=attached_doc_ids,
                     owner_id=owner_uuid,
                 ):
@@ -346,7 +354,7 @@ async def ask_question_stream(
             # Task 4.9 — Redis retrieval cache key
             doc_ids_str = str(current_user.get("workspace_id", ""))
             query_hash = hashlib.sha256(
-                f"{workspace_type}:{request.query}:{doc_ids_str}".encode()
+                f"{workspace_type}:{body.query}:{doc_ids_str}".encode()
             ).hexdigest()[:16]
             cache_key = f"retrieval:{workspace_type}:{query_hash}"
 
@@ -371,13 +379,13 @@ async def ask_question_stream(
                 # or no docs are attached, attached_doc_ids stays []; the
                 # GroundingService short-circuits to no-document mode (which
                 # the existing C10 logic below handles).
-                doc_filter = attached_doc_ids if request.session_id else None
+                doc_filter = attached_doc_ids if body.session_id else None
                 grounding_payload = await GroundingService.prepare_grounded_context(
                     db=db,
-                    query=request.query,
+                    query=body.query,
                     workspace_id=resolve_workspace_id(current_user["workspace_id"]),
                     final_top_k=effective_top_k,
-                    similarity_threshold=request.similarity_threshold,
+                    similarity_threshold=body.similarity_threshold,
                     document_ids=doc_filter,
                 )
                 await _set_cached_retrieval(cache_key, grounding_payload)
@@ -435,7 +443,7 @@ async def ask_question_stream(
             if preferred_lang != "auto":
                 query_language = preferred_lang
             else:
-                query_language = detect_query_language(request.query)
+                query_language = detect_query_language(body.query)
             lang_instruction = get_language_instruction(query_language)
             if lang_instruction:
                 system_prompt = system_prompt + lang_instruction
@@ -453,10 +461,10 @@ async def ask_question_stream(
             if history_text:
                 user_prompt = (
                     f"Previous conversation:\n{history_text}\n\n---\n\n"
-                    f"Question: {request.query}"
+                    f"Question: {body.query}"
                 )
             else:
-                user_prompt = f"Question: {request.query}"
+                user_prompt = f"Question: {body.query}"
 
             async for token in llm_service.provider.generate_stream(system_prompt, user_prompt):
                 yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"

@@ -37,3 +37,34 @@ def create_access_token(
         "roles": roles
     }
     return jwt.encode(to_encode, settings.AUTH_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def create_refresh_token(
+    subject: Union[str, Any],
+    user_id: str,
+    workspace_id: str,
+    roles: list
+) -> str:
+    """
+    BUG-008 FIX: Refresh tokens must live longer than access tokens.
+    Previously create_access_token() was called for both, meaning refresh
+    tokens expired in 60 minutes — identical to access tokens, making
+    the refresh mechanism useless.
+
+    Refresh tokens now expire in REFRESH_TOKEN_EXPIRE_DAYS (default 7 days)
+    and carry token_type='refresh' so the /auth/refresh endpoint can reject
+    access tokens masquerading as refresh tokens.
+    """
+    expire = datetime.utcnow() + timedelta(
+        minutes=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60
+    )
+    to_encode = {
+        "exp": expire,
+        "sub": str(user_id),
+        "email": str(subject),
+        "workspace_id": str(workspace_id),
+        "roles": roles,
+        "token_type": "refresh",
+    }
+    return jwt.encode(to_encode, settings.AUTH_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+

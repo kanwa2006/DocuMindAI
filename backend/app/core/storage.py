@@ -46,10 +46,28 @@ class LocalStorageProvider(BaseStorageProvider):
         return f"local://{safe_name}"
 
     def download_file(self, object_key: str, local_path: str) -> None:
-        filename = object_key.replace("local://", "")
-        src_path = self.base_dir / filename
+        # BUG-011 FIX: The upload_local endpoint stores the absolute filesystem path
+        # as storage_path (e.g. /srv/storage/workspace/abc_file.pdf on Linux, or
+        # C:\storage\workspace\abc_file.pdf on Windows).
+        # The old code did: self.base_dir / object_key.replace("local://", "")
+        # When object_key is an absolute path with no "local://" prefix, this
+        # produces a nonsensical path from joining base_dir with an absolute path.
+        #
+        # Decision tree:
+        #   1. "local://..." prefix → strip prefix, join with base_dir (original local:// convention)
+        #   2. Already an absolute path → use directly (upload_local stores absolute paths)
+        #   3. Anything else → treat as relative, join with base_dir
+        import os
+        if object_key.startswith("local://"):
+            filename = object_key[len("local://"):]
+            src_path = self.base_dir / filename
+        elif os.path.isabs(object_key):
+            src_path = Path(object_key)
+        else:
+            src_path = self.base_dir / object_key
+
         if not src_path.exists():
-            raise FileNotFoundError(f"Local file {src_path} missing.")
+            raise FileNotFoundError(f"Local file not found: {src_path}")
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         with open(src_path, "rb") as src, open(local_path, "wb") as dst:
             dst.write(src.read())

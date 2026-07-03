@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
+import uuid as _uuid
 
 from app.models.org import User
 
@@ -21,7 +22,15 @@ async def check_and_increment_trial(user_id: str, db: AsyncSession) -> dict:
 
     Raises HTTP 402 if trial is exhausted (plan == "trial" and used >= limit).
     """
-    result = await db.execute(select(User).where(User.id == user_id))
+    # BUG-014 FIX: User.id is a UUID column. asyncpg's strict type checking
+    # requires a uuid.UUID object, not a raw string, in the WHERE clause.
+    try:
+        user_uuid = _uuid.UUID(str(user_id))
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=401, detail="Invalid user ID format")
+
+    result = await db.execute(select(User).where(User.id == user_uuid))
+
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
@@ -48,7 +57,7 @@ async def check_and_increment_trial(user_id: str, db: AsyncSession) -> dict:
 
     await db.execute(
         update(User)
-        .where(User.id == user_id)
+        .where(User.id == user_uuid)
         .values(trial_queries_used=User.trial_queries_used + 1)
     )
     await db.commit()
