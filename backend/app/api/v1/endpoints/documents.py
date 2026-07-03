@@ -18,6 +18,7 @@ from app.models.document import Document, DocumentStatus
 from app.core.auth import get_current_user
 from app.core.workspace import resolve_workspace_id
 from app.core.config import settings
+from app.core.rate_limiter import limiter
 from app.workers.tasks.document_tasks import process_document, process_clip_document
 from app.services.extraction_router import route_extraction
 from pydantic import BaseModel
@@ -235,7 +236,9 @@ async def verify_upload(
 
 
 @router.get("/upload/presigned")
+@limiter.limit("20/minute")  # BUG-010 FIX: Prevent upload abuse via presigned URL spam
 async def get_presigned_upload_url(
+    http_request: Request,  # Required by SlowAPI for IP extraction
     filename: str,
     content_type: str,
     file_size: int = 0,
@@ -294,7 +297,9 @@ async def get_presigned_upload_url(
 
 
 @router.post("/upload/local")
+@limiter.limit("20/minute")  # BUG-010 FIX: Prevent storage abuse via unlimited uploads
 async def upload_local(
+    http_request: Request,  # Required by SlowAPI for IP extraction
     file: UploadFile = File(...),
     workspace_id: str = Form(...),
     current_user: dict = Depends(get_current_user)

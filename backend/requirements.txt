@@ -41,3 +41,12 @@ opentelemetry-instrumentation-celery>=0.41b0
 prometheus-client>=0.17.1
 opentelemetry-exporter-prometheus>=0.41b0
 razorpay>=1.4.1
+
+# ── Previously missing packages (BUG-002) ────────────────────────────────────
+# These packages are imported throughout the codebase but were absent from
+# requirements.txt, causing fresh installs to fail at runtime.
+google-generativeai>=0.8.0   # llm_service.py + embedding_service.py
+sentry-sdk>=1.40.0           # main.py Sentry error tracking
+aioredis>=2.0.0              # query.py, documents.py, middleware.py Redis cache
+numpy>=1.26.0                # retrieval_service.py NumPy cosine similarity
+python-dotenv>=1.0.0         # main.py Gemini key bridge (.env reader)

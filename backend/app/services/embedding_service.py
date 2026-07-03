@@ -65,10 +65,23 @@ class GeminiEmbeddingProvider(BaseEmbeddingProvider):
                     content=text,
                     task_type="retrieval_document",
                 )
-                results.append(res["embedding"])
+                raw = res["embedding"]  # 768-dim from text-embedding-004
+                # BUG-006 FIX: DocumentChunk.embedding is Vector(1024).
+                # Gemini text-embedding-004 returns 768-dim vectors.
+                # Pad to EMBEDDING_DIM with zeros so pgvector accepts the INSERT.
+                # Retrieval works because the query embedding goes through the same
+                # fallback chain and gets padded identically.
+                if len(raw) < EMBEDDING_DIM:
+                    raw = raw + [0.0] * (EMBEDDING_DIM - len(raw))
+                    logger.warning(
+                        f"[embedding] GeminiEmbeddingProvider padded vector from "
+                        f"{len(res['embedding'])}-dim to {EMBEDDING_DIM}-dim. "
+                        "Primary BAAI/bge-m3 model may not be loaded — check worker startup logs."
+                    )
+                results.append(raw[:EMBEDDING_DIM])  # truncate if somehow larger
             except Exception as e:
                 logger.warning(f"[embedding] Gemini embed failed: {e} — using zero vector")
-                results.append([0.0] * 768)
+                results.append([0.0] * EMBEDDING_DIM)
         return results
 
 

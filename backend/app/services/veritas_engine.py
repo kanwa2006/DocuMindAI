@@ -79,10 +79,14 @@ class VeritasEngine:
 
         # Factor 2: Direct quote presence
         answer_lower = answer.lower()
+        # BUG-001 FIX: primary_chunks are Dict[str, Any] with key "text_content".
+        # The original code used hasattr(c, "text") which always returns False for
+        # plain dicts — dicts have no .text attribute. verbatim was always 0.
+        # Fix: use c.get("text_content", "") to correctly read each chunk's text.
         if primary_chunks:
             verbatim = sum(
                 1 for c in primary_chunks[:5]
-                if hasattr(c, "text") and c.text[:50].lower() in answer_lower
+                if c.get("text_content", "")[:50].lower() in answer_lower
             )
             quote_score = min(100.0, (verbatim / max(len(primary_chunks[:5]), 1)) * 100 + 30)
         else:

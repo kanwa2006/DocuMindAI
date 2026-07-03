@@ -266,16 +266,24 @@ def generate_proactive_insights_task(document_id: str, workspace: str, session_i
             reverse=True,
         )[:10]
 
-        asyncio.run(
-            proactive_insights_service.generate_insights(
-                document_id=document_id,
-                workspace=workspace,
-                top_chunks=top_chunks,
-                session_id=session_id,
-                owner_id=owner_id,
-                db=db,
+        # BUG-009 / BUG-016 FIX: asyncio.run() raises RuntimeError when a
+        # running event loop already exists in the Celery worker thread.
+        # Solution: create a fresh, isolated event loop for this fire-and-forget
+        # async call. The loop is explicitly closed after use to prevent leaks.
+        _loop = asyncio.new_event_loop()
+        try:
+            _loop.run_until_complete(
+                proactive_insights_service.generate_insights(
+                    document_id=document_id,
+                    workspace=workspace,
+                    top_chunks=top_chunks,
+                    session_id=session_id,
+                    owner_id=owner_id,
+                    db=db,
+                )
             )
-        )
+        finally:
+            _loop.close()
         logger.info(f"[ProactiveInsights] Completed for document {document_id}")
     except Exception as exc:
         logger.error(f"[ProactiveInsights] Task failed for {document_id}: {exc}")
