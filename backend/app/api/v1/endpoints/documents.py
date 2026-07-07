@@ -238,7 +238,7 @@ async def verify_upload(
 @router.get("/upload/presigned")
 @limiter.limit("20/minute")  # BUG-010 FIX: Prevent upload abuse via presigned URL spam
 async def get_presigned_upload_url(
-    http_request: Request,  # Required by SlowAPI for IP extraction
+    request: Request,  # Required by SlowAPI for IP extraction
     filename: str,
     content_type: str,
     file_size: int = 0,
@@ -299,7 +299,7 @@ async def get_presigned_upload_url(
 @router.post("/upload/local")
 @limiter.limit("20/minute")  # BUG-010 FIX: Prevent storage abuse via unlimited uploads
 async def upload_local(
-    http_request: Request,  # Required by SlowAPI for IP extraction
+    request: Request,  # Required by SlowAPI for IP extraction
     file: UploadFile = File(...),
     workspace_id: str = Form(...),
     current_user: dict = Depends(get_current_user)
