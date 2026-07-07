@@ -1,4 +1,4 @@
-# PROJECT_MAP.md
+# DocuMindAI — Architecture & API Map
 
 Architecture: **Next.js (App Router) frontend** ↔ **FastAPI backend** ↔ **Postgres + pgvector / FAISS** + **Redis** + **Celery workers**.
 
