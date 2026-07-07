@@ -1,44 +1,59 @@
-# Claude Code internals
-.claude/
-.claude/**
-
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg-info/
+# ── Dependencies ─────────────────────────────────────────────────────────────
+node_modules/
+backend/venv/
+backend/.venv/
+venv/
+.venv/
 dist/
 build/
-*.egg
-.venv/
-venv/
-.env
+.yarn/
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
 
-# Node
-node_modules/
+# ── Environment & Secrets ────────────────────────────────────────────────────
+.env
+.env.local
+.env.production
+.env.development
+.env.backup
+.env.development.local
+.env.test.local
+.env.production.local
+.env*.local
+
+# ── Next.js build outputs ────────────────────────────────────────────────────
 .next/
-.nuxt/
-dist/
-.cache/
+out/
+next-env.d.ts
 *.tsbuildinfo
 
-# Local storage / uploads
-storage/
-uploads/
-*.faiss
+# ── Python build & cache artifacts ───────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+backend/celerybeat-schedule*
+.ipynb_checkpoints/
 
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
+# ── Agentic & IDE files ──────────────────────────────────────────────────────
+.claude/
+.agents/
+skills-lock.json
 .idea/
 .vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
 *.swp
+build.log
+frontend/tmp/
 
-# Dev checkpoints
-checkpoint_*.md
-
-.github/
+# ── OS files ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini

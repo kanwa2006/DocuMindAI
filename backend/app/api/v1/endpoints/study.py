@@ -363,4 +363,15 @@ async def review_flashcard(
 
     card.interval_days = new_interval
     card.easiness_factor = new_ease
-    card.repetition_cou
+    card.repetition_count = (card.repetition_count or 0) + 1
+    card.next_review_date = datetime.combine(next_review, datetime.min.time()).replace(tzinfo=timezone.utc)
+
+    await db.commit()
+    await db.refresh(card)
+
+    return {
+        "next_review": next_review.isoformat(),
+        "interval_days": new_interval,
+        "ease_factor": new_ease,
+        "repetition_count": card.repetition_count,
+    }

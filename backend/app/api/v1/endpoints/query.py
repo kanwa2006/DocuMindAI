@@ -2,7 +2,7 @@ import time
 import hashlib
 import json as json_module
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -326,6 +326,7 @@ async def ask_question_stream(
                     query=body.query,
                     document_ids=attached_doc_ids,
                     owner_id=owner_uuid,
+                    workspace_type=workspace_type,
                 ):
                     kind = frame["kind"]
                     if kind == "stage":

@@ -35,7 +35,12 @@ def process_document(self, document_id: str):
         
         # 3. Distributed Extraction Pipeline
         logger.info(f"Extracting text for {doc.filename} from {doc.storage_path}")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        # BUG-017 FIX: Use the document's actual file extension for the temp file.
+        # OCRService.extract_document_stream() dispatches by extension — if the
+        # suffix is always ".pdf", DOCX and PPTX files get routed to the wrong
+        # extractor and either fail silently or produce garbage text chunks.
+        _orig_ext = os.path.splitext(doc.filename or "")[1].lower() or ".pdf"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=_orig_ext) as tmp:
             local_temp_path = tmp.name
             
         try:

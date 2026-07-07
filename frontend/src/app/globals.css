@@ -1,0 +1,93 @@
+@import "tailwindcss";
+@import "../styles/tokens.css";
+@import "../styles/typography.css";
+@import "../styles/motion.css";
+@import "../styles/components.css";
+
+/* ── TAILWIND v4 THEME BRIDGE ──────────────────────────────────────
+   Maps design tokens from tokens.css into Tailwind's color namespace
+   so utilities like bg-brand, bg-surface-base, text-text-primary work.
+   Uses @theme inline so values follow CSS variable (dark-mode aware).
+   ──────────────────────────────────────────────────────────────── */
+@theme inline {
+  /* Brand */
+  --color-brand:       var(--brand);
+  --color-brand-dim:   var(--brand-dim);
+  --color-brand-ghost: var(--brand-ghost);
+  --color-brand-glow:  var(--brand-glow);
+
+  /* Surfaces */
+  --color-surface-base:    var(--surface-base);
+  --color-surface-raised:  var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-surface-sunken:  var(--surface-sunken);
+  --color-surface-hover:   var(--surface-hover);
+  --color-surface-active:  var(--surface-active);
+
+  /* Text */
+  --color-text-primary:   var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary:  var(--text-tertiary);
+  --color-text-disabled:  var(--text-disabled);
+  --color-text-brand:     var(--text-brand);
+
+  /* Borders */
+  --color-border-subtle:  var(--border-subtle);
+  --color-border-default: var(--border-default);
+  --color-border-strong:  var(--border-strong);
+
+  /* Semantic status */
+  --color-success-bg:     var(--success-bg);
+  --color-success-text:   var(--success-text);
+  --color-success-border: var(--success-border);
+  --color-warning-bg:     var(--warning-bg);
+  --color-warning-text:   var(--warning-text);
+  --color-warning-border: var(--warning-border);
+  --color-error-bg:       var(--error-bg);
+  --color-error-text:     var(--error-text);
+  --color-error-border:   var(--error-border);
+  --color-info-bg:        var(--info-bg);
+  --color-info-text:      var(--info-text);
+  --color-info-border:    var(--info-border);
+}
+
+/* ── RESET & BASE ── */
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  background-color: var(--surface-base);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+}
+
+/* ── FOCUS VISIBLE (WCAG 2.1 AA) ── */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* ── SKIP LINK ── */
+.skip-link {
+  position: absolute;
+  top: -48px;
+  left: 0;
+  background: var(--brand);
+  color: var(--brand-text);
+  padding: 8px 16px;
+  z-index: 9999;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  border-radius: 0 0 var(--radius-md) 0;
+  transition: top 150ms var(--ease-decel);
+}
+.skip-link:focus-visible {
+  top: 0;
+  outline: none;
+}
+
+/* ── SPINNER ── */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

@@ -1,0 +1,2201 @@
+"use client";
+
+import { useState, useEffect, useRef, useCallback, memo, useMemo } from "react";
+import { toast } from "react-hot-toast";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import React from "react";
+import {
+  uploadDocument, askQuestionStream, listDocuments, getDocument,
+  Document, QueryResponse, getChats, createChat, getChatMessages,
+  createChatMessage, ChatMessage, updateChat, apiFetch,
+} from "../lib/api";
+import PaperConfigPanel from "./PaperConfigPanel";
+import EditablePaperPanel from "./EditablePaperPanel";
+import PomodoroTimer from "./PomodoroTimer";
+import CandidateRankingsPanel from "./CandidateRankingsPanel";
+import FinanceRatioPanel from "./FinanceRatioPanel";
+import LegalRiskPanel from "./LegalRiskPanel";
+import ResearchCitationModal from "./ResearchCitationModal";
+import ResearchGapsPanel from "./ResearchGapsPanel";
+import TableExtractionPanel from "./teacher/TableExtractionPanel";
+import VoiceInputButton from "./voice/VoiceInputButton";
+import { useVoiceReadback } from "../hooks/useVoiceReadback";
+import { useSelectionClip } from "../hooks/useSelectionClip";
+import { ClipBar } from "./clips/ClipBar";
+import { ClipModal } from "./clips/ClipModal";
+import ComparisonToggle from "./ComparisonToggle";
+import BookmarkButton from "./BookmarkButton";
+import { TrustScoreBadge, TrustReport } from "./veritas/TrustScoreBadge";
+import { TrustScorePanel } from "./veritas/TrustScorePanel";
+import { DocumentPreviewPanel } from "./DocumentPreviewPanel";
+import ProactiveInsightsPanel from "./ProactiveInsightsPanel";
+import { useTrialStore } from "../lib/store/trialStore";
+
+// ─── Workspace configuration (Phase 5) ───────────────────────────────────────
+
+const WORKSPACE_CONFIG: Record<string, {
+  icon: string; title: string; subtitle: string;
+  badge?: { text: string; color: string };
+  disclaimer?: string;
+  quickActions: { icon: string; label: string; prompt: string }[];
+  featureHighlights?: string[];
+}> = {
+  general: {
+    icon: "", title: "What can I help with?",
+    subtitle: "Attach a document for grounded answers, or just ask.",
+    quickActions: [
+      { icon: "", label: "Summarize", prompt: "Give me a concise executive summary of this document, with the key points highlighted." },
+      { icon: "", label: "Extract key points", prompt: "List the five most important points in this document." },
+      { icon: "", label: "Compare", prompt: "Compare the attached documents and highlight differences and similarities." },
+    ],
+  },
+  exam: {
+    icon: "", title: "Build an exam paper",
+    subtitle: "Attach a syllabus or textbook. Generate structured, exam-ready papers.",
+    badge: { text: "OCR ready", color: "var(--ws-exam-accent)" },
+    quickActions: [
+      { icon: "", label: "Generate paper", prompt: "Generate a 100-mark CBSE-style paper from this syllabus with sections A, B, C." },
+      { icon: "", label: "Question bank", prompt: "Create a question bank of 50 varied questions covering every topic in this document." },
+      { icon: "", label: "Answer key", prompt: "Generate a detailed answer key with marking scheme for all sections." },
+    ],
+    featureHighlights: ["Bloom's tagging", "Mark validation", "Board templates"],
+  },
+  hr: {
+    icon: "", title: "Analyse candidates",
+    subtitle: "Attach resumes and a job description. Rank, score, and extract insights.",
+    badge: { text: "Up to 1,000 resumes per batch", color: "var(--ws-hr-accent)" },
+    quickActions: [
+      { icon: "", label: "Rank candidates", prompt: "Rank every uploaded candidate for this role with numerical scores and short justifications." },
+      { icon: "", label: "Match JD to resumes", prompt: "Compare all resumes against the job description and identify the top three matches." },
+      { icon: "", label: "Interview kit", prompt: "Create role-specific interview questions and a scoring rubric for the top candidates." },
+    ],
+    featureHighlights: ["ATS scoring", "Skills extraction", "Interview kits"],
+  },
+  study: {
+    icon: "", title: "Study smarter",
+    subtitle: "Attach textbooks and notes. Generate plans, flashcards, and quizzes.",
+    badge: { text: "30+ PDFs at once", color: "var(--ws-study-accent)" },
+    quickActions: [
+      { icon: "", label: "Study plan", prompt: "Create a personalised 30-day study plan based on this material." },
+      { icon: "", label: "Flashcards", prompt: "Generate 20 flashcards for the key concepts in this document." },
+      { icon: "", label: "Quiz me", prompt: "Quiz me with 10 MCQ questions on the material in this document." },
+    ],
+    featureHighlights: ["Spaced repetition", "Progress tracking", "Formula sheets"],
+  },
+  research: {
+    icon: "", title: "Review the literature",
+    subtitle: "Attach papers. Synthesize, find gaps, format citations.",
+    badge: { text: "Every claim traced to source", color: "var(--ws-research-accent)" },
+    quickActions: [
+      { icon: "", label: "Synthesize", prompt: "Provide a synthesis of all uploaded research papers, highlighting consensus and divergence." },
+      { icon: "", label: "Find gaps", prompt: "Identify research gaps and unexplored areas across all uploaded papers." },
+      { icon: "", label: "Export citations", prompt: "List every citation from these papers in APA 7th edition format." },
+    ],
+    featureHighlights: ["PRISMA support", "DOI extraction", "Multi-paper reasoning"],
+  },
+  legal: {
+    icon: "", title: "Review contracts",
+    subtitle: "Attach a contract. Extract clauses, flag risks, map obligations.",
+    disclaimer: "Informational use only. Not legal advice — consult a lawyer.",
+    quickActions: [
+      { icon: "", label: "Extract clauses", prompt: "Extract and categorize all key clauses from this contract with page references." },
+      { icon: "", label: "Risk analysis", prompt: "Identify high-risk clauses. Rate each Critical/High/Medium/Low with justification." },
+      { icon: "", label: "Map obligations", prompt: "Create a complete obligation map for each party with deadlines and conditions." },
+    ],
+    featureHighlights: ["Risk scoring", "Deadline extraction", "Clause library"],
+  },
+  finance: {
+    icon: "", title: "Read financial documents",
+    subtitle: "Attach a P&L, balance sheet, or invoice. Extract, analyse, verify.",
+    disclaimer: "Verify all figures with the source. Not financial advice.",
+    quickActions: [
+      { icon: "", label: "Extract figures", prompt: "Extract every key financial figure with exact page citations and context." },
+      { icon: "", label: "Compute ratios", prompt: "Calculate liquidity, profitability, and solvency ratios using the uploaded statements." },
+      { icon: "", label: "Year-on-year", prompt: "Compare financial performance across all uploaded years with percentage changes." },
+    ],
+    featureHighlights: ["Numerical validation", "Ratio computation", "OCR extraction"],
+  },
+};
+
+const FOLLOW_UP_SUGGESTIONS: Record<string, string[]> = {
+  general:  ["Summarize the key points", "What are the next steps?", "Explain this further"],
+  exam:     ["Generate more questions", "Add harder variants", "Create marking scheme"],
+  legal:    ["What are the key risks?", "Which clauses need attention?", "Compare with standard"],
+  finance:  ["Calculate profitability ratios", "Compare with previous year", "Flag anomalies"],
+  hr:       ["Rank all candidates", "Who is the best fit?", "Generate interview questions"],
+  research: ["Find research gaps", "Summarize findings", "Export citations"],
+  study:    ["Quiz me on this", "Create flashcards", "Explain simpler"],
+};
+
+const WORKSPACE_ACTIONS: Record<string, { icon: string; label: string }[]> = {
+  exam:     [{ icon: "📄", label: "Generate Paper" }, { icon: "📖", label: "Question Bank" }, { icon: "🔑", label: "Answer Key" }, { icon: "✏", label: "Edit Paper" }, { icon: "🖨", label: "Export DOCX" }, { icon: "⊞", label: "Extract Tables" }],
+  hr:       [{ icon: "📂", label: "Batch Upload" }, { icon: "🎯", label: "Set JD Context" }, { icon: "📊", label: "View Rankings" }, { icon: "📋", label: "Export Candidates" }],
+  study:    [{ icon: "📖", label: "Study Mode" }, { icon: "🃏", label: "Flashcard Mode" }, { icon: "⏱", label: "Pomodoro Timer" }, { icon: "📊", label: "My Progress" }],
+  finance:  [{ icon: "🔢", label: "Extraction Mode" }, { icon: "📊", label: "Table Mode" }, { icon: "✅", label: "Verify" }, { icon: "📈", label: "Ratios" }],
+  research: [{ icon: "🔬", label: "Citation Mode" }, { icon: "📝", label: "Review Mode" }, { icon: "📚", label: "Import Papers" }, { icon: "🔍", label: "Find Gaps" }],
+  legal:    [{ icon: "⚖", label: "Contract Mode" }, { icon: "🚨", label: "Risk Mode" }, { icon: "📋", label: "Clause Library" }, { icon: "📄", label: "Risk Report" }],
+};
+
+// ─── Disclaimer detection ─────────────────────────────────────────────────────
+
+const DISCLAIMER_PREFIXES = ["⚠️ **Legal Disclaimer**", "⚠️ **Financial Disclaimer**"];
+
+function splitDisclaimer(text: string): { main: string; disclaimer: string | null } {
+  for (const prefix of DISCLAIMER_PREFIXES) {
+    const marker = "\n\n---\n" + prefix;
+    const idx = text.indexOf(marker);
+    if (idx !== -1) {
+      return { main: text.substring(0, idx), disclaimer: text.substring(idx + "\n\n---\n".length) };
+    }
+  }
+  return { main: text, disclaimer: null };
+}
+
+// ─── Confidence badge (Task 4.6) ──────────────────────────────────────────────
+//
+// P10 — Surface trust score for grounded answers. The badge now displays
+// the actual percentage (rounded to a whole %) alongside the band label.
+// `score` is the average rerank score returned by GroundingService
+// (`confidence_score` on the metadata SSE event). For ungrounded answers
+// the parent component zeros this out, so the badge stays off-screen.
+
+function ConfidenceBadge({ score }: { score: number }) {
+  // Hide on ungrounded answers (parent passes 0.0).
+  if (!score || score <= 0) return null;
+  const pct = Math.round(score * 100);
+  if (score >= 0.85) {
+    return <span className="badge badge-success" title="Trust score from evidence reranking">✓ Trust Score {pct}% · High</span>;
+  }
+  if (score >= 0.70) {
+    return <span className="badge badge-warning" title="Trust score from evidence reranking">~ Trust Score {pct}% · Moderate</span>;
+  }
+  if (score >= 0.50) {
+    return <span className="badge badge-error" title="Trust score from evidence reranking">⚠ Trust Score {pct}% · Low — verify</span>;
+  }
+  return <span className="badge badge-error" title="Trust score from evidence reranking">⚠ Trust Score {pct}% · Please verify</span>;
+}
+
+// ─── ReactMarkdown: code block with copy button (Additional req) ──────────────
+
+function CodeBlock({ node, inline, className, children, ...props }: any) {
+  const [copied, setCopied] = useState(false);
+  const codeText = String(children).replace(/\n$/, "");
+  // react-markdown v9+ dropped the `inline` prop. Without it, this component
+  // is called for inline code too, and the old branch went straight to the
+  // <pre><div> block layout — producing `<p><div><pre>...</pre></div></p>`
+  // HTML and the hydration error the user saw.
+  // Fenced (block) code has a `language-*` className OR newlines in content;
+  // inline code has neither.
+  const isInline =
+    inline === true ||
+    (inline === undefined && !(className && /language-/.test(className)) && !codeText.includes("\n"));
+  if (isInline) {
+    return <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.875em", background: "var(--surface-sunken)", padding: "2px 5px", borderRadius: "4px" }}>{children}</code>;
+  }
+  const handleCopy = () => {
+    navigator.clipboard.writeText(codeText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div style={{ position: "relative", margin: "8px 0" }}>
+      <button onClick={handleCopy}
+        style={{ position: "absolute", top: "8px", right: "8px", zIndex: 1, height: "28px", padding: "0 10px", fontSize: "11px", background: "var(--surface-raised)", border: "1px solid var(--border-default)", borderRadius: "6px", cursor: "pointer", color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: "4px", fontFamily: "var(--font-body)", transition: "border-color 100ms, color 100ms" }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; (e.currentTarget as HTMLElement).style.color = "var(--brand)"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; }}
+      >{copied ? "✓ Copied!" : "📋 Copy code"}</button>
+      <pre style={{ fontFamily: "var(--font-mono)", fontSize: "13px", background: "var(--surface-sunken)", border: "1px solid var(--border-subtle)", borderRadius: "8px", padding: "16px", overflowX: "auto", margin: 0 }}>
+        <code className={className} {...props}>{children}</code>
+      </pre>
+    </div>
+  );
+}
+
+// ─── ReactMarkdown: table with Copy+CSV+DOCX export ───────────────────────────
+
+function TableWithExport({ children, workspaceType }: { children: React.ReactNode; workspaceType?: string }) {
+  const tableRef = useRef<HTMLTableElement>(null);
+  const [htmlCopied, setHtmlCopied] = useState(false);
+  const [docxLoading, setDocxLoading] = useState(false);
+  const isTeacher = workspaceType === "exam";
+
+  const chipStyle: React.CSSProperties = {
+    height: "26px", padding: "0 10px", fontSize: "11px",
+    background: "var(--surface-raised)", border: "1px solid var(--border-default)",
+    borderRadius: "6px", cursor: "pointer", color: "var(--text-secondary)",
+    display: "inline-flex", alignItems: "center", gap: "4px",
+    fontFamily: "var(--font-body)", transition: "border-color 100ms",
+  };
+  const hoverIn = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; };
+  const hoverOut = (e: React.MouseEvent) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; };
+
+  const copyHTML = () => {
+    if (tableRef.current) {
+      navigator.clipboard.writeText(tableRef.current.outerHTML);
+      setHtmlCopied(true); setTimeout(() => setHtmlCopied(false), 2000);
+    }
+  };
+
+  const downloadCSV = () => {
+    if (!tableRef.current) return;
+    const rows = Array.from(tableRef.current.querySelectorAll("tr"));
+    const csv = rows.map((r) =>
+      Array.from(r.querySelectorAll("th,td"))
+        .map((c) => `"${(c.textContent || "").replace(/"/g, '""')}"`)
+        .join(",")
+    ).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `table_${Date.now()}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadDOCX = async () => {
+    if (!tableRef.current || docxLoading) return;
+    setDocxLoading(true);
+    try {
+      const rows = Array.from(tableRef.current.querySelectorAll("tr"));
+      const headers = Array.from(rows[0]?.querySelectorAll("th,td") ?? []).map((c) => c.textContent || "");
+      const dataRows = rows.slice(1).map((r) =>
+        Array.from(r.querySelectorAll("td")).map((c) => c.textContent || "")
+      );
+      const res = await apiFetch("/exams/export/table-docx", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Table Export", headers, rows: dataRows }),
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `table_${Date.now()}.docx`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      toast.error("DOCX export failed");
+    } finally {
+      setDocxLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: "8px" }}>
+      <div style={{ overflowX: "auto" }}>
+        <table ref={tableRef} style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>{children}</table>
+      </div>
+      <div style={{ display: "flex", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
+        <button onClick={copyHTML} style={chipStyle} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+          {htmlCopied ? "✓" : "📋"} Copy as HTML
+        </button>
+        <button onClick={downloadCSV} style={chipStyle} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+          📊 Export CSV
+        </button>
+        {isTeacher && (
+          <button onClick={downloadDOCX} disabled={docxLoading} style={chipStyle} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+            📄 {docxLoading ? "Exporting…" : "Export DOCX"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Console-error fix — `<p> cannot contain a nested <pre>/<div>` hydration
+// errors. ReactMarkdown wraps inline content in <p>; when a fenced code
+// block or a custom <div> child sneaks into that paragraph slot, the HTML
+// is invalid. This guard renders the wrapper as <div> when any child is a
+// block-level element, and as <p> otherwise.
+function SafeParagraph({ node, children, ...props }: any) {
+  const arr = React.Children.toArray(children);
+  const BLOCK_TAGS = new Set(["div", "pre", "ul", "ol", "table", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"]);
+  const BLOCK_COMPONENTS = new Set(["CodeBlock", "TableWithExport"]);
+  const hasBlockChild = arr.some((child: any) => {
+    if (!child || typeof child !== "object") return false;
+    const t = child.type;
+    if (typeof t === "string") return BLOCK_TAGS.has(t);
+    if (typeof t === "function") return BLOCK_COMPONENTS.has(t.displayName || t.name || "");
+    return false;
+  });
+  if (hasBlockChild) {
+    return <div {...props}>{children}</div>;
+  }
+  return <p {...props}>{children}</p>;
+}
+
+function buildMarkdownComponents(workspaceType: string) {
+  return {
+    code: CodeBlock,
+    // Custom <p> avoids HTML-invalid nesting like <p><pre>…</pre></p>.
+    p: SafeParagraph,
+    // react-markdown also emits <pre> by default; redirect it through our
+    // CodeBlock so the wrapper layout is consistent.
+    pre: ({ children }: any) => <>{children}</>,
+    table: ({ children }: any) => <TableWithExport workspaceType={workspaceType}>{children}</TableWithExport>,
+    th: ({ children }: any) => <th style={{ padding: "8px 12px", background: "var(--surface-sunken)", borderBottom: "2px solid var(--border-default)", textAlign: "left", fontWeight: 600, fontSize: "13px" }}>{children}</th>,
+    td: ({ children }: any) => <td style={{ padding: "8px 12px", borderBottom: "1px solid var(--border-subtle)", fontSize: "13px" }}>{children}</td>,
+  };
+}
+
+// Kept for back-compat if anything references it directly
+const MARKDOWN_COMPONENTS = buildMarkdownComponents("general");
+
+// ─── Workspace welcome state (Task 5.1) ───────────────────────────────────────
+
+function WorkspaceWelcome({
+  workspaceType,
+  onQuickAction,
+}: {
+  workspaceType: string;
+  // P2: pass BOTH label and prompt so the parent can decide whether to
+  // open a config panel (Generate paper → PaperConfigPanel) or just
+  // prefill the input box. Auto-send is never the default — the user
+  // must press Send themselves.
+  onQuickAction: (label: string, prompt: string) => void;
+}) {
+  const cfg = WORKSPACE_CONFIG[workspaceType] || WORKSPACE_CONFIG.general;
+  return (
+    <div className="message-enter" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", padding: "40px 16px", textAlign: "center" }}>
+      <div style={{ maxWidth: "560px", width: "100%" }}>
+        {cfg.icon && (
+          <div style={{ fontSize: "48px", marginBottom: "16px", lineHeight: 1 }}>{cfg.icon}</div>
+        )}
+        <h1 style={{ fontFamily: "var(--font-display, var(--font-body))", fontSize: "var(--text-2xl)", color: "var(--text-primary)", margin: "0 0 8px", fontWeight: 500 }}>{cfg.title}</h1>
+        <p style={{ fontFamily: "var(--font-body)", fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px", lineHeight: "var(--leading-relaxed)" }}>{cfg.subtitle}</p>
+        {cfg.badge && (
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: "12px" }}>
+            <span style={{ background: "var(--surface-raised)", color: "var(--text-secondary)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-full)", padding: "4px 12px", fontSize: "12px", fontWeight: 500, textDecoration: "none" }}>{cfg.badge.text}</span>
+          </div>
+        )}
+        {cfg.disclaimer && (
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: "16px" }}>
+            <span style={{ background: "var(--warning-bg)", color: "var(--warning-text)", border: "1px solid var(--warning-border)", borderRadius: "var(--radius-full)", padding: "5px 14px", fontSize: "13px" }}>{cfg.disclaimer}</span>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: "8px", justifyContent: "center", flexWrap: "wrap", marginTop: "24px" }}>
+          {cfg.quickActions.map((a) => (
+            <button key={a.label} onClick={() => onQuickAction(a.label, a.prompt)} className="btn btn-secondary"
+              style={{ borderRadius: "999px", height: "34px", padding: "0 14px", fontSize: "13px", gap: a.icon ? "6px" : 0 }}>
+              {a.icon && <span>{a.icon}</span>}{a.label}
+            </button>
+          ))}
+        </div>
+        {cfg.featureHighlights && (
+          <div style={{ display: "flex", gap: "8px", justifyContent: "center", flexWrap: "wrap", marginTop: "20px" }}>
+            {cfg.featureHighlights.map((f) => (
+              <div key={f} style={{ border: "1px solid var(--border-subtle)", borderRadius: "10px", padding: "8px 12px", fontSize: "12px", color: "var(--text-secondary)", background: "var(--surface-raised)" }}>{f}</div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Enhanced message component ───────────────────────────────────────────────
+
+const MemoizedMessage = memo(({
+  msg, chatId, workspaceType, isLastAI, isStreaming, onRegenerate, followUps, onFollowUpClick,
+  trustData, isTrustExpanded, onTrustToggle, onViewPage, onSecondOpinion, originalQuery, voiceLang,
+}: {
+  msg: ChatMessage; chatId: string | null; workspaceType: string;
+  isLastAI: boolean; isStreaming: boolean;
+  onRegenerate: () => void;
+  followUps: string[]; onFollowUpClick: (p: string) => void;
+  trustData?: TrustReport;
+  isTrustExpanded?: boolean;
+  onTrustToggle?: () => void;
+  onViewPage?: (filename: string, page: number) => void;
+  onSecondOpinion?: (query: string) => Promise<string>;
+  originalQuery?: string;
+  voiceLang?: string;
+}) => {
+  const [hovered, setHovered] = useState(false);
+  const [copyDone, setCopyDone] = useState(false);
+  const { speak, stop, isSpeaking, isSupported: readbackSupported } = useVoiceReadback();
+
+  const mdComponents = useMemo(() => buildMarkdownComponents(workspaceType), [workspaceType]);
+
+  let parsedRes: any = null;
+  let textContent = msg.content;
+  if (msg.role === "assistant") {
+    try { parsedRes = JSON.parse(msg.content); textContent = parsedRes.answer || ""; } catch {}
+  }
+
+  if (msg.role === "user") {
+    return (
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <div style={{ maxWidth: "75%", background: "var(--brand)", color: "var(--brand-text)", borderRadius: "16px 16px 4px 16px", padding: "12px 16px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)" }}>
+          {msg.content}
+        </div>
+      </div>
+    );
+  }
+
+  const { main: mainText, disclaimer: disclaimerText } = splitDisclaimer(textContent);
+  const confidence = parsedRes?.confidence_score ?? 0;
+  const evidence = parsedRes?.evidence ?? [];
+  const suggestions = followUps.length > 0 ? followUps : (FOLLOW_UP_SUGGESTIONS[workspaceType] || FOLLOW_UP_SUGGESTIONS.general);
+
+  return (
+    <div
+      style={{ paddingBottom: "8px" }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {/* AI label row */}
+      <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
+        <div style={{ width: "16px", height: "16px", borderRadius: "4px", background: "var(--brand)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--brand-text)", fontSize: "10px", fontWeight: 700, flexShrink: 0 }}>D</div>
+        <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-tertiary)" }}>DocuMindAI · {workspaceType.charAt(0).toUpperCase() + workspaceType.slice(1)} Workspace</span>
+      </div>
+
+      {/* Content */}
+      <div className="text-response" style={{ fontSize: "15px", lineHeight: "var(--leading-loose)", fontFamily: "var(--font-body)", color: "var(--text-primary)" }}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents as any}>{mainText}</ReactMarkdown>
+      </div>
+
+      {/* Citations + confidence */}
+      {evidence.length > 0 && (
+        <div className="no-clip-zone" style={{ marginTop: "8px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px" }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-tertiary)", textTransform: "uppercase" }}>Sources:</span>
+          {evidence.slice(0, 4).map((chunk: any, i: number) => {
+            // Phase 28: detect clip source by looking up doc in outer docs list
+            // chunk.document_source comes from backend if available, else use chunk_index heuristic
+            const isClip = chunk.document_source === "clip";
+            const citationLabel = isClip
+              ? `Clipped text, part ${(chunk.chunk_index ?? i) + 1}`
+              : `p.${chunk.page_number}`;
+            return (
+              <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", border: "1px solid var(--border-default)", borderRadius: "4px", fontFamily: "var(--font-mono)", fontSize: "11px", cursor: "default", transition: "border-color 100ms, background 100ms" }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; (e.currentTarget as HTMLElement).style.background = "var(--brand-ghost)"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.background = ""; }}
+              >{isClip ? "📋" : "📄"} {chunk.filename} {citationLabel}</span>
+            );
+          })}
+          <ConfidenceBadge score={confidence} />
+        </div>
+      )}
+      {evidence.length === 0 && (
+        <div style={{ marginTop: "6px" }}><ConfidenceBadge score={confidence} /></div>
+      )}
+
+      {/* Trust Score badge + expanded panel */}
+      {trustData && (
+        <div className="no-clip-zone" style={{ marginTop: "8px" }}>
+          <TrustScoreBadge
+            trust={trustData}
+            expanded={isTrustExpanded ?? false}
+            onToggle={() => onTrustToggle?.()}
+          />
+          {isTrustExpanded && onViewPage && onSecondOpinion && (
+            <TrustScorePanel
+              trust={trustData}
+              originalQuery={originalQuery ?? ""}
+              onViewPage={onViewPage}
+              onSecondOpinion={onSecondOpinion}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Disclaimer banner */}
+      {disclaimerText && (
+        <div style={{ marginTop: "8px", padding: "8px 12px", background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: "8px", fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--warning-text)", fontStyle: "italic" }}>
+          ⚠ {disclaimerText}
+        </div>
+      )}
+
+      {/* Actions row (hover) */}
+      <div className="no-clip-zone" style={{ display: "flex", gap: "4px", marginTop: "8px", opacity: hovered ? 1 : 0, transition: "opacity 100ms", flexWrap: "wrap" }}>
+        <button
+          className="btn btn-ghost btn-sm"
+          aria-label="Copy response to clipboard"
+          style={{ height: "28px" }}
+          onClick={() => { navigator.clipboard.writeText(textContent); setCopyDone(true); setTimeout(() => setCopyDone(false), 2000); toast.success("Copied"); }}
+        >
+          <span aria-hidden="true">{copyDone ? "✓" : "📋"}</span> Copy
+        </button>
+        {chatId && (
+          <BookmarkButton
+            messageId={msg.id}
+            sessionId={chatId}
+            content={msg.content}
+            citations={evidence}
+            workspace={workspaceType}
+          />
+        )}
+        {isLastAI && !isStreaming && (
+          <button className="btn btn-ghost btn-sm" aria-label="Regenerate response" style={{ height: "28px" }} onClick={onRegenerate}>
+            <span aria-hidden="true">🔄</span> Regenerate
+          </button>
+        )}
+        <button className="btn btn-ghost btn-sm" aria-label="Mark response as helpful" style={{ height: "28px" }} onClick={() => toast.success("Thanks for the feedback!")}>
+          <span aria-hidden="true">👍</span> Helpful
+        </button>
+        <button className="btn btn-ghost btn-sm" aria-label="Mark response as not helpful" style={{ height: "28px" }} onClick={() => toast("Noted — we'll improve.", { icon: "👎" })}>
+          <span aria-hidden="true">👎</span> Not Helpful
+        </button>
+        {readbackSupported && (
+          <button
+            className="btn btn-ghost btn-sm"
+            aria-label={isSpeaking ? "Stop reading aloud" : "Read answer aloud"}
+            style={{ height: "28px" }}
+            onClick={() => isSpeaking ? stop() : speak(mainText, voiceLang || "en-IN")}
+          >
+            <span aria-hidden="true">{isSpeaking ? "⏹" : "🔊"}</span> {isSpeaking ? "Stop" : "Read"}
+          </button>
+        )}
+      </div>
+
+      {/* Follow-up suggestion chips (Task 4.10) */}
+      {!isStreaming && (
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
+          {suggestions.slice(0, 3).map((s) => (
+            <button key={s} onClick={() => onFollowUpClick(s)}
+              style={{ border: "1px solid var(--border-default)", borderRadius: "20px", padding: "4px 12px", height: "28px", fontFamily: "var(--font-body)", fontSize: "13px", cursor: "pointer", background: "none", color: "var(--text-secondary)", transition: "border-color 100ms, color 100ms" }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--brand)"; (e.currentTarget as HTMLElement).style.color = "var(--brand)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; }}
+            >{s}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+MemoizedMessage.displayName = "MemoizedMessage";
+
+// ─── Main component ───────────────────────────────────────────────────────────
+
+// ─── Flashcard Mode overlay for Student workspace ─────────────────────────────
+
+function FlashcardMode({
+  decks, onClose, onReview,
+}: {
+  decks: any[];
+  onClose: () => void;
+  onReview: (cardId: string, quality: number) => Promise<void>;
+}) {
+  const allCards = decks.flatMap((d) => d.cards || []);
+  const [idx, setIdx] = useState(0);
+  const [flipped, setFlipped] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const card = allCards[idx];
+
+  const handleReview = async (quality: number) => {
+    if (!card || reviewing) return;
+    setReviewing(true);
+    await onReview(card.id, quality);
+    setFlipped(false);
+    setIdx((prev) => Math.min(prev + 1, allCards.length - 1));
+    setReviewing(false);
+  };
+
+  if (allCards.length === 0) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: "16px" }}>
+        <div style={{ fontSize: "48px" }}>🃏</div>
+        <div style={{ fontFamily: "var(--font-body)", color: "var(--text-secondary)", fontSize: "14px" }}>No flashcards yet. Generate some via the chat first.</div>
+        <button onClick={onClose} className="btn btn-secondary">← Back to chat</button>
+      </div>
+    );
+  }
+
+  const correct = 0;
+  const remaining = allCards.length - idx;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", padding: "24px", gap: "20px" }}>
+      {/* Progress */}
+      <div style={{ fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--text-secondary)" }}>
+        Card {idx + 1} of {allCards.length} · {remaining} remaining today
+      </div>
+
+      {/* Flip card */}
+      <div
+        onClick={() => setFlipped((f) => !f)}
+        style={{
+          width: "min(480px, 100%)", height: "260px", cursor: "pointer",
+          perspective: "1000px",
+        }}
+      >
+        <div style={{
+          width: "100%", height: "100%", position: "relative",
+          transformStyle: "preserve-3d",
+          transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)",
+          transition: "transform 300ms ease",
+        }}>
+          {/* Front */}
+          <div style={{
+            position: "absolute", inset: 0, backfaceVisibility: "hidden",
+            background: "var(--surface-raised)", border: "1px solid var(--border-default)",
+            borderRadius: "16px", padding: "32px", display: "flex",
+            alignItems: "center", justifyContent: "center", textAlign: "center",
+          }}>
+            <div>
+              <div style={{ fontSize: "11px", color: "var(--text-tertiary)", marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.07em" }}>Question</div>
+              <div style={{ fontFamily: "var(--font-body)", fontSize: "16px", color: "var(--text-primary)", lineHeight: 1.5 }}>{card?.front}</div>
+              <div style={{ marginTop: "20px", fontSize: "12px", color: "var(--text-tertiary)" }}>Tap to reveal answer</div>
+            </div>
+          </div>
+          {/* Back */}
+          <div style={{
+            position: "absolute", inset: 0, backfaceVisibility: "hidden",
+            transform: "rotateY(180deg)",
+            background: "var(--brand-ghost, var(--surface-raised))", border: "1px solid var(--brand)",
+            borderRadius: "16px", padding: "32px", display: "flex",
+            alignItems: "center", justifyContent: "center", textAlign: "center",
+          }}>
+            <div>
+              <div style={{ fontSize: "11px", color: "var(--brand)", marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.07em" }}>Answer</div>
+              <div style={{ fontFamily: "var(--font-body)", fontSize: "15px", color: "var(--text-primary)", lineHeight: 1.6 }}>{card?.back}</div>
+              {card?.citation && (
+                <div style={{ marginTop: "12px", fontSize: "11px", color: "var(--text-tertiary)", fontStyle: "italic" }}>{card.citation}</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Quality rating buttons — only after flip */}
+      {flipped && (
+        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", justifyContent: "center" }}>
+          {[
+            { label: "😵 Forgot", quality: 0 },
+            { label: "😕 Hard", quality: 2 },
+            { label: "😊 OK", quality: 4 },
+            { label: "🎯 Easy", quality: 5 },
+          ].map(({ label, quality }) => (
+            <button
+              key={quality}
+              onClick={() => handleReview(quality)}
+              disabled={reviewing}
+              className="btn btn-secondary"
+              style={{ height: "40px", fontSize: "13px", gap: "4px" }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <button onClick={onClose} className="btn btn-ghost btn-sm" style={{ marginTop: "8px" }}>← Back to chat</button>
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
+
+export default function WorkspaceUI({ workspaceType = "general" }: { workspaceType?: string }) {
+  const [docs, setDocs] = useState<Document[]>([]);
+  const [activeDoc, setActiveDoc] = useState<Document | null>(null);
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [response, setResponse] = useState<QueryResponse | null>(null);
+  const [history, setHistory] = useState<ChatMessage[]>([]);
+  const [showThinkingLabel, setShowThinkingLabel] = useState(false);
+  const [thinkingStage, setThinkingStage] = useState<{ stage: string; detail: string } | null>(null);
+  const [comparisonMode, setComparisonMode] = useState(false);
+
+  // ── Workspace-specific state ──────────────────────────────────────────────
+  const [showPaperConfig, setShowPaperConfig] = useState(false);
+  const [generatedPaper, setGeneratedPaper] = useState<any | null>(null);
+  const [showAnswerKey, setShowAnswerKey] = useState(false);
+  // PART 6 Phase 1 — rich-text editor overlay for the generated paper.
+  const [showPaperEditor, setShowPaperEditor] = useState(false);
+  const [showPomodoro, setShowPomodoro] = useState(false);
+  const [flashcardMode, setFlashcardMode] = useState(false);
+  const [flashcardDecks, setFlashcardDecks] = useState<any[]>([]);
+  // Phase 11 — Table Extraction Panel (exam/teacher workspace)
+  const [showTablePanel, setShowTablePanel] = useState(false);
+  const [tablePanelDocId, setTablePanelDocId] = useState<string | null>(null);
+
+  // ── Finance workspace state ───────────────────────────────────────────────
+  const [showRatioPanel, setShowRatioPanel] = useState(false);
+
+  // ── Legal workspace state ─────────────────────────────────────────────────
+  const [showLegalRisk, setShowLegalRisk] = useState(false);
+
+  // ── Research workspace state ──────────────────────────────────────────────
+  const [showCitationModal, setShowCitationModal] = useState(false);
+  const [showGapsPanel, setShowGapsPanel] = useState(false);
+
+  // ── HR workspace state ────────────────────────────────────────────────────
+  const [showRankings, setShowRankings] = useState(false);
+  // Per-file progress: { [filename]: { progress: 0-100, status: "uploading"|"done"|"error" } }
+  const [batchProgress, setBatchProgress] = useState<Record<string, { progress: number; status: string }>>({});
+  const batchFileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Disclaimer dismissal (C6) ─────────────────────────────────────────────
+  const [disclaimerDismissed, setDisclaimerDismissed] = useState(true); // start true to avoid SSR flash; corrected in effect
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const dismissed = localStorage.getItem(`dm.disclaimer.dismissed.${workspaceType}`) === "true";
+    setDisclaimerDismissed(dismissed);
+  }, [workspaceType]);
+  const dismissDisclaimer = useCallback(() => {
+    setDisclaimerDismissed(true);
+    try { localStorage.setItem(`dm.disclaimer.dismissed.${workspaceType}`, "true"); } catch {}
+  }, [workspaceType]);
+
+  // ── Phase 28: Text Clip state ─────────────────────────────────────────────
+  const [clipBarState, setClipBarState] = useState<{ text: string; rect: DOMRect } | null>(null);
+  const [clipModalOpen, setClipModalOpen] = useState(false);
+  const [clipInitialText, setClipInitialText] = useState("");
+
+  // ── Trust Score state (Phase 18-B) ─────────────────────────────────────────
+  const [trustDataMap, setTrustDataMap] = useState<Record<string, TrustReport>>({});
+  const [expandedTrustMsgId, setExpandedTrustMsgId] = useState<string | null>(null);
+  const [docPreviewState, setDocPreviewState] = useState<{ doc: Document; page: number } | null>(null);
+  const latestTrustRef = useRef<TrustReport | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const pollingIntervalsRef = useRef<NodeJS.Timeout[]>([]);
+  const thinkingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ─── FIX: streaming-token memory leak ────────────────────────────────────
+  // Before: per-token setResponse triggered a full React re-render AND a fresh
+  // ReactMarkdown + remarkGfm parse of the entire growing answer (O(n²)
+  // string + AST allocation). For long answers this drove dev-server heap
+  // above 8 GB. Now: tokens accumulate in a ref and we flush via rAF, so
+  // re-renders are capped at one per animation frame and token concat runs
+  // on a plain string (cheap) instead of through React state.
+  const tokenBufferRef = useRef<string>("");
+  const rafIdRef = useRef<number | null>(null);
+  const flushTokens = useCallback(() => {
+    rafIdRef.current = null;
+    const pending = tokenBufferRef.current;
+    if (!pending) return;
+    tokenBufferRef.current = "";
+    setResponse((prev) => (prev ? { ...prev, answer: prev.answer + pending } : null));
+  }, []);
+  const scheduleTokenFlush = useCallback(() => {
+    if (rafIdRef.current != null) return;
+    rafIdRef.current = typeof window !== "undefined" && window.requestAnimationFrame
+      ? window.requestAnimationFrame(flushTokens)
+      : (setTimeout(flushTokens, 16) as unknown as number);
+  }, [flushTokens]);
+  const flushTokensSync = useCallback(() => {
+    if (rafIdRef.current != null) {
+      if (typeof window !== "undefined" && window.cancelAnimationFrame) {
+        window.cancelAnimationFrame(rafIdRef.current);
+      } else {
+        clearTimeout(rafIdRef.current as unknown as NodeJS.Timeout);
+      }
+      rafIdRef.current = null;
+    }
+    flushTokens();
+  }, [flushTokens]);
+  useEffect(() => () => {
+    if (rafIdRef.current != null) {
+      if (typeof window !== "undefined" && window.cancelAnimationFrame) {
+        window.cancelAnimationFrame(rafIdRef.current);
+      } else {
+        clearTimeout(rafIdRef.current as unknown as NodeJS.Timeout);
+      }
+      rafIdRef.current = null;
+    }
+    tokenBufferRef.current = "";
+  }, []);
+
+  // Voice state
+  const [voiceLang, setVoiceLang] = useState("en-IN");
+  const [voiceInterim, setVoiceInterim] = useState("");
+  const queryRef = useRef(query);
+  queryRef.current = query;
+
+  const mdComponents = useMemo(() => buildMarkdownComponents(workspaceType), [workspaceType]);
+
+  // Misc-fix: read setTrialStatus so each SSE `trial_status` frame updates
+  // the pill in the header. Previously WorkspaceUI passed `undefined` for
+  // onTrialStatus and the pill only updated on the next billing-status
+  // poll — so the counter "didn't tick down" after asking a question.
+  const { setTrialStatus } = useTrialStore();
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const chatId = searchParams.get("chat");
+
+  const isStreaming = loading;
+
+  // Phase 11 — Cmd+Shift+T → open/close Extract Tables panel (exam workspace only)
+  useEffect(() => {
+    if (workspaceType !== "exam") return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toUpperCase() === "T") {
+        e.preventDefault();
+        setTablePanelDocId(activeDoc?.id ?? null);
+        setShowTablePanel((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [workspaceType, activeDoc]);
+
+  // Scroll to bottom when new content arrives
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [history, response?.answer]);
+
+  // Load chat history or create new session
+  useEffect(() => {
+    const initChat = async () => {
+      try {
+        if (chatId) {
+          const msgs = await getChatMessages(chatId);
+          setHistory(msgs);
+        } else {
+          const chats = await getChats(workspaceType);
+          if (chats.length > 0) {
+            router.replace(`${pathname}?chat=${chats[0].id}`);
+          } else {
+            const newChat = await createChat(`New ${workspaceType} chat`, workspaceType);
+            router.replace(`${pathname}?chat=${newChat.id}`);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to init chat", err);
+      }
+    };
+    initChat();
+    return () => {
+      pollingIntervalsRef.current.forEach(clearInterval);
+      abortControllerRef.current?.abort();
+    };
+  }, [chatId, workspaceType, pathname, router]);
+
+  // Restore draft when switching chats
+  useEffect(() => {
+    if (chatId) {
+      const saved = sessionStorage.getItem(`draft_${chatId}`);
+      if (saved) setQuery(saved);
+      else setQuery("");
+    }
+  }, [chatId]);
+
+  useEffect(() => {
+    localStorage.setItem("lastActiveWorkspace", pathname || "/");
+  }, [pathname]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("documind_voice_lang");
+    if (saved) setVoiceLang(saved);
+  }, []);
+
+  // Workspace document sync — P1: scope STRICTLY to the current chat.
+  // Before P1 this read `docs_${workspaceType}` from localStorage which
+  // surfaced every upload across every chat in the same workspace. Now we
+  // ask the backend for docs where `chat_session_id == chatId`. A new chat
+  // with no uploads gets an empty list — no bleed.
+  useEffect(() => {
+    if (!chatId) {
+      setDocs([]);
+      setActiveDoc(null);
+      return;
+    }
+    const syncWorkspace = async () => {
+      try {
+        const fetchedDocs = await listDocuments(undefined, chatId);
+        setDocs(fetchedDocs);
+        setActiveDoc(fetchedDocs.length > 0 ? fetchedDocs[0] : null);
+      } catch { toast.error("Failed to sync workspace"); }
+    };
+    syncWorkspace();
+  }, [workspaceType, chatId]);
+
+  // P6: live status polling for any doc that's still being processed.
+  // handleFileChange already polls newly-uploaded docs, but a user who
+  // reloads the page (or opens a chat where a doc was uploaded in another
+  // tab) needs the chip to keep updating. This effect picks up any
+  // non-terminal doc in the current chat and polls it every 2 s until it
+  // resolves to READY or FAILED.
+  useEffect(() => {
+    const TERMINAL = new Set(["READY", "FAILED", "DEDUPLICATED"]);
+    const inFlight = docs.filter((d) => !TERMINAL.has(d.status));
+    if (inFlight.length === 0) return;
+
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      if (cancelled) return;
+      const updates = await Promise.all(
+        inFlight.map(async (d) => {
+          try { return await getDocument(d.id); }
+          catch { return null; }
+        })
+      );
+      if (cancelled) return;
+      let anyChanged = false;
+      setDocs((prev) => prev.map((d) => {
+        const upd = updates.find((u) => u && u.id === d.id);
+        if (upd && upd.status !== d.status) { anyChanged = true; return upd; }
+        return d;
+      }));
+      if (anyChanged) {
+        setActiveDoc((cur) => {
+          if (!cur) return cur;
+          const fresh = updates.find((u) => u && u.id === cur.id);
+          return fresh || cur;
+        });
+      }
+    }, 2000);
+    pollingIntervalsRef.current.push(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      const i = pollingIntervalsRef.current.indexOf(interval);
+      if (i >= 0) pollingIntervalsRef.current.splice(i, 1);
+    };
+    // We re-run when the SET of in-flight ids changes; depending on docs
+    // directly would restart every time the chip rerenders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // FIX: depend ONLY on the SET of in-flight IDs, not their statuses,
+  // so each per-tick status update doesn't tear down + remount the effect
+  // (which was pushing a fresh interval into pollingIntervalsRef every poll).
+  }, [docs.filter((d) => !new Set(["READY","FAILED","DEDUPLICATED"]).has(d.status)).map((d) => d.id).sort().join(",")]);
+
+  const handleQueryChange = (val: string) => {
+    setQuery(val);
+    if (chatId) sessionStorage.setItem(`draft_${chatId}`, val);
+  };
+
+  // ── Core send function ─────────────────────────────────────────────────────
+  const sendMessage = useCallback(async (queryText: string) => {
+    if (!queryText.trim()) return;
+    window.speechSynthesis?.cancel?.();
+
+    // PART 4 — Teacher workspace: if the user types "generate paper" /
+    // "create question paper" / "make a paper" in free-text chat, gently
+    // nudge them toward the Paper Configuration panel instead of routing
+    // the request through the generic chat (which has no structured config
+    // and produces vague answers like "the previous conversation does not
+    // contain the details"). Free-text chat in this workspace is for Q&A
+    // about the docs.
+    if (workspaceType === "exam") {
+      const q = queryText.trim().toLowerCase();
+      const wantsGenerate = /\b(generate|create|make)\b.*\b(paper|exam|question paper)\b/.test(q);
+      if (wantsGenerate) {
+        toast(
+          "Use the Generate Paper panel for structured exam generation — free-text chat is for Q&A about the doc.",
+          { icon: "💡", duration: 5000 },
+        );
+        setShowPaperConfig(true);
+        return;
+      }
+    }
+
+    // P6 — Send is locked whenever ANY attached doc is still processing.
+    // No-document mode is fine (docs.length === 0 → unlocked). All docs
+    // READY/FAILED/DEDUPLICATED → unlocked. A FAILED doc doesn't block
+    // because retrieval already filters to status==READY.
+    const TERMINAL = new Set(["READY", "FAILED", "DEDUPLICATED"]);
+    const anyProcessing = docs.some((d) => !TERMINAL.has(d.status));
+    if (anyProcessing) {
+      return; // Send button is disabled + inline hint visible; no toast spam.
+    }
+
+    setLoading(true);
+    setShowThinkingLabel(false);
+    thinkingTimerRef.current = setTimeout(() => setShowThinkingLabel(true), 1500);
+    abortControllerRef.current = new AbortController();
+
+    if (chatId) {
+      await createChatMessage(chatId, "user", queryText);
+      setHistory((prev) => [...prev, { id: Date.now().toString(), role: "user", content: queryText }]);
+
+      // P7: auto-name the chat from the user's first message. A heuristic
+      // (truncate to ~40 chars, drop trailing punctuation) is plenty for
+      // the sidebar — no extra LLM round-trip needed. The Sidebar listens
+      // for 'chat-title-updated' and refreshes its list.
+      if (history.length === 0) {
+        const cleaned = queryText.trim().replace(/\s+/g, " ").replace(/[?.!,;:]+$/, "");
+        const newTitle = cleaned.length > 40 ? cleaned.substring(0, 37) + "..." : cleaned;
+        updateChat(chatId, { title: newTitle }).then(() => {
+          window.dispatchEvent(new CustomEvent("chat-title-updated", { detail: { id: chatId, title: newTitle } }));
+        }).catch(console.error);
+      }
+    }
+
+    if (chatId) sessionStorage.removeItem(`draft_${chatId}`);
+    setQuery("");
+
+    setResponse({
+      query: queryText, answer: "", confidence_score: 0, evidence: [],
+      diagnostics: { embedding_time_sec: 0, database_time_sec: 0, reranking_time_sec: 0, generation_time_sec: 0, total_time_sec: 0, candidates_retrieved: 0, evidence_accepted: 0, estimated_tokens: 0 },
+    });
+
+    const toastId = toast.loading("Initializing secure stream...");
+
+    try {
+      await askQuestionStream(
+        queryText, 5,
+        (msg) => toast.loading(msg, { id: toastId }),
+        (metadata) => {
+          setResponse((prev) => prev ? {
+            ...prev,
+            confidence_score: metadata.confidence_score,
+            evidence: metadata.evidence,
+            grounded: metadata.grounded,
+            mode: metadata.mode,
+          } : null);
+        },
+        (token) => {
+          if (thinkingTimerRef.current) { clearTimeout(thinkingTimerRef.current); thinkingTimerRef.current = null; }
+          setShowThinkingLabel(false);
+          setThinkingStage(null);
+          // FIX: buffer tokens; flush at most once per animation frame.
+          tokenBufferRef.current += token;
+          scheduleTokenFlush();
+        },
+        (err) => {
+          flushTokensSync();
+          if (err !== "Request cancelled.") toast.error(err, { id: toastId });
+          setLoading(false);
+          setThinkingStage(null);
+          abortControllerRef.current = null;
+          if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
+        },
+        async () => {
+          if (!abortControllerRef.current) return;
+          flushTokensSync();
+          toast.success("Response complete.", { id: toastId });
+          setLoading(false);
+          setThinkingStage(null);
+          abortControllerRef.current = null;
+          if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
+          setShowThinkingLabel(false);
+          // Misc fix — duplicate-answer rendering:
+          // Previously the response stayed mounted for a fixed 120 ms after
+          // `createChatMessage` was kicked off, which meant the streaming
+          // response AND the persisted history message were on screen
+          // simultaneously (visible as TWO identical AI replies in the
+          // screenshot the user shared). Clear `response` AS PART OF the
+          // same microtask that pushes the saved message into history, so
+          // the swap happens atomically.
+          setResponse((currentRes) => {
+            if (currentRes && chatId) {
+              const snapshot = currentRes;
+              queueMicrotask(() => {
+                window.dispatchEvent(new CustomEvent("autosave:saving"));
+                createChatMessage(chatId, "assistant", JSON.stringify(snapshot)).then((savedMsg) => {
+                  // Atomic swap: push into history AND null out the streaming
+                  // response in the same React batch — no overlap window.
+                  setHistory((prev) => [...prev, savedMsg]);
+                  setResponse(null);
+                  window.dispatchEvent(new CustomEvent("autosave:saved"));
+                  if (latestTrustRef.current) {
+                    setTrustDataMap((prev) => ({ ...prev, [savedMsg.id]: latestTrustRef.current! }));
+                    latestTrustRef.current = null;
+                  }
+                }).catch(() => {
+                  // Even if the save fails, hide the streaming view; the
+                  // user can regenerate.
+                  setResponse(null);
+                  window.dispatchEvent(new CustomEvent("autosave:error"));
+                });
+              });
+            } else if (!chatId) {
+              // No chatId → we never persist; just hide the streaming view.
+              setTimeout(() => setResponse(null), 0);
+            }
+            return currentRes;
+          });
+        },
+        abortControllerRef.current.signal,
+        chatId || undefined,
+        workspaceType,
+        // Misc-fix: feed the SSE trial_status frame straight into the
+        // global store so TrialPill ("Free trial — N left") updates after
+        // each question without waiting for the next billing-status poll.
+        (ts) => setTrialStatus(ts.queriesUsed, ts.queriesRemaining),
+        (stage) => setThinkingStage(stage), // onThinkingStage
+        comparisonMode,
+        (trust) => { latestTrustRef.current = trust; }, // onTrustReport
+      );
+    } catch (err: any) {
+      toast.error(err.message || "Query failed.", { id: toastId });
+      setLoading(false);
+    }
+  }, [activeDoc, chatId, history.length, workspaceType, docs, comparisonMode, setTrialStatus]);
+
+  const handleAsk = (e: React.FormEvent) => { e.preventDefault(); sendMessage(query); };
+
+  // Task 4.5 — Regenerate last response
+  const regenerateLastResponse = useCallback(async () => {
+    const lastUserIdx = [...history].reverse().findIndex((m) => m.role === "user");
+    if (lastUserIdx === -1) return;
+    const lastUserMsg = history[history.length - 1 - lastUserIdx];
+    const lastAiIdx = history.map((m) => m.role).lastIndexOf("assistant");
+    if (lastAiIdx !== -1) setHistory((prev) => prev.filter((_, i) => i !== lastAiIdx));
+    await sendMessage(lastUserMsg.content);
+  }, [history, sendMessage]);
+
+  const handleStopGenerating = () => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setLoading(false);
+    if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
+    setShowThinkingLabel(false);
+    toast("Generation stopped.", { icon: "🛑" });
+    setResponse((currentRes) => {
+      if (currentRes && chatId) {
+        createChatMessage(chatId, "assistant", JSON.stringify(currentRes)).then((savedMsg) => {
+          setHistory((prev) => [...prev, savedMsg]);
+        });
+      }
+      return null;
+    });
+  };
+
+  const handleVoiceLangChange = useCallback((lang: string) => {
+    setVoiceLang(lang);
+    localStorage.setItem("documind_voice_lang", lang);
+  }, []);
+
+  const handleInterimText = useCallback((text: string) => {
+    setVoiceInterim(text);
+  }, []);
+
+  const handleVoiceTranscript = useCallback((text: string) => {
+    setVoiceInterim("");
+    setQuery(text);
+    const lang = localStorage.getItem("documind_voice_lang") || "en-IN";
+    window.dispatchEvent(new CustomEvent("voice_query_used", { detail: { workspace: workspaceType, lang } }));
+    setTimeout(() => { sendMessage(text); }, 300);
+  }, [sendMessage, workspaceType]);
+
+  const handleUploadClick = () => fileInputRef.current?.click();
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (!selectedFile) return;
+    // P8: PowerPoint is supported via python-pptx on the backend. Legacy
+    // `.ppt` (binary PowerPoint, pre-2007) is NOT supported — convert to
+    // .pptx first. Surface a clear message instead of accepting it and
+    // letting the worker fail silently.
+    const lowerName = selectedFile.name.toLowerCase();
+    if (lowerName.endsWith(".ppt") && !lowerName.endsWith(".pptx")) {
+      toast.error("Legacy .ppt files aren't supported. Save as .pptx and re-upload.");
+      e.target.value = "";
+      return;
+    }
+    setLoading(true);
+    const toastId = toast.loading("Uploading document securely...");
+    try {
+      // P1: bind the upload to THIS chat session. listDocuments now filters
+      // by chat_session_id, so we no longer need the per-workspace
+      // localStorage shadow list — the backend is the source of truth.
+      const uploadedDoc = await uploadDocument(
+        selectedFile,
+        undefined,
+        chatId || undefined,
+      );
+      setDocs((prev) => [uploadedDoc, ...prev]);
+      setActiveDoc(uploadedDoc);
+
+      if (uploadedDoc.status === "DEDUPLICATED") {
+        toast.success(`📄 This document matches '${uploadedDoc.duplicate_of}'. Using cached embeddings — instant processing!`, { id: toastId });
+        setLoading(false);
+      } else {
+        toast.success("Document uploaded. Starting pipeline...", { id: toastId });
+        const interval = setInterval(async () => {
+          try {
+            const statusDoc = await getDocument(uploadedDoc.id);
+            setActiveDoc(statusDoc);
+            setDocs((prev) => prev.map((d) => d.id === statusDoc.id ? statusDoc : d));
+            if (statusDoc.status === "READY") { toast.success("Extraction complete!", { id: toastId }); clearInterval(interval); { const i = pollingIntervalsRef.current.indexOf(interval); if (i >= 0) pollingIntervalsRef.current.splice(i, 1); } setLoading(false); }
+            else if (statusDoc.status === "FAILED") { toast.error("Extraction failed.", { id: toastId }); clearInterval(interval); { const i = pollingIntervalsRef.current.indexOf(interval); if (i >= 0) pollingIntervalsRef.current.splice(i, 1); } setLoading(false); }
+          } catch { /* transient */ }
+        }, 2000);
+        pollingIntervalsRef.current.push(interval);
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Upload failed.", { id: toastId });
+    } finally {
+      setLoading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  // Task 4.11 — auto-expand textarea
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    handleQueryChange(e.target.value);
+    e.target.style.height = "auto";
+    e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
+  };
+
+  // Phase 28 — selection clip hook
+  useSelectionClip({
+    onSelection: (text, rect) => {
+      setClipBarState({ text, rect });
+    },
+  });
+
+  const handleClipBarAdd = () => {
+    if (!clipBarState) return;
+    if (clipBarState.text.length < 50) {
+      toast("Select more text (minimum 50 characters)", { icon: "⚠️" });
+      setClipBarState(null);
+      return;
+    }
+    setClipInitialText(clipBarState.text);
+    setClipBarState(null);
+    setClipModalOpen(true);
+  };
+
+  const handleClipped = (doc: Document) => {
+    // P1: chat-scoped — no more per-workspace localStorage shadow list.
+    // The clip backend already records chat_session_id, so listDocuments
+    // for this chat will surface it on next sync.
+    setDocs((prev) => [doc, ...prev]);
+    if (!activeDoc) setActiveDoc(doc);
+    toast.success("📋 Text clipped — processing…");
+    // Analytics: clip_text_used
+    window.dispatchEvent(new CustomEvent("clip_text_used", { detail: { workspace: workspaceType } }));
+    // Poll until READY (reuses existing pattern)
+    if (doc.status === "PROCESSING") {
+      const interval = setInterval(async () => {
+        try {
+          const updated = await getDocument(doc.id);
+          setDocs((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
+          if (updated.status === "READY") {
+            toast.success("📋 Clip ready — you can now ask questions!", { duration: 4000 });
+            clearInterval(interval);
+            const i = pollingIntervalsRef.current.indexOf(interval);
+            if (i >= 0) pollingIntervalsRef.current.splice(i, 1);
+          } else if (updated.status === "FAILED") {
+            toast.error("Clip processing failed.");
+            clearInterval(interval);
+            const i = pollingIntervalsRef.current.indexOf(interval);
+            if (i >= 0) pollingIntervalsRef.current.splice(i, 1);
+          }
+        } catch { /* transient */ }
+      }, 2000);
+      pollingIntervalsRef.current.push(interval);
+    }
+  };
+
+  const isLegalOrFinance = workspaceType === "legal" || workspaceType === "finance";
+
+  // Derive last AI message index for regenerate button
+  const lastAiMsgIdx = history.map((m) => m.role).lastIndexOf("assistant");
+
+  // ── Handle workspace action button clicks ─────────────────────────────────
+  // Every chip in WORKSPACE_ACTIONS gets a real onClick: either a panel
+  // toggle, a CSV/DOCX export, or a prompt that drops into the input. Nothing
+  // should be a dead button.
+  const fillPrompt = useCallback((p: string) => {
+    handleQueryChange(p);
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [chatId]);
+
+  // P2 — welcome quick-action chips. NEVER auto-send. For chips that map
+  // to a config panel (exam "Generate paper" → PaperConfigPanel), open the
+  // panel and let the user click its Generate button. For everything else
+  // prefill the input so the user can review/edit and press Send.
+  const handleWelcomeQuickAction = useCallback((label: string, prompt: string) => {
+    const lower = label.toLowerCase();
+    // Exam: "Generate paper" → open the Paper Configuration panel only.
+    if (workspaceType === "exam" && lower.includes("generate paper")) {
+      setShowPaperConfig(true);
+      return;
+    }
+    // Study: "Quiz me" / "Flashcards" — wire these to their respective
+    // panels later (P5). For now, prefill so the user can still send.
+    fillPrompt(prompt);
+  }, [workspaceType, fillPrompt]);
+
+  const handleWorkspaceAction = useCallback(async (label: string) => {
+    if (workspaceType === "finance") {
+      if (label === "Ratios" || label === "Verify") { setShowRatioPanel((v) => !v); return; }
+      if (label === "Extraction Mode") {
+        fillPrompt("Extract every key financial figure (revenue, profit, totals, ratios) with the exact page and source row. Cite each number.");
+        return;
+      }
+      if (label === "Table Mode") {
+        // Reuse the exam-workspace table extractor — works on any uploaded PDF.
+        setTablePanelDocId(activeDoc?.id ?? null);
+        setShowTablePanel((v) => !v);
+        return;
+      }
+    }
+    if (workspaceType === "legal") {
+      if (label === "Risk Report" || label === "Risk Mode") { setShowLegalRisk((v) => !v); return; }
+      if (label === "Contract Mode") {
+        fillPrompt("Extract and categorize every key clause in this contract with page references and a one-line summary of each.");
+        return;
+      }
+      if (label === "Clause Library") {
+        fillPrompt("List every clause type present in this contract grouped by category (payment, IP, termination, liability, confidentiality). For each, quote the clause and give its page.");
+        return;
+      }
+    }
+    if (workspaceType === "exam") {
+      if (label === "Generate Paper") { setShowPaperConfig(true); return; }
+      if (label === "Edit Paper") {
+        // PART 6 Phase 1 — open the rich-text editor over the generated paper.
+        if (!generatedPaper) {
+          toast("Generate a paper first, then click Edit Paper.", { icon: "💡" });
+          return;
+        }
+        setShowPaperEditor(true);
+        return;
+      }
+      if (label === "Answer Key") { setShowAnswerKey((v) => !v); return; }
+      if (label === "Extract Tables") {
+        setTablePanelDocId(activeDoc?.id ?? null);
+        setShowTablePanel((v) => !v);
+        return;
+      }
+      if (label === "Question Bank") {
+        fillPrompt("Create a question bank of 50 varied questions covering every topic in this document. Mix MCQ, short and long-answer formats. Tag each question with its Bloom's level.");
+        return;
+      }
+      if (label === "Export DOCX") {
+        if (!generatedPaper?.paper) {
+          toast("Generate a paper first, then click Export DOCX.", { icon: "💡" });
+          return;
+        }
+        try {
+          const res = await apiFetch(`/exams/${generatedPaper.exam_id ?? "latest"}/export/docx`, {});
+          if (!res.ok) throw new Error("Export failed");
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `exam_paper_${new Date().toISOString().slice(0, 10)}.docx`;
+          a.click();
+          URL.revokeObjectURL(url);
+        } catch {
+          toast.error("Export failed. The paper isn't saved yet — save it first.");
+        }
+        return;
+      }
+    }
+    if (workspaceType === "hr") {
+      if (label === "View Rankings") { setShowRankings(true); return; }
+      if (label === "Batch Upload") { batchFileInputRef.current?.click(); return; }
+      if (label === "Set JD Context") {
+        fillPrompt("[Paste the job description below this line]\n\nUse the JD above to score every uploaded resume against each required skill.");
+        return;
+      }
+      if (label === "Export Candidates") {
+        setShowRankings(true);
+        toast("Rankings panel open — use its export button to download the CSV.", { icon: "💡" });
+        return;
+      }
+    }
+    if (workspaceType === "research") {
+      if (label === "Citation Mode" || label === "Export Citations") { setShowCitationModal((v) => !v); return; }
+      if (label === "Find Gaps") { setShowGapsPanel((v) => !v); return; }
+      if (label === "Review Mode") {
+        fillPrompt("Provide a structured synthesis of every uploaded paper. Group by theme, contrast methodologies, and highlight where authors disagree. Cite the paper for each claim.");
+        return;
+      }
+      if (label === "Import Papers") {
+        fileInputRef.current?.click();
+        return;
+      }
+    }
+    if (workspaceType === "study") {
+      if (label === "Pomodoro Timer") { setShowPomodoro((v) => !v); return; }
+      if (label === "Flashcard Mode") {
+        if (!flashcardMode) {
+          try {
+            const res = await apiFetch("/study/decks", {});
+            if (res.ok) {
+              const deckList = await res.json();
+              const decksWithCards = await Promise.all(
+                deckList.map(async (d: any) => {
+                  const cr = await apiFetch(`/study/decks/${d.id}/flashcards`, {});
+                  const cards = cr.ok ? await cr.json() : [];
+                  return { ...d, cards };
+                })
+              );
+              setFlashcardDecks(decksWithCards);
+            }
+          } catch { toast.error("Failed to load flashcards"); }
+        }
+        setFlashcardMode((v) => !v);
+        return;
+      }
+      if (label === "Study Mode") {
+        fillPrompt("Walk me through this material as if you were tutoring me. Start with the core concepts, then add examples, then test my understanding with a short question.");
+        return;
+      }
+      if (label === "My Progress") {
+        fillPrompt("Based on our chat history in this workspace, summarise which topics I've covered, where my answers were strongest, and what I should review next.");
+        return;
+      }
+    }
+
+    // Final fallback — never let a chip click do nothing.
+    toast("This action isn't wired up yet — try a quick-action chip above.", { icon: "💡" });
+  }, [workspaceType, flashcardMode, activeDoc, generatedPaper, fillPrompt]);
+
+  const handleFlashcardReview = useCallback(async (cardId: string, quality: number) => {
+    try {
+      await apiFetch(`/study/flashcards/${cardId}/review`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quality }),
+      });
+    } catch { /* non-fatal */ }
+  }, []);
+
+  const handleSecondOpinion = useCallback(async (query: string): Promise<string> => {
+    try {
+      const res = await apiFetch("/query/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          top_k: 5,
+          similarity_threshold: 0.35,
+          second_opinion: true,
+          workspace_type: workspaceType,
+        }),
+      });
+      if (!res.ok) return "Alternative retrieval unavailable.";
+      const data = await res.json();
+      return data?.answer || "No alternative answer found.";
+    } catch {
+      return "Alternative retrieval unavailable.";
+    }
+  }, [workspaceType]);
+
+  const handleViewPage = useCallback((filename: string, page: number) => {
+    const doc = docs.find((d) => d.filename === filename);
+    if (doc) setDocPreviewState({ doc, page });
+  }, [docs]);
+
+  // ── HR: Batch upload with per-file progress ───────────────────────────────
+  const handleBatchFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const initial: Record<string, { progress: number; status: string }> = {};
+    files.forEach((f) => { initial[f.name] = { progress: 0, status: "uploading" }; });
+    setBatchProgress(initial);
+
+    await Promise.all(
+      files.map(async (file) => {
+        try {
+          // Simulate progress during upload
+          setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 30, status: "uploading" } }));
+          // P1: bind every batch-uploaded doc to the current chat session so
+          // HR rankings don't leak across chats.
+          const uploadedDoc = await uploadDocument(file, undefined, chatId || undefined);
+          setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 60, status: "uploading" } }));
+
+          // P1: backend is now source of truth for per-chat docs — no
+          // per-workspace localStorage shadow list.
+          setDocs((prev) => [uploadedDoc, ...prev]);
+          setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 100, status: "done" } }));
+        } catch {
+          setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 0, status: "error" } }));
+        }
+      })
+    );
+
+    if (batchFileInputRef.current) batchFileInputRef.current.value = "";
+    setTimeout(() => setBatchProgress({}), 3000);
+  }, [workspaceType, chatId]);
+
+  const handlePaperGenerated = useCallback((data: any) => {
+    // PART 3 — keep the full payload (including data.exam_id from the
+    // backend auto-save) so the Export DOCX action chip can hit
+    // GET /exams/{id}/export/docx directly.
+    setGeneratedPaper(data);
+    if (data?.save_warning) {
+      toast(data.save_warning, { icon: "⚠️" });
+    }
+    const paperText = formatPaperAsMarkdown(data);
+    setHistory((prev) => [...prev, {
+      id: Date.now().toString(), role: "assistant",
+      content: JSON.stringify({ answer: paperText, confidence_score: 1, evidence: [] }),
+    }]);
+  }, []);
+
+  function formatPaperAsMarkdown(data: any): string {
+    const meta = data.metadata || {};
+    let md = `## ${meta.subject || "Exam"} Paper — ${meta.board || ""}\n`;
+    md += `**Total Marks:** ${meta.total_marks}  |  **Duration:** ${meta.duration_minutes} min  |  `;
+    md += `**Generated:** ${new Date(data.generated_at).toLocaleString()}\n\n`;
+
+    const sections = data.paper?.sections || [];
+    for (const sec of sections) {
+      md += `### SECTION ${sec.label}`;
+      if (sec.question_type) md += ` — ${sec.question_type.toUpperCase()}`;
+      md += "\n\n";
+      for (const q of sec.questions || []) {
+        md += `**${q.num}.** ${q.text}  **[${q.marks}]**\n`;
+        if (q.options?.length) {
+          q.options.forEach((opt: string, i: number) => {
+            md += `   ${String.fromCharCode(65 + i)}. ${opt}\n`;
+          });
+        }
+        md += "\n";
+      }
+    }
+    return md;
+  }
+
+  return (
+    <div className="h-full flex flex-col px-4 md:px-8 py-6 pb-0 w-full max-w-6xl mx-auto" style={{ position: "relative" }}>
+      {/* Toaster is mounted globally in app/layout.tsx. Rendering a second
+          one here doubled every toast (e.g. 6 stacked 'Failed to fetch'
+          banners from a single failure). */}
+
+      {/* ── Phase 28: Selection Clip Bar ── */}
+      {clipBarState && (
+        <ClipBar
+          rect={clipBarState.rect}
+          onAddToSession={handleClipBarAdd}
+          onDismiss={() => setClipBarState(null)}
+        />
+      )}
+
+      {/* ── Phase 28: Clip Modal ── */}
+      {clipModalOpen && (
+        <ClipModal
+          initialText={clipInitialText}
+          onClose={() => { setClipModalOpen(false); setClipInitialText(""); }}
+          onClipped={handleClipped}
+          chatSessionId={chatId || undefined}
+        />
+      )}
+
+      {/* ── Document Preview Panel (Trust Score contradiction "View Page") ── */}
+      {docPreviewState && (
+        <DocumentPreviewPanel
+          doc={docPreviewState.doc}
+          initialPage={docPreviewState.page}
+          onClose={() => setDocPreviewState(null)}
+        />
+      )}
+
+      {/* ── Paper Config Panel (Teacher workspace) ── */}
+      {showPaperConfig && (
+        <PaperConfigPanel
+          onClose={() => setShowPaperConfig(false)}
+          onGenerated={handlePaperGenerated}
+          chatSessionId={chatId || undefined}
+          // B-fix — give the panel the live status of each attached doc so
+          // it can disable Generate while anything's still processing,
+          // instead of letting the user click and hit a 409 "still
+          // processing" error.
+          attachedDocs={docs.map((d) => ({ id: d.id, filename: d.filename, status: d.status }))}
+        />
+      )}
+
+      {/* PART 6 Phase 1 — rich-text editor for the generated paper. */}
+      {showPaperEditor && generatedPaper && (
+        <EditablePaperPanel
+          paper={generatedPaper}
+          onClose={() => setShowPaperEditor(false)}
+          onSaved={(updated) => setGeneratedPaper(updated)}
+        />
+      )}
+
+      {/* ── Phase 11: Table Extraction Panel (Exam + Finance workspaces) ── */}
+      {(workspaceType === "exam" || workspaceType === "finance") && showTablePanel && (
+        <TableExtractionPanel
+          documentId={tablePanelDocId}
+          documentName={activeDoc?.filename}
+          onClose={() => setShowTablePanel(false)}
+        />
+      )}
+
+      {/* ── Finance Ratio Panel ── */}
+      {workspaceType === "finance" && showRatioPanel && (
+        <FinanceRatioPanel
+          documentIds={docs.filter((d) => d.status === "READY").map((d) => d.id)}
+          onClose={() => setShowRatioPanel(false)}
+        />
+      )}
+
+      {/* ── Legal Risk Panel ── */}
+      {workspaceType === "legal" && showLegalRisk && (
+        <LegalRiskPanel
+          contractId={null}
+          documentId={activeDoc?.id ?? null}
+          activeDocumentId={activeDoc?.id ?? null}
+          onClose={() => setShowLegalRisk(false)}
+          onFetchContracts={async () => {
+            try {
+              const res = await apiFetch("/legal/contracts", {});
+              if (res.ok) return await res.json();
+            } catch { /* non-fatal */ }
+            return [];
+          }}
+        />
+      )}
+
+      {/* ── Research Citation Modal ── */}
+      {workspaceType === "research" && showCitationModal && (
+        <ResearchCitationModal
+          documentIds={docs.filter((d) => d.status === "READY").map((d) => d.id)}
+          onClose={() => setShowCitationModal(false)}
+        />
+      )}
+
+      {/* ── Research Gaps Panel ── */}
+      {workspaceType === "research" && showGapsPanel && (
+        <ResearchGapsPanel
+          documentIds={docs.filter((d) => d.status === "READY").map((d) => d.id)}
+          onClose={() => setShowGapsPanel(false)}
+        />
+      )}
+
+      {/* ── Candidate Rankings Panel (HR workspace) ── */}
+      {workspaceType === "hr" && showRankings && (
+        <CandidateRankingsPanel onClose={() => setShowRankings(false)} />
+      )}
+
+      {/* ── Batch file input (HR workspace, multiple files) ── */}
+      {workspaceType === "hr" && (
+        <input
+          type="file"
+          multiple
+          accept=".pdf,.docx,.pptx"
+          ref={batchFileInputRef}
+          className="hidden"
+          onChange={handleBatchFileChange}
+        />
+      )}
+
+      {/* ── Amber disclaimer banner — TOP of chat area, sticky, dismissable. Dismissal persisted per workspace via localStorage (`dm.disclaimer.dismissed.{slug}`). ── */}
+      {(workspaceType === "legal" || workspaceType === "finance") && !disclaimerDismissed && (
+        <div style={{
+          background: "var(--warning-bg, #fffbeb)",
+          borderBottom: "1px solid var(--warning-border, #fbbf24)",
+          padding: "9px 40px 9px 16px",
+          fontFamily: "var(--font-body)", fontSize: "12px",
+          color: "var(--warning-text, #92400e)",
+          flexShrink: 0,
+          lineHeight: "var(--leading-relaxed)",
+          position: "relative",
+        }}>
+          {workspaceType === "legal"
+            ? "⚠ This analysis is AI-generated for informational purposes only. It does not constitute legal advice. Always consult a qualified legal professional."
+            : "⚠ All figures are AI-extracted. Verify all numbers against original source documents before any financial, tax, or legal use."}
+          <button
+            onClick={dismissDisclaimer}
+            aria-label="Dismiss disclaimer"
+            title="Dismiss"
+            style={{
+              position: "absolute",
+              top: "50%",
+              right: "8px",
+              transform: "translateY(-50%)",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "var(--warning-text, #92400e)",
+              fontSize: "16px",
+              lineHeight: 1,
+              padding: "4px 8px",
+              borderRadius: "var(--radius-sm)",
+              opacity: 0.7,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = "0.7"; }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* ── Flashcard Mode overlay (Student workspace) ── */}
+      {flashcardMode ? (
+        <div className="flex-1 overflow-hidden" style={{ display: "flex", flexDirection: "column" }}>
+          <FlashcardMode
+            decks={flashcardDecks}
+            onClose={() => setFlashcardMode(false)}
+            onReview={handleFlashcardReview}
+          />
+        </div>
+      ) : null}
+
+      {/* ── Phase 21: Proactive Insights Panel (above chat messages) ── */}
+      {!flashcardMode && (
+        <ProactiveInsightsPanel
+          sessionId={chatId}
+          hasDocuments={docs.length > 0}
+          onAskAbout={(question) => {
+            setQuery(question);
+            if (textareaRef.current) {
+              textareaRef.current.style.height = "auto";
+              textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + "px";
+              textareaRef.current.focus();
+            }
+          }}
+        />
+      )}
+
+      {/* ── Chat area ── */}
+      <div className="flex-1 overflow-y-auto mb-4 pr-2" style={{ scrollBehavior: "smooth", display: flashcardMode ? "none" : undefined }}>
+
+        {/* Welcome state (Task 5.1) */}
+        {!response && !loading && history.length === 0 && (
+          <WorkspaceWelcome workspaceType={workspaceType} onQuickAction={handleWelcomeQuickAction} />
+        )}
+
+        {/* No documents hint — softened in C10. Asking without a doc is allowed; this is a nudge, not a gate. */}
+        {!response && !loading && history.length === 0 && docs.length === 0 && activeDoc === null && (
+          <div style={{ position: "absolute", bottom: "180px", left: "50%", transform: "translateX(-50%)", textAlign: "center", pointerEvents: "none", opacity: 0.55 }}>
+            <div style={{ fontSize: "40px", marginBottom: "6px" }}>📎</div>
+            <div style={{ fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--text-secondary)" }}>Attach a document for grounded answers — or just ask.</div>
+          </div>
+        )}
+
+        <div
+          role="log"
+          aria-label="Chat messages"
+          aria-live="polite"
+          style={{ display: "flex", flexDirection: "column", gap: "16px", paddingBottom: "40px" }}
+        >
+          {/* History messages */}
+          {history.map((msg, idx) => (
+            <MemoizedMessage
+              key={msg.id || idx}
+              msg={msg}
+              chatId={chatId}
+              workspaceType={workspaceType}
+              isLastAI={idx === lastAiMsgIdx && msg.role === "assistant"}
+              isStreaming={isStreaming}
+              onRegenerate={regenerateLastResponse}
+              followUps={[]}
+              // P2: prefill, never auto-send. User reviews and clicks Send.
+              onFollowUpClick={fillPrompt}
+              trustData={msg.role === "assistant" ? trustDataMap[msg.id] : undefined}
+              isTrustExpanded={expandedTrustMsgId === msg.id}
+              onTrustToggle={() => setExpandedTrustMsgId((prev) => prev === msg.id ? null : msg.id)}
+              onViewPage={handleViewPage}
+              onSecondOpinion={handleSecondOpinion}
+              originalQuery={idx > 0 && history[idx - 1]?.role === "user" ? history[idx - 1].content : ""}
+              voiceLang={voiceLang}
+            />
+          ))}
+
+          {/* Active streaming response */}
+          {response && (
+            <>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <div style={{ maxWidth: "75%", background: "var(--brand)", color: "var(--brand-text)", borderRadius: "16px 16px 4px 16px", padding: "12px 16px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)" }}>
+                  {response.query}
+                </div>
+              </div>
+
+              <div aria-live="polite" aria-atomic="false" style={{ paddingBottom: "8px" }}>
+                {/* AI label */}
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
+                  <div style={{ width: "16px", height: "16px", borderRadius: "4px", background: "var(--brand)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--brand-text)", fontSize: "10px", fontWeight: 700 }}>D</div>
+                  <span style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-tertiary)", animation: loading ? "pulse 1.5s ease-in-out infinite" : "none" }}>DocuMindAI</span>
+                  {response.mode === "general" && (
+                    <span title="Answered without documents — general knowledge only" style={{ background: "var(--surface-sunken)", color: "var(--text-secondary)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-full)", padding: "1px 8px", fontSize: "10px", fontWeight: 500, letterSpacing: "0.02em" }}>
+                      Ungrounded
+                    </span>
+                  )}
+                </div>
+
+                {/* C10 — no-document mode banner */}
+                {response.mode === "general" && (
+                  <div style={{ marginBottom: "8px", padding: "8px 12px", background: "var(--surface-sunken)", border: "1px solid var(--border-subtle)", borderRadius: "8px", fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-secondary)", lineHeight: "var(--leading-snug)" }}>
+                    Answering without documents. Upload one for grounded, cited responses.
+                  </div>
+                )}
+
+                {/* Thinking label — Phase 14.10 */}
+                {(showThinkingLabel || thinkingStage) && !response.answer && (
+                  <div style={{ fontFamily: "var(--font-body)", fontSize: "12px", color: "var(--text-tertiary)", fontStyle: "italic", marginBottom: "8px", transition: "opacity 200ms" }}>
+                    {thinkingStage ? (
+                      <span>
+                        {thinkingStage.stage === "searching" && "🔍 "}
+                        {thinkingStage.stage === "reranking" && "📊 "}
+                        {thinkingStage.stage === "generating" && "✍ "}
+                        {thinkingStage.detail}
+                      </span>
+                    ) : "DocuMindAI is thinking..."}
+                  </div>
+                )}
+
+                {/* Streaming content */}
+                <div className="text-response" style={{ fontSize: "15px", lineHeight: "var(--leading-loose)", fontFamily: "var(--font-body)", color: "var(--text-primary)" }}>
+                  {(() => {
+                    const { main } = splitDisclaimer(response.answer || "");
+                    return (
+                      <>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents as any}>{main || "Thinking..."}</ReactMarkdown>
+                        {loading && (
+                          <span className="streaming-cursor" style={{ display: "inline-block", width: "2px", height: "1em", background: "var(--brand)", marginLeft: "2px", verticalAlign: "text-bottom", animation: "blink 1s step-end infinite" }}>▍</span>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+
+                {/* Evidence chips while streaming */}
+                {response.evidence.length > 0 && (
+                  <div className="no-clip-zone" style={{ marginTop: "8px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px" }}>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-tertiary)", textTransform: "uppercase" }}>Sources:</span>
+                    {response.evidence.slice(0, 4).map((chunk: any, i) => {
+                      const isClip = chunk.document_source === "clip";
+                      const citationLabel = isClip
+                        ? `Clipped text, part ${(chunk.chunk_index ?? i) + 1}`
+                        : `p.${chunk.page_number}`;
+                      return (
+                        <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", border: "1px solid var(--border-default)", borderRadius: "4px", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
+                          {isClip ? "📋" : "📄"} {chunk.filename} {citationLabel}
+                        </span>
+                      );
+                    })}
+                    {response.confidence_score > 0 && <ConfidenceBadge score={response.confidence_score} />}
+                  </div>
+                )}
+
+                {/* Stop button */}
+                {loading && (
+                  <button onClick={handleStopGenerating} className="btn btn-secondary btn-sm" style={{ marginTop: "8px", height: "28px" }}>
+                    ⏹ Stop generating
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+
+          <div ref={chatEndRef} />
+        </div>
+      </div>
+
+      {/* ── Bottom bar ── */}
+      <div style={{ background: "var(--surface-base)", paddingTop: "8px", paddingBottom: "max(16px, env(safe-area-inset-bottom))", backdropFilter: "blur(8px)", borderTop: "1px solid var(--border-subtle)", position: "sticky", bottom: 0, zIndex: 10 }}>
+
+        {/* Hidden file input — triggered by the paperclip in the input bar */}
+        <input id="upload-trigger" type="file" className="hidden" accept=".pdf,.docx,.pptx" ref={fileInputRef} onChange={handleFileChange} />
+
+        {/* Comparison toggle row (shown only when 2+ docs are READY) */}
+        {docs.filter((d) => d.status === "READY").length >= 2 && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "6px", padding: "0 2px" }}>
+            <ComparisonToggle
+              enabled={comparisonMode}
+              documentCount={docs.filter((d) => d.status === "READY").length}
+              onToggle={setComparisonMode}
+            />
+          </div>
+        )}
+
+        {/* Input container — refactored (C9): paperclip + clipboard live in the input bar; attached docs render as removable chips. */}
+        <form onSubmit={handleAsk}>
+          <div style={{ background: "var(--surface-raised)", border: "1px solid var(--border-default)", borderRadius: "16px", boxShadow: "var(--shadow-sm)", padding: "12px 16px", transition: "border-color 100ms, box-shadow 100ms" }}
+            onFocusCapture={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-strong)"; (e.currentTarget as HTMLElement).style.boxShadow = "var(--shadow-md)"; }}
+            onBlurCapture={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.boxShadow = "var(--shadow-sm)"; }}
+          >
+            {/* Attached document chips — above the textarea, scrollable horizontally if many */}
+            {docs.length > 0 && (
+              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "8px" }}>
+                {docs.map((d) => {
+                  const isActive = activeDoc?.id === d.id;
+                  const statusColor =
+                    d.status === "READY" ? "var(--success-text)" :
+                    d.status === "FAILED" ? "var(--error-text)" :
+                    "var(--brand)";
+                  const isLoading = d.status !== "READY" && d.status !== "FAILED" && d.status !== "DEDUPLICATED";
+                  return (
+                    <div
+                      key={d.id}
+                      role="button"
+                      tabIndex={0}
+                      title={d.filename + (d.status !== "READY" ? ` · ${d.status}` : "")}
+                      onClick={() => setActiveDoc(d)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveDoc(d); } }}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        height: "28px",
+                        padding: "0 6px 0 10px",
+                        background: isActive ? "var(--brand-ghost)" : "var(--surface-sunken)",
+                        border: `1px solid ${isActive ? "var(--brand)" : "var(--border-subtle)"}`,
+                        borderRadius: "var(--radius-full)",
+                        cursor: "pointer",
+                        fontFamily: "var(--font-body)",
+                        fontSize: "12px",
+                        color: "var(--text-primary)",
+                        maxWidth: "240px",
+                        transition: "border-color 100ms, background 100ms",
+                      }}
+                    >
+                      {d.source === "clip" && <span aria-hidden="true" style={{ fontSize: "11px" }}>📋</span>}
+                      {d.source === "scan" && <span aria-hidden="true" style={{ fontSize: "11px" }}>📷</span>}
+                      <span
+                        style={{
+                          display: "inline-block",
+                          width: "7px",
+                          height: "7px",
+                          borderRadius: "50%",
+                          background: statusColor,
+                          animation: isLoading ? "pulse 1.5s ease-in-out infinite" : "none",
+                          flexShrink: 0,
+                        }}
+                        aria-hidden="true"
+                      />
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "160px" }}>
+                        {d.filename}
+                      </span>
+                      {/* Phase 11: Extract Tables quick-action on exam workspace */}
+                      {workspaceType === "exam" && d.status === "READY" && (
+                        <button
+                          type="button"
+                          title="Extract tables"
+                          aria-label={`Extract tables from ${d.filename}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveDoc(d);
+                            setTablePanelDocId(d.id);
+                            setShowTablePanel(true);
+                          }}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            cursor: "pointer",
+                            color: "var(--text-tertiary)",
+                            fontSize: "11px",
+                            padding: "2px 4px",
+                            borderRadius: "var(--radius-sm)",
+                            lineHeight: 1,
+                          }}
+                        >
+                          ⊞
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${d.filename}`}
+                        title="Remove"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDocs((prev) => prev.filter((x) => x.id !== d.id));
+                          if (activeDoc?.id === d.id) setActiveDoc(null);
+                        }}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          cursor: "pointer",
+                          color: "var(--text-tertiary)",
+                          fontSize: "14px",
+                          lineHeight: 1,
+                          padding: "2px 4px",
+                          borderRadius: "var(--radius-sm)",
+                        }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-tertiary)"; }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <textarea
+              id="chat-textarea"
+              ref={textareaRef}
+              value={voiceInterim || query}
+              rows={1}
+              aria-label="Message input"
+              onChange={(e) => {
+                if (voiceInterim) setVoiceInterim("");
+                handleTextareaChange(e);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  sendMessage(voiceInterim || query);
+                }
+              }}
+              disabled={loading}
+              placeholder={
+                loading
+                  ? "Thinking…"
+                  : activeDoc && activeDoc.status !== "READY"
+                  ? "Type your question — we'll send it once the document is ready."
+                  : docs.length === 0
+                  ? "Ask anything, or attach a document for grounded answers... (Shift+Enter for new line)"
+                  : "Ask anything about your documents... (Shift+Enter for new line)"
+              }
+              className="chat-input"
+              style={{ width: "100%", background: "transparent", border: "none", outline: "none", resize: "none", minHeight: "44px", maxHeight: "200px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)", color: voiceInterim ? "var(--text-tertiary)" : "var(--text-primary)", fontStyle: voiceInterim ? "italic" : "normal", display: "block", overflow: "auto" }}
+            />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
+              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                <button type="button" onClick={handleUploadClick} className="btn-icon btn-ghost" aria-label="Attach file" style={{ width: "32px", height: "32px" }} title="Attach file (PDF, DOCX)">
+                  <span aria-hidden="true">📎</span>
+                </button>
+                <button type="button" onClick={() => { setClipInitialText(""); setClipModalOpen(true); }} className="btn-icon btn-ghost" aria-label="Paste text as document" style={{ width: "32px", height: "32px" }} title="Paste text as document">
+                  <span aria-hidden="true">📋</span>
+                </button>
+                <VoiceInputButton
+                  voiceLang={voiceLang}
+                  onLangChange={handleVoiceLangChange}
+                  onTranscript={handleVoiceTranscript}
+                  onInterimText={handleInterimText}
+                  disabled={loading}
+                />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {(() => {
+                  // P6: show the inline "Document processing…" pip whenever
+                  // ANY attached doc is still in flight, not just the
+                  // currently-selected one.
+                  const TERMINAL_STATUSES = new Set(["READY", "FAILED", "DEDUPLICATED"]);
+                  const processingDocs = docs.filter((d) => !TERMINAL_STATUSES.has(d.status));
+                  if (processingDocs.length === 0 || loading) return null;
+                  const label = processingDocs.length === 1
+                    ? "Document processing…"
+                    : `${processingDocs.length} documents processing…`;
+                  return (
+                    <span
+                      aria-live="polite"
+                      style={{
+                        fontFamily: "var(--font-body)",
+                        fontSize: "12px",
+                        color: "var(--text-tertiary)",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}
+                    >
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          width: "8px",
+                          height: "8px",
+                          borderRadius: "50%",
+                          background: "var(--warning, #f59e0b)",
+                          animation: "pulse 1.4s ease-in-out infinite",
+                          display: "inline-block",
+                        }}
+                      />
+                      {label}
+                    </span>
+                  );
+                })()}
+                {query.length > 3200 && (
+                  <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-tertiary)" }}>{query.length} / 4000</span>
+                )}
+                {isStreaming ? (
+                  <button type="button" onClick={handleStopGenerating} className="btn btn-secondary btn-sm" aria-label="Stop generating" style={{ height: "36px" }}>
+                    <span aria-hidden="true">⏹</span> Stop
+                  </button>
+                ) : (() => {
+                  // P6: lock Send when ANY attached doc is still processing.
+                  // FAILED docs no longer block (retrieval filters to READY
+                  // anyway, and the user should be able to ask in no-doc
+                  // mode without removing the failed chip first).
+                  const TERMINAL_STATUSES = new Set(["READY", "FAILED", "DEDUPLICATED"]);
+                  const anyProcessing = docs.some((d) => !TERMINAL_STATUSES.has(d.status));
+                  return (
+                    <button
+                      type="submit"
+                      disabled={!query.trim() || loading || anyProcessing}
+                      className="btn btn-primary"
+                      aria-label="Send message"
+                      title={anyProcessing ? "Waiting for documents to finish processing…" : undefined}
+                      style={{ height: "36px", minWidth: "64px" }}
+                    >Send</button>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
+        </form>
+
+        {/* ── HR Batch upload per-file progress ── */}
+        {workspaceType === "hr" && Object.keys(batchProgress).length > 0 && (
+          <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "4px" }}>
+            {Object.entries(batchProgress).map(([filename, state]) => (
+              <div key={filename} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontFamily: "var(--font-body)", fontSize: "11px", color: "var(--text-secondary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={filename}>
+                  {state.status === "done" ? "✓" : state.status === "error" ? "✗" : "⟳"} {filename}
+                </span>
+                <div style={{ width: "80px", height: "4px", background: "var(--border-subtle)", borderRadius: "2px", flexShrink: 0 }}>
+                  <div style={{
+                    width: `${state.progress}%`, height: "100%", borderRadius: "2px", transition: "width 300ms",
+                    background: state.status === "error" ? "var(--error-text, #dc2626)" : state.status === "done" ? "var(--success-text, #16a34a)" : "var(--brand)",
+                  }} />
+                </div>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "var(--text-tertiary)", width: "32px", textAlign: "right" }}>
+                  {state.status === "done" ? "Done" : state.status === "error" ? "Err" : `${state.progress}%`}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Workspace-specific action buttons */}
+        {WORKSPACE_ACTIONS[workspaceType] && (
+          <div className="no-clip-zone" style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px", alignItems: "center" }}>
+            {WORKSPACE_ACTIONS[workspaceType].map((action) => {
+              const isActive =
+                (action.label === "Generate Paper" && showPaperConfig) ||
+                (action.label === "Answer Key" && showAnswerKey) ||
+                (action.label === "Extract Tables" && showTablePanel) ||
+                (action.label === "Flashcard Mode" && flashcardMode) ||
+                (action.label === "Pomodoro Timer" && showPomodoro) ||
+                (action.label === "View Rankings" && showRankings) ||
+                ((action.label === "Ratios" || action.label === "Verify") && showRatioPanel) ||
+                ((action.label === "Risk Report" || action.label === "Risk Mode") && showLegalRisk) ||
+                ((action.label === "Citation Mode" || action.label === "Export Citations") && showCitationModal) ||
+                (action.label === "Find Gaps" && showGapsPanel);
+              return (
+                <button
+                  key={action.label}
+                  onClick={() => handleWorkspaceAction(action.label)}
+                  className="btn btn-secondary btn-sm"
+                  style={{
+                    height: "32px", fontSize: "12px", gap: "4px",
+                    borderColor: isActive ? "var(--brand)" : undefined,
+                    color: isActive ? "var(--brand)" : undefined,
+                  }}
+                >
+                  <span>{action.icon}</span>{action.label}
+                </button>
+              );
+            })}
+
+            {/* Pomodoro Timer inline (Study workspace) */}
+            {workspaceType === "study" && showPomodoro && (
+              <PomodoroTimer />
+            )}
+          </div>
+        )}
+
+        {/* Answer Key panel (Teacher workspace) */}
+        {workspaceType === "exam" && showAnswerKey && generatedPaper?.answer_key && (
+          <div style={{ marginTop: "8px", background: "var(--surface-raised)", border: "1px solid var(--border-default)", borderRadius: "10px", padding: "12px", maxHeight: "240px", overflowY: "auto" }}>
+            <div style={{ fontFamily: "var(--font-body)", fontSize: "13px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "8px" }}>Answer Key</div>
+            {generatedPaper.answer_key.map((entry: any) => (
+              <div key={entry.question_number} style={{ padding: "6px 0", borderBottom: "1px solid var(--border-subtle)", fontFamily: "var(--font-body)", fontSize: "12px" }}>
+                <span style={{ fontWeight: 600 }}>Q{entry.question_number}:</span>{" "}
+                {entry.correct_answer}
+                <span style={{ color: "var(--text-tertiary)", marginLeft: "8px" }}>
+                  [{entry.bloom_level} · {entry.difficulty}]
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Bottom disclaimer banner removed (C6). The top dismissable banner is the single canonical instance. */}
+      </div>
+    </div>
+  );
+}

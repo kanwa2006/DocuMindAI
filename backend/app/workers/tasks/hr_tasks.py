@@ -173,4 +173,4 @@ def flag_stale_reviews():
     """
     logger.info("[Workflow Automation] Running daily sweep for stale candidate reviews...")
     # Full implementation would query JobMatch for updated_at < now - 7 days
-    # and dispatch email/app not
+    # and dispatch email/app notifications to the assigned owner_id.

@@ -1,0 +1,138 @@
+version: '3.8'
+
+services:
+  db:
+    image: ankane/pgvector:v0.5.1
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-documind}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-documind}
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=1000
+      - DEFAULT_POOL_SIZE=20
+      - IGNORE_STARTUP_PARAMETERS=extra_float_digits
+    ports:
+      - "6432:6432"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432", "-U", "${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../infrastructure/Dockerfile.backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend:/app
+      - storage_data:/tmp/documind_storage
+    # Loads GEMINI_API_KEY_1..N (and all other backend settings) straight into
+    # the container env so GeminiKeyRotator finds them. `environment:` below
+    # still overrides any duplicate keys (e.g. POSTGRES_SERVER=pgbouncer).
+    env_file:
+      - ../backend/.env
+    environment:
+      # Gemini API keys — auto-detected by GeminiKeyRotator (Phase 12).
+      # Add GEMINI_API_KEY_1, GEMINI_API_KEY_2, _3, etc. as needed — no code changes required.
+      # - GEMINI_API_KEY_1: ${GEMINI_API_KEY_1}
+      # - GEMINI_API_KEY_2: ${GEMINI_API_KEY_2}  # uncomment to pass a second key
+      - POSTGRES_SERVER=pgbouncer
+      - POSTGRES_PORT=6432
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-documind}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: ../backend
+      dockerfile: ../infrastructure/Dockerfile.backend
+    volumes:
+      - ../backend:/app
+      - storage_data:/tmp/documind_storage
+    # The Celery worker imports celery_app.py, never main.py, so it relies on
+    # this env_file (plus the in-code bridge in get_key_rotator) to obtain the
+    # Gemini keys. Without it, worker-side LLM tasks fall back to the mock.
+    env_file:
+      - ../backend/.env
+    environment:
+      - POSTGRES_SERVER=pgbouncer
+      - POSTGRES_PORT=6432
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-documind}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.workers.celery_app", "inspect", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    command: celery -A app.workers.celery_app worker -Q main-queue,celery --loglevel=info
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../infrastructure/Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  storage_data:

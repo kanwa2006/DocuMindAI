@@ -3,6 +3,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 
+
+def _is_supavisor_pooler(url: str) -> bool:
+    """
+    True for Supabase Supavisor pooler hosts. Both session (:5432) and
+    transaction (:6543) modes go through Supavisor; transaction mode in
+    particular breaks asyncpg's prepared-statement cache, so we disable it.
+    Detecting by host string keeps this safe for direct-connect setups.
+    """
+    return "pooler.supabase.com" in (url or "")
+
+
 def get_engine_args(url: str, is_async: bool):
     args = {}
     if "sqlite" in url:
@@ -15,8 +26,18 @@ def get_engine_args(url: str, is_async: bool):
         # For sync, sslmode is already baked into the URL by settings.sync_database_url,
         # so no connect_args needed here.
         if is_async:
-            args["connect_args"] = {"ssl": "require"}
+            connect_args = {"ssl": "require"}
+            # When going through Supavisor (either pooler port), disable the
+            # asyncpg prepared-statement cache. In transaction mode the pooler
+            # rebinds backends between statements and a cached plan can blow
+            # up with "prepared statement does not exist". Session mode tolerates
+            # it but a zero cache is harmless there.
+            if _is_supavisor_pooler(url):
+                connect_args["statement_cache_size"] = 0
+                connect_args["prepared_statement_cache_size"] = 0
+            args["connect_args"] = connect_args
     return url, args
+
 
 async_url, async_args = get_engine_args(settings.async_database_url, is_async=True)
 
@@ -41,9 +62,11 @@ AsyncSessionLocal = sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
 )
 
+
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
 
 # Sync Engine for Celery Workers
 sync_url, sync_args = get_engine_args(settings.sync_database_url, is_async=False)

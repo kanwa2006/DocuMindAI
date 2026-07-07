@@ -1,0 +1,198 @@
+/* ═══════════════════════════════════════════════════
+   DOCUMINDAI DESIGN TOKENS
+   Single source of truth for all visual decisions.
+   ═══════════════════════════════════════════════════ */
+
+:root {
+  /* ── BRAND ─────────────────────────────────────── */
+  /* D1: neutral greyscale system (ChatGPT-style). Light-mode primary buttons
+     are near-black with white text; dark-mode primaries flip to off-white
+     with near-black text. The hue formula stays defined so legacy callers
+     do not break, but ALL --brand-* tokens are overridden below per theme. */
+  --brand-hue: 0;
+  --brand-sat: 0%;
+  --brand:        #0D0D0D;
+  --brand-dim:    #2A2A2A;
+  --brand-text:   #FFFFFF;
+  --brand-ghost:  rgba(13, 13, 13, 0.05);
+  --brand-glow:   rgba(13, 13, 13, 0.15);
+
+  /* ── TYPOGRAPHY ─────────────────────────────────── */
+  --font-display: var(--font-display-loaded, "Instrument Serif", Georgia, serif);
+  /* D2: Inter is the ChatGPT-style UI font. system-ui ends the fallback chain. */
+  --font-body:    var(--font-body-loaded, "Inter", system-ui, "Helvetica Neue", sans-serif);
+  --font-mono:    var(--font-mono-loaded, "JetBrains Mono", "Fira Code", monospace);
+
+  /* Scale — major third (1.250) ratio */
+  /* D2: small text bumped from 14px → 15px for ChatGPT-style readability. */
+  --text-2xs: 0.6875rem; /* 11px */
+  --text-xs:  0.8125rem; /* 13px */
+  --text-sm:  0.9375rem; /* 15px */
+  --text-base: 1rem;     /* 16px */
+  --text-lg:  1.125rem;  /* 18px */
+  --text-xl:  1.25rem;   /* 20px */
+  --text-2xl: 1.5rem;    /* 24px */
+  --text-3xl: 1.875rem;  /* 30px */
+  --text-4xl: 2.25rem;   /* 36px */
+
+  /* Weight */
+  --weight-normal:   400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  /* Leading */
+  --leading-tight:   1.25;
+  --leading-snug:    1.375;
+  --leading-normal:  1.5;
+  --leading-relaxed: 1.625;
+  --leading-loose:   1.75;
+
+  /* Tracking */
+  --tracking-tighter: -0.05em;
+  --tracking-tight:   -0.025em;
+  --tracking-snug:    -0.01em;
+  --tracking-normal:   0em;
+  --tracking-wide:     0.025em;
+  --tracking-wider:    0.05em;
+  --tracking-widest:   0.1em;
+
+  /* ── SPACING (4px base grid) ─────────────────── */
+  --space-0-5: 2px;
+  --space-1:   4px;
+  --space-1-5: 6px;
+  --space-2:   8px;
+  --space-2-5: 10px;
+  --space-3:   12px;
+  --space-4:   16px;
+  --space-5:   20px;
+  --space-6:   24px;
+  --space-8:   32px;
+  --space-10:  40px;
+  --space-12:  48px;
+  --space-16:  64px;
+  --space-20:  80px;
+  --space-24:  96px;
+
+  /* ── RADIUS ──────────────────────────────────── */
+  --radius-sm:   4px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-2xl:  24px;
+  --radius-full: 9999px;
+
+  /* ── MOTION ──────────────────────────────────── */
+  --dur-instant: 0ms;
+  --dur-fast:    100ms;
+  --dur-normal:  200ms;
+  --dur-slow:    350ms;
+  --dur-slower:  500ms;
+  --dur-slowest: 800ms;
+
+  --ease-standard: cubic-bezier(0.4, 0.0, 0.2, 1);
+  --ease-decel:    cubic-bezier(0.0, 0.0, 0.2, 1);
+  --ease-accel:    cubic-bezier(0.4, 0.0, 1.0, 1);
+  --ease-bounce:   cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-spring:   cubic-bezier(0.22, 1.0, 0.36, 1);
+
+  /* ── WORKSPACE ACCENT COLORS ─────────────────── */
+  --ws-general-accent:  hsl(220, 90%, 60%);
+  --ws-exam-accent:     hsl(262, 80%, 55%);
+  --ws-hr-accent:       hsl(198, 90%, 38%);
+  --ws-study-accent:    hsl(160, 90%, 33%);
+  --ws-research-accent: hsl(0,   80%, 48%);
+  --ws-legal-accent:    hsl(221, 75%, 40%);
+  --ws-finance-accent:  hsl(174, 85%, 25%);
+
+  /* ── SHADOWS ─────────────────────────────────── */
+  --shadow-sm:  0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md:  0 4px 6px -1px rgb(0 0 0 / 0.10), 0 2px 4px -2px rgb(0 0 0 / 0.10);
+  --shadow-lg:  0 10px 15px -3px rgb(0 0 0 / 0.10), 0 4px 6px -4px rgb(0 0 0 / 0.10);
+  --shadow-xl:  0 20px 25px -5px rgb(0 0 0 / 0.10), 0 8px 10px -6px rgb(0 0 0 / 0.10);
+  --shadow-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+  --shadow-brand:    0 0 0 3px rgba(13, 13, 13, 0.18);
+  --shadow-brand-lg: 0 0 0 4px rgba(13, 13, 13, 0.24);
+}
+
+/* LIGHT MODE SURFACES (default / :root) */
+:root {
+  --surface-base:    #FAFAFA;
+  --surface-raised:  #FFFFFF;
+  --surface-overlay: #FFFFFF;
+  --surface-sunken:  #F4F4F5;
+  --surface-hover:   #F0F0F2;
+  --surface-active:  #E8E8EC;
+
+  --text-primary:   #0A0A0B;
+  /* D2: bump secondary contrast to meet WCAG AA on white (light mode). */
+  --text-secondary: #3F3F46;
+  --text-tertiary:  #52525B;
+  --text-disabled:  #A1A1AA;
+  --text-brand:     #0D0D0D;
+
+  --border-subtle:  rgb(0 0 0 / 0.06);
+  --border-default: rgb(0 0 0 / 0.12);
+  --border-strong:  rgb(0 0 0 / 0.24);
+
+  --success-bg:     #F0FDF4;  --success-text:   #166534;  --success-border: #BBF7D0;
+  --warning-bg:     #FFFBEB;  --warning-text:   #92400E;  --warning-border: #FDE68A;
+  --error-bg:       #FEF2F2;  --error-text:     #991B1B;  --error-border:   #FECACA;
+  --info-bg:        #EFF6FF;  --info-text:      #1E40AF;  --info-border:    #BFDBFE;
+
+  /* C7 — spec aliases (additive). Components may reference either the
+     existing surface-* / brand tokens or these spec names; both stay in sync. */
+  --bg:               var(--surface-base);
+  --surface:          var(--surface-raised);
+  --surface-2:        var(--surface-sunken);
+  --border:           var(--border-default);
+  --accent:           var(--brand);
+  --accent-hover:     var(--brand-dim);
+  --accent-ghost:     var(--brand-ghost);
+  --danger:           var(--error-text);
+  --success:          var(--success-text);
+  --warning:          var(--warning-text);
+
+  /* C7 — solid border alternates for components that need opaque borders */
+  --border-solid:         #E5E5E5;
+  --border-strong-solid:  #D4D4D8;
+}
+
+/* DARK MODE SURFACES */
+[data-theme="dark"], .dark {
+  --surface-base:    #0C0C0E;
+  --surface-raised:  #141416;
+  --surface-overlay: #1C1C1F;
+  --surface-sunken:  #09090B;
+  --surface-hover:   #1E1E22;
+  --surface-active:  #27272A;
+
+  /* D1: dark-mode brand flips to off-white (ChatGPT-style). */
+  --brand:        #ECECF1;
+  --brand-dim:    #D4D4D8;
+  --brand-text:   #0D0D0D;
+  --brand-ghost:  rgba(236, 236, 241, 0.08);
+  --brand-glow:   rgba(236, 236, 241, 0.18);
+  --shadow-brand:    0 0 0 3px rgba(236, 236, 241, 0.20);
+  --shadow-brand-lg: 0 0 0 4px rgba(236, 236, 241, 0.30);
+
+  --text-primary:   #ECECF1;
+  /* D2: bump secondary contrast in dark mode too. */
+  --text-secondary: #C7C7CC;
+  --text-tertiary:  #A1A1AA;
+  --text-disabled:  #52525B;
+  --text-brand:     #ECECF1;
+
+  --border-subtle:  rgb(255 255 255 / 0.05);
+  --border-default: rgb(255 255 255 / 0.10);
+  --border-strong:  rgb(255 255 255 / 0.20);
+
+  --success-bg:     #052E16;  --success-text:   #86EFAC;  --success-border: #166534;
+  --warning-bg:     #1C1400;  --warning-text:   #FDE68A;  --warning-border: #92400E;
+  --error-bg:       #1C0000;  --error-text:     #FCA5A5;  --error-border:   #991B1B;
+  --info-bg:        #0A1628;  --info-text:      #93C5FD;  --info-border:    #1E40AF;
+
+  /* C7 — dark-mode solid border alternates */
+  --border-solid:         #262626;
+  --border-strong-solid:  #3F3F46;
+}

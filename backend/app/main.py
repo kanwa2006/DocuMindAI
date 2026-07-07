@@ -22,28 +22,18 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 # --- Gemini API key bridge -------------------------------------------------
-# The .env convention in this project is `GEMINI_API_KEYS=k1,k2,k3` (plural,
-# comma-separated). The stable GeminiKeyRotator in services/llm_key_rotation.py
-# reads `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, ... (numbered). Without this
-# bridge, pydantic-settings parses the comma form into settings.GEMINI_API_KEYS
-# but the rotator finds nothing in os.environ and the system silently falls
-# back to DummyLLMProvider. Bridging here keeps the rotator file untouched
-# (it's marked STABLE in CLAUDE.md) while still picking up either pattern.
+# The GeminiKeyRotator (services/llm_key_rotation.py) reads keys directly from
+# os.environ, but pydantic-settings loads .env into `settings` only — not into
+# os.environ. Without bridging, the rotator finds nothing and the system
+# silently falls back to DummyLLMProvider (fake "grounded" answers).
+#
+# The bridge now lives in app.core.gemini_env and is ALSO invoked from
+# get_key_rotator(), so it runs identically for the web app, the Celery worker,
+# and standalone scripts, resolving the env file relative to the backend root
+# (NOT the current working directory). Calling it here keeps the startup log.
 import os as _os
-_keys = settings.gemini_keys_list  # parsed from GEMINI_API_KEYS plural form
-for _i, _k in enumerate(_keys, start=1):
-    _os.environ.setdefault(f"GEMINI_API_KEY_{_i}", _k)
-
-# Also pick up any GEMINI_API_KEY_N values pydantic-settings ignored (they
-# live in .env but Settings doesn't list them as fields; they may still need
-# to be promoted from the .env file if python-dotenv isn't doing it).
-try:
-    from dotenv import dotenv_values as _dotenv_values
-    for _k_name, _k_val in (_dotenv_values(".env") or {}).items():
-        if _k_name and _k_name.startswith("GEMINI_API_KEY_") and _k_val:
-            _os.environ.setdefault(_k_name, _k_val)
-except ImportError:
-    pass
+from app.core.gemini_env import bridge_gemini_keys as _bridge_gemini_keys
+_bridge_gemini_keys()
 
 _loaded_keys = [
     _v for _n, _v in _os.environ.items()

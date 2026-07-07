@@ -476,3 +476,22 @@ async def list_projects(
     result = await db.execute(select(ResearchProject).where(ResearchProject.workspace_id == workspace_id))
     return [{"id": p.id, "title": p.title, "description": p.description} for p in result.scalars().all()]
 
+@router.get("/projects/{project_id}/papers")
+async def list_papers(
+    project_id: uuid.UUID,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
+    result = await db.execute(select(ResearchPaper).where(ResearchPaper.project_id == project_id, ResearchPaper.workspace_id == workspace_id))
+    return [{"id": p.id, "title": p.title, "abstract": p.abstract} for p in result.scalars().all()]
+
+@router.get("/papers/{paper_id}/findings")
+async def list_findings(
+    paper_id: uuid.UUID,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
+    result = await db.execute(select(ResearchFinding).where(ResearchFinding.paper_id == paper_id, ResearchFinding.workspace_id == workspace_id))
+    return [{"id": f.id, "statement": f.statement, "evidence": f.evidence_quote, "methodology": f.methodology} for f in result.scalars().all()]

@@ -22,4 +22,23 @@ export function middleware(request: NextRequest) {
                            request.nextUrl.pathname.startsWith('/settings') ||
                            request.nextUrl.pathname.startsWith('/admin') ||
                            request.nextUrl.pathname.startsWith('/sessions') ||
- 
+                           request.nextUrl.pathname.startsWith('/billing');
+
+  // 1. Redirect unauthenticated users to login
+  if (isProtectedRoute && !token) {
+    const loginUrl = new URL('/login', request.url);
+    loginUrl.searchParams.set('from', request.nextUrl.pathname);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  // 2. Redirect authenticated users away from login/signup pages
+  if (isAuthPage && token) {
+    return NextResponse.redirect(new URL('/dashboard', request.url));
+  }
+
+  return NextResponse.next();
+}
+
+export const config = {
+  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],
+};
