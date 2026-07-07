@@ -1,182 +1,150 @@
-# Release Notes — DocuMindAI v1.0.0
+# DocuMindAI — Release Notes v1.0.0
 
-**Release Date:** July 2026
-**Tag:** [`v1.0.0`](https://github.com/kanwa2006/DocuMindAI/releases/tag/v1.0.0)
-**Branch:** `main`
+**Release Date:** July 2026  
+**Tag:** [`v1.0.0`](https://github.com/kanwa2006/DocuMindAI/releases/tag/v1.0.0)  
+**Branch:** `main`  
+**License:** MIT
+
+---
+
+> First stable public release. Enterprise-grade AI document intelligence with a strict zero-hallucination policy across seven specialized workspaces.
 
 ---
 
 ## 🎉 Highlights
 
-DocuMindAI `v1.0.0` is the first stable public release of a full-stack, enterprise-grade AI document intelligence platform. This release ships:
-
-- **7 independent, specialized workspaces** for General, HR, Legal, Finance, Study, Research, and Exam use cases
-- A **hybrid RAG pipeline** combining pgvector semantic search and PostgreSQL BM25 full-text search, fused via Reciprocal Rank Fusion
-- The **Veritas Trust Engine** — a post-generation answer scoring system that assigns 0–100 trust scores based on citation density, structural alignment, and hedging behavior
-- A **zero-hallucination policy** enforced at the pipeline level: the system refuses to answer when document evidence is absent
-- A production-ready **Next.js 16 frontend** with SSE streaming, a command palette, proactive insights panel, and a PWA manifest
-
----
-
-## 🗂️ Major Features
-
-### AI & RAG Pipeline
-
-| Feature | Description |
-|---------|-------------|
-| Hybrid Retrieval | Semantic (pgvector cosine) + Lexical (tsvector BM25) fused via Reciprocal Rank Fusion (RRF) |
-| Per-Workspace Tuning | Each workspace has independently configured chunk sizes, top-k values, and RRF weights |
-| Reranker | Cross-encoder reranking pass after initial retrieval |
-| Grounding Service | Strict token-budget enforcement with citation formatting and document-order sorting |
-| Gemini LLM | Multi-key rotation across `GEMINI_API_KEY_1..N` with per-key cooldown and failover |
-| JSON Repair Loop | Automatic retry and repair of malformed Gemini structured outputs |
-| Proactive Insights | AI automatically surfaces critical findings from documents on upload (no query required) |
-
-### Seven Specialized Workspaces
-
-| Workspace | Key Capabilities |
-|-----------|-----------------|
-| **General** | Universal document Q&A with any file type |
-| **HR** | Resume parsing, candidate auto-ranking, job-match scoring, interview pipeline |
-| **Legal** | Contract clause risk flagging, compliance rule checking, redline DOCX export |
-| **Finance** | Financial ratio extraction, anomaly detection, audit finding identification |
-| **Study** | SM-2 spaced-repetition flashcard generation, Pomodoro timer, multi-format quizzes |
-| **Research** | Literature synthesis, contradiction detection, Deep Research Agent (RAG + Tavily web) |
-| **Exam / Teacher** | Grounded MCQ/Short/Long/Case Study paper generation with answer keys and DOCX export |
-
-### Document Processing
-
-- **OCR Pipeline**: PaddleOCR (handwritten, rotated, low-quality scans) + Docling (structured/tabular documents) with a validation gateway that selects the best output
-- **Supported Formats**: PDF, DOCX, PPTX, and image uploads
-- **Async Processing**: All document ingestion runs in Celery workers to keep the API non-blocking
-- **Temporary File Handling**: Uploaded file extensions are preserved during OCR to prevent format detection errors
-
-### Frontend
-
-- **Next.js 16** with the App Router — one dedicated page per workspace
-- **WorkspaceUI**: context-aware chat interface with document preview, SSE streaming, command palette, and selection clips
-- **ProactiveInsightsPanel**: auto-refreshing insights surfaced from newly uploaded documents
-- **EnterpriseDocumentViewer**: in-browser PDF rendering via `react-pdf`
-- **PWA**: service worker, manifest, and install prompt support
-- **PomodoroTimer**: built into the Study workspace
-- **ShareSessionModal**: generate shareable, token-authenticated read-only chat links
-- **Dark mode**: full theme support via CSS variables
-
-### Authentication & Security
-
-- JWT access tokens + refresh tokens (7-day expiry)
-- CSRF protection (double-submit cookie pattern)
-- Slowapi rate limiting on upload and query endpoints
-- Email OTP verification flow for new registrations
-- Device fingerprinting for session integrity
-
-### Billing & Multi-Tenancy
-
-- Go / Plus / Pro pricing tiers with plan-gated feature access
-- Razorpay-ready billing integration
-- Tenant context middleware for workspace isolation
-
-### Observability
-
-- **OpenTelemetry** distributed tracing across all services
-- **Prometheus** metrics endpoint at `/metrics`
-- **Sentry** error tracking (backend and frontend)
-- **PostHog** product analytics
-
-### Infrastructure & CI/CD
-
-- Docker Compose with 6 containers: PostgreSQL 16 + pgvector, PgBouncer, Redis 7, FastAPI, Celery Worker, Next.js
-- Railway deployment via `railway.json`
-- GitHub Actions CI: dependency audit (`pip-audit`), Alembic migration test, API contract tests (`pytest`), ESLint, and Next.js production build on every push to `main`
+- **7 independent workspaces** — each with its own models, API routes, Celery workers, and domain-tuned retrieval
+- **Hybrid RAG pipeline** — pgvector semantic search + PostgreSQL BM25, fused via Reciprocal Rank Fusion
+- **Veritas Trust Engine** — post-generation 0–100 trust scoring across 5 weighted factors
+- **Multi-engine OCR** — PaddleOCR (handwritten/rotated) + Docling (structured/tabular) with validation gateway
+- **Proactive insights** — AI surfaces domain-specific findings on every document upload, without user prompting
+- **SSE streaming** — token-by-token answer delivery to the browser via Server-Sent Events
+- **DOCX export engine** — formatted reports for legal, exam, and HR workspaces
+- **Multi-key Gemini rotation** — automatic failover with per-key rate-limit state and cooldown
+- **Full observability** — OpenTelemetry tracing, Prometheus metrics, Sentry, PostHog
+- **GitHub Actions CI** — dependency audit, Alembic migration tests, API contracts, lint, and build on every push
 
 ---
 
-## 🏗️ Architecture
+## 📋 Features by Workspace
 
-```
-Next.js 16 (App Router)
-    │ REST + SSE
-FastAPI /api/v1/
-    ├── Middleware: CORS · CSRF · RateLimit · TenantContext · OTel
-    ├── AI / RAG Pipeline (OCR → Embed → Retrieve → Rerank → Ground → Generate → Veritas)
-    └── Celery Workers (7 workspace task queues + Celery Beat automation)
-        │
-        └── Data Layer: PostgreSQL 16 + pgvector · PgBouncer · Redis 7
-```
+### 💬 General
+Universal document Q&A. Upload any file type and ask any question. Answers are grounded in retrieved evidence with page citations.
 
-Full route-to-service mapping is documented in [docs/architecture/project-map.md](docs/architecture/project-map.md).
+### 👥 HR
+- Resume parsing and structured field extraction
+- Candidate auto-ranking with configurable scoring weights
+- Job-match scoring against role descriptions
+- Interview pipeline state tracking
+
+### ⚖️ Legal
+- Contract clause extraction and risk flagging
+- Compliance rule checking
+- Redline DOCX export with annotations
+
+### 📈 Finance
+- Financial ratio extraction (liquidity, leverage, profitability)
+- Anomaly detection in financial statements
+- Audit finding identification and categorization
+
+### 📚 Study
+- SM-2 spaced-repetition flashcard generation from documents
+- Pomodoro timer integrated into workspace
+- Adaptive quiz generation in multiple formats
+
+### 🔬 Research
+- Multi-paper literature synthesis
+- Contradiction detection across sources
+- Deep Research Agent combining RAG retrieval with Tavily live web search
+
+### 🎓 Exam / Teacher
+- Grounded question generation: MCQ, Short Answer, Long Answer, Case Study
+- Configurable paper structure (section counts, marks per question)
+- Answer key generation
+- Formatted DOCX export with professional exam layout
 
 ---
 
-## ⚡ Performance
+## 🔐 Security Fixes
 
-- **Async throughout**: FastAPI with `asyncpg`, async SQLAlchemy, and async Redis — zero blocking I/O on the API server
-- **Connection pooling**: PgBouncer in transaction mode handles up to 1000 concurrent database connections
-- **Celery Beat automation**: background tasks (health check, daily digest, DB cleanup, key rotation) run on schedule without impacting request latency
-- **SSE streaming**: answers begin rendering on the frontend after the first token — no waiting for full completion
+The following backend stability and security issues were resolved before this release:
 
----
-
-## 🔐 Security
-
-### Fixes included in v1.0.0
-
-| ID | Description |
-|----|-------------|
-| BUG-001 | Resolved SSL/TLS `asyncpg` DSN configuration |
-| BUG-002 | Fixed document serialization 500 error on missing fields |
-| BUG-003 | Removed `setState` call inside render cycle |
-| BUG-004 | Corrected embedding dimension mismatch (384 → 1024) for `bge-m3` |
-| BUG-005 | Fixed document retry logic to correctly flip status to `FAILED` |
-| BUG-006 | Dark-mode button contrast fix (hardcoded blue → `var(--brand)`) |
-| BUG-007–016 | Backend stability fixes: auth token scope, embedding fallback, storage path resolution, rate-limiter parameter naming, celery event-loop isolation, UUID type coercion in trial enforcement |
-
-### General posture
-
-- `.env` is excluded from version control via `.gitignore`
-- All Gemini API keys are loaded from environment variables only
-- CSRF double-submit cookie protection is active on all mutating endpoints
-- Rate limiting is applied to upload and query endpoints via SlowAPI
+| ID | Component | Description |
+|----|-----------|-------------|
+| BUG-001 | Database | SSL/TLS `asyncpg` DSN configuration fix |
+| BUG-002 | Documents API | Document serialization 500 error on missing optional fields |
+| BUG-003 | Frontend | Removed `setState` call inside React render cycle |
+| BUG-004 | Embedding | Corrected dimension mismatch: 384 → 1024 for BAAI/bge-m3 |
+| BUG-005 | Workers | Document retry logic now correctly flips status to `FAILED` |
+| BUG-006 | Frontend | Dark-mode button contrast (hardcoded blue → `var(--brand)`) |
+| BUG-007 | Auth | JWT algorithm constraint enforcement in token verification |
+| BUG-008 | Security | `create_refresh_token` enforces 7-day expiry consistently |
+| BUG-009 | Storage | Absolute storage path resolution for local file serving |
+| BUG-010 | Billing | UUID type coercion in trial enforcement middleware |
+| BUG-011 | Embedding | 768→1024 dimension padding for Gemini text-embedding-004 fallback |
+| BUG-012 | Documents | SlowAPI parameter renamed `http_request` → `request` (crash fix) |
+| BUG-013 | Query | `Request` import added to `query.py` (resolves `NameError`) |
+| BUG-014 | Workers | Celery isolated event loop for async proactive insight tasks |
+| BUG-015 | Veritas | Replaced `hasattr` on dict with `.get()` for direct-quote evaluation |
+| BUG-016 | Workers | Temporary file extension preservation during OCR processing |
 
 ---
 
 ## ⚠️ Known Limitations
 
-These limitations are known and tracked for future releases:
+These issues are tracked for future releases and do not block usage of the current version.
 
-| Area | Limitation |
-|------|-----------|
-| **API prefix doubling** | ~35 frontend call sites include a manual `/api/v1` prefix that doubles with `NEXT_PUBLIC_API_URL`. Affected pages still function but the convention is inconsistent. |
-| **Workspace identity** | `User.workspace_id` is a string slug (`"general"`) while `ChatSession.workspace_id` is a UUID. A deterministic `uuid.uuid5` resolver is planned to unify the model. |
-| **EnterpriseDocumentViewer** | PDF rendering is client-side only; SSR causes a hydration error that is suppressed with a `dynamic` import guard. |
-| **Demo** | No hosted public demo is currently available. Local Docker Compose setup is fully functional. |
-| **Pydantic v1 compat warnings** | Several schema classes still use the deprecated `class Config` style (Pydantic v2 compatibility shim). These will be migrated to `model_config = ConfigDict(...)` in a future patch. |
+| Issue | Impact | Planned Fix |
+|-------|--------|-------------|
+| **API prefix doubling** | ~35 frontend call sites include a manual `/api/v1` that duplicates the `NEXT_PUBLIC_API_URL` prefix. Affected pages still function correctly. | v1.1 |
+| **Workspace ID type inconsistency** | `User.workspace_id` is a string slug (`"general"`) while `ChatSession.workspace_id` is a UUID. A `uuid.uuid5` resolver is planned. | v1.1 |
+| **Pydantic v1 compatibility warnings** | Several schemas use deprecated `class Config` style. These generate 24 deprecation warnings during `pytest` but do not fail. | v1.2 |
+| **No hosted public demo** | The application must currently be run locally via Docker Compose. | Planned |
+| **EnterpriseDocumentViewer SSR** | PDF rendering is CSR-only; a `dynamic` import guard suppresses the hydration error. | Tracked |
 
 ---
 
-## 🗺️ Future Roadmap
+## 🗺️ Roadmap
 
-| Priority | Item |
-|----------|------|
-| High | Fix API prefix doubling across frontend call sites |
-| High | Unify `workspace_id` type with `uuid.uuid5` slug mapping |
-| High | Deploy hosted public demo |
-| Medium | Migrate to `google-genai` SDK (next-gen Gemini client) |
-| Medium | Migrate all Pydantic schemas from `class Config` to `ConfigDict` |
-| Medium | Mobile PWA improvements & offline document caching |
-| Low | Multi-language support for regional Indian languages |
-| Low | Dedicated admin analytics dashboard |
+### 🔄 In Progress
+
+- Quota enforcement gating by Go / Plus / Pro pricing tier
+- Normalize frontend API prefix convention (~35 call sites)
+
+### 📋 Planned
+
+- Deploy hosted public demo
+- Migrate to `google-genai` SDK (next-gen Gemini client)
+- Unify `workspace_id` type with `uuid.uuid5` slug mapping
+- Migrate Pydantic schemas from `class Config` to `ConfigDict`
+- Mobile PWA improvements and offline document caching
+- Multi-language support for regional Indian languages
+- Code coverage reporting in CI
 
 ---
 
 ## 💥 Breaking Changes
 
-This is the first stable release (`v1.0.0`). There are no breaking changes from a previous stable version.
+This is the first stable release. There are no breaking changes from a previous stable version.
 
-If you are migrating from an earlier development snapshot:
+**If migrating from a development snapshot:**
+
 - Re-run `alembic upgrade head` after pulling — the migration history has been consolidated
-- Regenerate all JWT secrets (`AUTH_SECRET_KEY`, `CSRF_SECRET_KEY`)
-- Update `NEXT_PUBLIC_API_URL` to **not** include `/api/v1` — the client library handles the prefix
+- Regenerate `AUTH_SECRET_KEY` and `CSRF_SECRET_KEY` with new 64-character random values
+- Ensure `NEXT_PUBLIC_API_URL` does **not** include `/api/v1` — the API client handles the prefix internally
+
+---
+
+## 📦 Installation
+
+```bash
+git clone https://github.com/kanwa2006/DocuMindAI.git
+cd DocuMindAI
+cp .env.example .env
+cd infrastructure && docker-compose up --build
+```
+
+Full setup guide: [docs/deployment/installation.md](docs/deployment/installation.md)
 
 ---
 
@@ -193,11 +161,25 @@ If you are migrating from an earlier development snapshot:
 | [Docling](https://github.com/DS4SD/docling) | Structured document layout parsing |
 | [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | Multilingual sentence embeddings |
 | [pgvector](https://github.com/pgvector/pgvector) | Vector similarity search for PostgreSQL |
-| [Tavily](https://tavily.com/) | Web research API for the Deep Research Agent |
+| [Tavily](https://tavily.com/) | Web search API for the Deep Research Agent |
 | [FastAPI](https://fastapi.tiangolo.com/) | Async Python API framework |
 | [Next.js](https://nextjs.org/) | React framework with App Router |
 | [Celery](https://docs.celeryq.dev/) | Distributed task queue |
 
 ---
 
-*Thank you to everyone who tested, reviewed, and contributed to this release.* 🙏
+## 🔗 Links
+
+| Resource | Link |
+|----------|------|
+| Repository | https://github.com/kanwa2006/DocuMindAI |
+| Release tag | https://github.com/kanwa2006/DocuMindAI/releases/tag/v1.0.0 |
+| Installation | [docs/deployment/installation.md](docs/deployment/installation.md) |
+| Architecture | [docs/architecture/project-map.md](docs/architecture/project-map.md) |
+| Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Security | [SECURITY.md](SECURITY.md) |
+| License | [LICENSE](LICENSE) |
+
+---
+
+*Thank you to everyone who tested, reviewed, and contributed feedback during development.* 🙏
