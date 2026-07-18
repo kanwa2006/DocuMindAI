@@ -40,7 +40,14 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Root cause:** Veritas wiring stopped at the Research agent; factor names in the README don't match the code.
 - **Evidence:** grep shows `veritas_engine`/`compute_trust_score` referenced only in `deep_research_agent.py`.
 
-### C-5 — Deep Research Agent step 1 is broken (nonexistent retrieval API)
+### C-5 — Deep Research Agent step 1 is broken (nonexistent retrieval API) — **RESOLVED (2026-07-18)**
+
+> Step 1 rewritten to call `RetrievalService.retrieve_chunks(db=…, query=…, document_ids=…)`, build grounded evidence blocks, and synthesize `doc_answer` via `llm_service.generate_answer`; the failure path now logs at ERROR instead of silently degrading. Regression tests: `backend/tests/test_deep_research_agent.py`. **Discovery during verification:** `deep_research_agent` has **no caller** anywhere (backend or frontend) — recorded as new issue N-1 in DEBUG_MASTER_PLAN.
+
+### C-6 — `llm_service.generate()` called 10× but never defined on `LLMService` (newly discovered 2026-07-18) — **RESOLVED (2026-07-18)**
+- **Location:** `endpoints/legal.py:305,382`, `finance.py:498,609`, `research.py:215,285`, `reports.py:339`, `app/tasks/report_tasks.py:240`, `deep_research_agent.py:147,212` vs `services/llm_service.py` (`LLMService` had no `generate` — only the provider did).
+- **Reason:** this audit's C-1 finding wrongly listed `generate` among `LLMService` methods (conflated service with provider). The read-only audit never executed these paths, so "risk-report/ratios work ✅" claims were **wrong** — every `llm_service.generate` call raised `AttributeError` → 500.
+- **Resolution:** service-level async `generate` delegating to the provider. Regression test: `backend/tests/test_llm_service_generate.py`.
 - **Location:** `services/deep_research_agent.py:80-81`: `from app.services.retrieval_service import retrieval_service` and `retrieval_service.query(query, document_ids)`.
 - **Reason:** `retrieval_service.py` defines a `RetrievalService` class with a static `retrieve_chunks` — **no module-level `retrieval_service` singleton and no `.query` method**.
 - **Impact:** step 1 always raises (ImportError/AttributeError), is swallowed by the `except`, and the agent proceeds with `doc_answer=""` — the "hybrid RAG + web" agent runs web-only/empty, and Veritas scores empty chunks.

@@ -157,6 +157,11 @@
 
 ## C-5 — Deep Research Agent step 1 calls a nonexistent retrieval API
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).**
+> **Implementation note:** Step 1 rewritten in `services/deep_research_agent.py`: requires a `db` session, converts `document_ids` to UUIDs, calls `RetrievalService.retrieve_chunks(db=…, query=…, top_k=8, document_ids=…)`, renders `<evidence …>` blocks matching the grounding format, and synthesizes `doc_answer` via `llm_service.generate_answer` (grounded prompt contract). The catch-all no longer swallows silently — logs at ERROR with traceback, keeps the degraded VeritasTrustReport(0) path.
+> **Verification:** `backend/tests/test_deep_research_agent.py` — happy path (retrieve → synthesize → citations + trust > 0) and loud-failure path (ERROR log + degraded events). Passed. C-6 was required for steps 2/4 (`llm_service.generate`).
+> **Discovered during verification:** (1) **C-6** — `llm_service.generate` missing (fixed separately); (2) **N-1** — `deep_research_agent` has **no caller** in any endpoint or frontend code (the audit's "Research deep-research path" doesn't exist as an API). Recorded below.
+
 - **Issue ID:** C-5
 - **Severity:** Critical
 - **Category:** AI / Backend
@@ -183,6 +188,26 @@
 - **Suggested implementation order:** with C-1/C-4.
 - **Success criteria:** step 1 returns real document evidence; no swallowed exception in the happy path.
 - **Notes:** Also stop swallowing the exception silently — log at ERROR so future drift is visible.
+
+---
+
+## C-6 — `llm_service.generate()` is called 10 times but `LLMService` never defines it (newly discovered)
+
+- **Issue ID:** C-6 (discovered 2026-07-18 during C-5 verification; not in the original audit — FINAL_AUDIT C-1 wrongly listed `generate` among `LLMService` methods, conflating the service with its provider)
+- **Severity:** Critical
+- **Category:** AI / Backend / API
+- **Files involved:** `services/llm_service.py` (`LLMService` defines `generate_answer`/`generate_json`/`get_embedding`; **no `generate`** — only `BaseLLMProvider.generate` exists); call sites: `endpoints/legal.py:305,382` (risk-report, compare), `endpoints/finance.py:498,609` (ratios, compare), `endpoints/research.py:215,285` (citations, gaps), `endpoints/reports.py:339`, `app/tasks/report_tasks.py:240`, `services/deep_research_agent.py:147,212` (steps 2/4).
+- **Execution path:** endpoint → `await llm_service.generate(system_prompt, user_prompt)` → `AttributeError` → HTTP 500 (or caught-and-degraded in deep_research_agent).
+- **Root cause:** same API-drift class as C-1 — callers written against a service-level `generate` that only exists on the provider.
+- **Current behavior:** Legal risk-report/compare, Finance ratios/compare, Research citations/gaps, report naming, and report tasks all raise `AttributeError`. This contradicts the audit's "risk-report/ratios work" claims (the audit was read-only and never executed these paths).
+- **Expected behavior:** a service-level async `generate(system_prompt, user_prompt) -> str` delegating to the provider (which already carries rotation/fallback/safe-extraction).
+- **Fix:** additive one-method delegation on `LLMService` (allowed by REPAIR_RULEBOOK §8a additive-only rule).
+- **Dependencies:** none. **Blocks:** full C-5 behavior (agent steps 2/4), Legal/Finance/Research primary endpoints.
+- **Required tests:** `generate` exists; delegates to provider (stub provider test).
+
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).**
+> **Implementation note:** Added `async def generate()` to `LLMService` delegating to `self.provider.generate` (one line of behavior; docstring records the 10 call sites). Regression test `backend/tests/test_llm_service_generate.py` (exists + delegation via injected stub provider).
+> **Verification:** targeted pytest green; full suite green. Legal/Finance/Research endpoints now resolve the method (end-to-end 200s additionally need a live DB + Gemini key, unchanged contract otherwise).
 
 ---
 
@@ -909,6 +934,19 @@
 - **Impact:** weaker search than advertised. **Risk/Regression:** Low. **Dependencies:** C-1. **Independent:** after C-1.
 - **Difficulty/Time/Tokens:** Low–Medium / 1–2 h / 8–15K.
 - **Verification:** semantic queries rank plausibly. **Suggested order:** Phase 4 (after C-1). **Success criteria:** embedding-based candidate ranking. **Notes:** candidate embeddings must be populated.
+
+---
+
+## N-1 — `deep_research_agent` has no caller (newly discovered)
+
+- **Issue ID:** N-1 (discovered 2026-07-18 during C-5)
+- **Severity:** Medium (feature-gap; the service itself now works after C-5/C-6)
+- **Category:** API / AI / Frontend
+- **Files involved:** `services/deep_research_agent.py` (singleton, zero imports elsewhere); `endpoints/research.py` (no deep-research route); frontend (no consumer).
+- **Current behavior:** the 4-step deep-research pipeline (and with it the only pre-C-4 Veritas invocation) is unreachable — the audit docs described a "Research Deep Research path" that was never exposed as an endpoint.
+- **Expected behavior:** either expose an SSE endpoint (e.g. `POST /research/deep-research`) that streams `ResearchEvent`s and wire a frontend consumer, or explicitly mark the module as an unshipped feature.
+- **Dependencies:** C-5, C-6 (done). Requires an API-contract decision (new endpoint + `lib/api.ts` + UI), so it is **not** a silent bug fix; scheduled with Phase 3/4.
+- **Required tests:** endpoint contract test streaming events, once exposed.
 
 ---
 
