@@ -49,9 +49,33 @@ async def run_async_migrations() -> None:
         raw_url = raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     configuration["sqlalchemy.url"] = raw_url
 
-    # Supabase requires SSL — use the string "require", NOT ssl=True
+    # H-8: SSL was hardcoded to "require" for every Postgres URL, which made
+    # migrations fail against any non-SSL server (the CI pgvector service
+    # container, local docker, scratch DBs) with "rejected SSL upgrade".
+    # Honor an explicit ssl/sslmode URL param first (stripped from the URL —
+    # the asyncpg dialect rejects sslmode as a connect kwarg), otherwise
+    # require SSL only for non-local hosts (Supabase et al.).
+    from urllib.parse import urlsplit, parse_qsl, urlencode, urlunsplit
+
+    split = urlsplit(raw_url)
+    ssl_override = None
+    kept_params = []
+    for key, value in parse_qsl(split.query):
+        if key.lower() in ("ssl", "sslmode"):
+            ssl_override = value.lower()
+        else:
+            kept_params.append((key, value))
+    raw_url = urlunsplit(
+        (split.scheme, split.netloc, split.path, urlencode(kept_params), split.fragment)
+    )
+    configuration["sqlalchemy.url"] = raw_url
+
+    _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "db", "pgbouncer", "postgres"}
     connect_args: dict = {}
-    if "postgresql" in raw_url or "postgres" in raw_url:
+    if ssl_override is not None:
+        if ssl_override not in ("disable", "allow", "false", "off"):
+            connect_args["ssl"] = "require"
+    elif (split.hostname or "").lower() not in _LOCAL_HOSTS:
         connect_args["ssl"] = "require"
 
     connectable = async_engine_from_config(
