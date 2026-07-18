@@ -389,6 +389,24 @@ EVIDENCE BLOCKS (ordered by document and page):
             "generation_time_sec": round(time.time() - start_time, 4)
         }
 
+    async def get_embedding(self, text: str) -> List[float]:
+        """Return a single 1024-dim embedding for a query/text.
+
+        Embeddings are owned by `embedding_service` (single source of truth —
+        do not add a second embedding path here); this method only adapts that
+        sync, CPU-bound API for async callers. Imported lazily so importing
+        llm_service does not trigger the embedding model load.
+        """
+        from app.services.embedding_service import embedding_service
+
+        loop = asyncio.get_running_loop()
+        vectors = await loop.run_in_executor(
+            None, embedding_service.generate_embeddings, [text]
+        )
+        if not vectors:
+            raise ValueError("Embedding generation returned no vector for the given text.")
+        return vectors[0]
+
     async def generate_json(self, query: str, grounded_context: str, response_schema: Type[T], max_retries: int = 3) -> T:
         """
         PHASE 1: Real LLM JSON Generation with Repair Loop.
