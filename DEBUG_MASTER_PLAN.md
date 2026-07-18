@@ -333,6 +333,11 @@
 
 ## H-4 — `research/synthesis/{project_id}` returns hardcoded fake data
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).**
+> **Implementation note:** `synthesize_project` rewritten (extract-then-compute): findings are now scoped to the **project** (join via `research_papers` — the old prototype read the whole workspace), clustered by greedy cosine grouping (≥0.75) over stored embeddings with Python-computed consensus scores; cross-paper candidate pairs (cosine 0.60–0.97, top 5) are classified by the LLM (`ContradictionVerdictSchema` in `schemas/research.py` — agree/contradict/unrelated + description only), Python assigns severity from similarity, and `contradict` verdicts persist `ContradictionReport` rows (table used for the first time). LLM failure skips the pair with an ERROR log — no fabricated verdicts. Response keys unchanged (`status`/`clusters`/`contradictions`; frontend `runSynthesis` is `Promise<any>` with no field-level consumers found).
+> **Dependencies honored:** C-1/C-2 populate findings+embeddings; C-7 fixed the 1536→1024 column mismatch that would have broken the cosine math.
+> **Verification:** `backend/tests/test_research_synthesis.py` (empty project; derived-not-static output + persistence; loud LLM-failure path). Full suite: 51 passed.
+
 - **Issue ID:** H-4
 - **Severity:** High
 - **Category:** AI / API / Backend

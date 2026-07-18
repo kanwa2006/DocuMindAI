@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Literal, Optional
 from uuid import UUID
 from datetime import datetime
 
@@ -23,3 +23,14 @@ class ContradictionSchema(BaseModel):
 
 class SynthesisRequestSchema(BaseModel):
     project_id: UUID
+
+
+class ContradictionVerdictSchema(BaseModel):
+    """H-4: LLM classification of a cross-paper finding pair. The LLM only
+    extracts the relationship; Python computes similarity and severity."""
+    verdict: Literal["agree", "contradict", "unrelated"] = Field(
+        ..., description="Relationship between the two findings"
+    )
+    description: str = Field(
+        ..., description="One-sentence explanation of how the findings relate"
+    )

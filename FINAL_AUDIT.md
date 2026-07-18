@@ -94,7 +94,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Root cause:** queue routing not matched to deployed consumers.
 - **Evidence:** `celery_app.py:28-42` vs `docker-compose.yml` worker command.
 
-### H-4 — `research/synthesis` returns hardcoded fake data
+### H-4 — `research/synthesis` returns hardcoded fake data — **RESOLVED (2026-07-18)**
+
+> Real project-scoped clustering (Python cosine) + LLM pair classification + persisted ContradictionReports; no fabricated output on LLM failure. Tests: `backend/tests/test_research_synthesis.py`. Prerequisite discovery: C-7 (1536-dim columns).
 - **Location:** `endpoints/research.py:437-468`.
 - **Reason:** the endpoint returns literal placeholder clusters/contradictions ("X causes Y", "Paper A suggests…") instead of analyzing findings.
 - **Impact:** the advertised "contradiction detection / literature synthesis" is fabricated output.
