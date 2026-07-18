@@ -284,44 +284,59 @@ class GeminiLLMProvider(BaseLLMProvider):
 class LLMService:
     def __init__(self, provider: BaseLLMProvider = None):
         """
-        Provider abstraction enables hot-swapping to GPT-4, Claude, or local vLLM 
+        Provider abstraction enables hot-swapping to GPT-4, Claude, or local vLLM
         without changing the orchestration pipeline.
-        """
-        if provider is None:
-            # Auto-fallback to the mock provider is permitted ONLY in the test
-            # environment. Everywhere else a missing or broken Gemini provider
-            # must FAIL LOUD instead of silently serving fabricated, generic
-            # "fully grounded and operational" answers (DummyLLMProvider). An
-            # explicitly injected provider (the `else` branch below) is always
-            # honored, so tests can still pass DummyLLMProvider() directly.
-            allow_dummy = settings.ENVIRONMENT == "test"
 
-            if genai:
-                try:
-                    self.provider = GeminiLLMProvider()
-                except RuntimeError as e:
-                    if allow_dummy:
-                        logger.warning("No Gemini API keys configured; falling back to DummyLLMProvider (ENVIRONMENT=test).")
-                        self.provider = DummyLLMProvider()
-                    else:
-                        raise RuntimeError(
-                            "Gemini LLM provider unavailable and DummyLLMProvider is disabled in "
-                            f"ENVIRONMENT={settings.ENVIRONMENT!r}. No usable Gemini API keys were found. "
-                            "Set GEMINI_API_KEY_1 (and _2, _3, ...) in backend/.env, then restart. "
-                            "Refusing to serve mock 'grounded' responses."
-                        ) from e
-            else:
+        H-7: the provider is constructed LAZILY on first `.provider` access,
+        not here. The module-level singleton used to raise at import time
+        when no Gemini keys were present (ENVIRONMENT != test), which made
+        every module importing llm_service key-dependent at import. The
+        fail-loud guarantee is preserved — it now fires at first use with
+        the same explicit RuntimeError instead of at import.
+        """
+        self._provider = provider  # explicitly injected providers are always honored
+
+    @property
+    def provider(self) -> BaseLLMProvider:
+        if self._provider is None:
+            self._provider = self._build_provider()
+        return self._provider
+
+    @staticmethod
+    def _build_provider() -> BaseLLMProvider:
+        # Auto-fallback to the mock provider is permitted ONLY in the test
+        # environment. Everywhere else a missing or broken Gemini provider
+        # must FAIL LOUD instead of silently serving fabricated, generic
+        # "fully grounded and operational" answers (DummyLLMProvider). An
+        # explicitly injected provider (constructor arg) is always honored,
+        # so tests can still pass DummyLLMProvider() directly.
+        allow_dummy = settings.ENVIRONMENT == "test"
+
+        if genai:
+            # GeminiLLMProvider raises ValueError when the rotator has no
+            # keys; the old code only caught RuntimeError, so the intended
+            # friendly message never fired. Catch both.
+            try:
+                return GeminiLLMProvider()
+            except (RuntimeError, ValueError) as e:
                 if allow_dummy:
-                    self.provider = DummyLLMProvider()
-                else:
-                    raise RuntimeError(
-                        "The 'google-generativeai' package is not installed and DummyLLMProvider is "
-                        f"disabled in ENVIRONMENT={settings.ENVIRONMENT!r}. Install it "
-                        "(pip install google-generativeai) and configure GEMINI_API_KEY_1.. in "
-                        "backend/.env. Refusing to serve mock 'grounded' responses."
-                    )
+                    logger.warning("No Gemini API keys configured; falling back to DummyLLMProvider (ENVIRONMENT=test).")
+                    return DummyLLMProvider()
+                raise RuntimeError(
+                    "Gemini LLM provider unavailable and DummyLLMProvider is disabled in "
+                    f"ENVIRONMENT={settings.ENVIRONMENT!r}. No usable Gemini API keys were found. "
+                    "Set GEMINI_API_KEY_1 (and _2, _3, ...) in backend/.env, then restart. "
+                    "Refusing to serve mock 'grounded' responses."
+                ) from e
         else:
-            self.provider = provider
+            if allow_dummy:
+                return DummyLLMProvider()
+            raise RuntimeError(
+                "The 'google-generativeai' package is not installed and DummyLLMProvider is "
+                f"disabled in ENVIRONMENT={settings.ENVIRONMENT!r}. Install it "
+                "(pip install google-generativeai) and configure GEMINI_API_KEY_1.. in "
+                "backend/.env. Refusing to serve mock 'grounded' responses."
+            )
         
     def _build_system_prompt(self, grounded_context: str) -> str:
         """

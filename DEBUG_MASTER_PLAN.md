@@ -423,6 +423,10 @@
 
 ## H-7 — `llm_service` singleton raises at import when no Gemini keys (non-test)
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).**
+> **Implementation note:** `LLMService.__init__` no longer constructs the provider; a lazy `provider` property builds it on first access via `_build_provider()` (logic unchanged otherwise). Injected providers are still honored. Bonus root-cause fix: the old code caught only `RuntimeError`, but `GeminiLLMProvider` raises `ValueError` when the rotator has no keys — so the intended friendly fail-loud message never actually fired; `_build_provider` now catches both. The "no silent DummyLLMProvider outside test" policy is preserved verbatim, just moved from import time to first use.
+> **Verification:** `backend/tests/test_llm_service_lazy_init.py` (construction never builds; first access fails loud without keys in development; injected provider honored; provider cached). Full suite: 29 passed. No call site assigns to `.provider` (grep-verified), so the property is safe.
+
 - **Issue ID:** H-7
 - **Severity:** High
 - **Category:** Backend / Configuration / AI

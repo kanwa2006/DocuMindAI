@@ -110,7 +110,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Root cause:** insecure-by-default feature flag.
 - **Evidence:** `_activate_plan` called in the `else` branch.
 
-### H-7 — LLM service raises at import when no Gemini keys (non-test)
+### H-7 — LLM service raises at import when no Gemini keys (non-test) — **RESOLVED (2026-07-18)**
+
+> Provider construction is now lazy (first `.provider` access); fail-loud preserved at first use. Also fixed: keyless failure raised `ValueError`, which the intended `except RuntimeError` never caught. Tests: `backend/tests/test_llm_service_lazy_init.py`.
 - **Location:** `services/llm_service.py:434` (`llm_service = LLMService()`), `:290-322`.
 - **Reason:** the constructor raises `RuntimeError` unless keys exist or `ENVIRONMENT=test`.
 - **Impact:** importing any module that imports `llm_service` (most endpoints) fails at boot without keys → hard startup dependency; also complicates testing.
