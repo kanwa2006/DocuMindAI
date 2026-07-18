@@ -256,6 +256,11 @@
 
 ## H-2 — No Celery Beat service → all scheduled automation never runs
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).**
+> **Implementation note:** Added a dedicated single `beat` service to `infrastructure/docker-compose.yml` (same image/env as the worker; schedule file at `/tmp/celerybeat-schedule` so the bind mount stays clean; comment warns against running a second Beat — duplicate schedules). Chose a dedicated service over `worker -B` so worker scaling never multiplies schedulers. `run_worker_linux.sh` keeps its embedded `-B` for non-Docker local dev (mutually exclusive deployment modes). Beat env includes the Gemini keys because `auto_health_check._check_gemini` needs one.
+> **Verification:** compose YAML parses; `test_compose_runs_exactly_one_beat_scheduler` asserts exactly one Beat command in the stack. 5 worker-registration tests passed.
+> **Residual risk:** live cadence (auto_health_check every 5 min etc.) verified only by config — first `docker compose up` should confirm Beat logs its schedule entries.
+
 - **Issue ID:** H-2
 - **Severity:** High
 - **Category:** Infrastructure / Worker / Deployment

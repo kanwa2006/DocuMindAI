@@ -120,6 +120,37 @@ services:
     # ocr_gpu_queue are consumed here until a dedicated (GPU) worker exists.
     command: celery -A app.workers.celery_app worker -Q main-queue,celery,export_queue,ocr_gpu_queue --loglevel=info
 
+  # H-2: Celery Beat scheduler. Without it none of the beat_schedule entries
+  # (health check, key rotation, daily digest, db cleanup, subscription/GST/
+  # model checks, stale-review flagging) ever fire. Run EXACTLY ONE Beat
+  # instance — a second one duplicates every scheduled task (double emails).
+  # The schedule file lives in /tmp so it never pollutes the bind mount.
+  beat:
+    build:
+      context: ../backend
+      dockerfile: ../infrastructure/Dockerfile.backend
+    volumes:
+      - ../backend:/app
+    # Beat needs the same env as the worker: auto_health_check probes Gemini,
+    # so the .env Gemini keys must be present or it will alert continuously.
+    env_file:
+      - ../backend/.env
+    environment:
+      - POSTGRES_SERVER=pgbouncer
+      - POSTGRES_PORT=6432
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-documind}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+    command: celery -A app.workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+
   frontend:
     build:
       context: ../frontend

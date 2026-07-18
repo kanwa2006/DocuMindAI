@@ -43,6 +43,20 @@ def test_task_routes_reference_existing_modules():
         importlib.import_module(module_path)
 
 
+def test_compose_runs_exactly_one_beat_scheduler():
+    """H-2: beat_schedule entries need a (single) Beat process. Asserts the
+    compose stack defines exactly one `celery ... beat` command."""
+    import pathlib
+    import re
+
+    compose = pathlib.Path(__file__).resolve().parents[2] / "infrastructure" / "docker-compose.yml"
+    text = compose.read_text(encoding="utf-8")
+    beat_commands = re.findall(r"command:\s*celery\s+-A\s+\S+\s+beat\b", text)
+    assert len(beat_commands) == 1, (
+        f"Expected exactly one Celery Beat service in docker-compose, found {len(beat_commands)}"
+    )
+
+
 def test_routed_queues_are_consumed_by_compose_worker():
     """H-3: every queue in task_routes must appear in the deployed worker's
     -Q list (three-way rule leg 3). Parses docker-compose so drift fails CI."""

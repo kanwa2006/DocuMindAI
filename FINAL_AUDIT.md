@@ -69,7 +69,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Root cause:** default config + a fallback labeled "FAISS" that is really brute force.
 - **Evidence:** `retrieval_service.py` NumPy block; no `faiss` in requirements.
 
-### H-2 — No Celery Beat service → scheduled automation never runs
+### H-2 — No Celery Beat service → scheduled automation never runs — **RESOLVED (2026-07-18)**
+
+> Dedicated single `beat` service added to docker-compose (schedule file in /tmp). Guard test asserts exactly one Beat command.
 - **Location:** `celery_app.py beat_schedule` (health check, key rotation, daily digest, db cleanup, subscription/GST/model checks) vs `docker-compose.yml` (only a `worker`, no `beat`).
 - **Reason:** Beat is the scheduler; without a `celery beat` process, `beat_schedule` entries never fire.
 - **Impact:** health alerts, digests, cleanup, subscription expiry checks all silently never happen in the default deployment.
