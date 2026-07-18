@@ -142,7 +142,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Impact:** latent; inconsistent with the hardened verifier.
 - **Evidence:** the `algorithms` list.
 
-### M-4 — Embedding/reranker silent degradation to fabricated/zero data
+### M-4 — Embedding/reranker silent degradation to fabricated/zero data — **RESOLVED (2026-07-18, as M-4+M-10)**
+
+> Zero-vector fallback removed (raises, ERROR-logged); dummy reranker/embedding providers refuse in production and log ERROR elsewhere. Tests: `backend/tests/test_silent_degradation.py`.
 - **Location:** `embedding_service.py` (Gemini 768→zero-pad→zero vectors), `reranker_service.py` (`DummyLocalReranker` alternating 0.85/0.99).
 - **Reason:** fallbacks swallow failures and return meaningless-but-plausible values.
 - **Impact:** a "grounded" answer over zero vectors / fake rerank scores looks fine but is not actually grounded; no alert.

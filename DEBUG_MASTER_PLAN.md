@@ -556,6 +556,10 @@
 
 ## M-4 — Embedding service silently degrades to zero vectors
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`, together with M-10).**
+> **Implementation note:** (1) `GeminiEmbeddingProvider.embed_documents` now **raises** on embed failure (ERROR log) instead of appending a zero vector — the ingestion worker's retry→FAILED dead-letter handles documents; the query path surfaces an SSE error. (2) Primary-model (bge-m3) load failure now logs at ERROR ("DEGRADED MODE", names the dimension-mixing hazard). (3) `DummyEmbeddingProvider` refuses in production and logs ERROR elsewhere (explicit-injection test double only). The 768→1024 zero-padding of the Gemini fallback is unchanged (dimensionally consistent; standardizing models would require a re-index — out of scope).
+> **Verification:** `backend/tests/test_silent_degradation.py`. 5 passed.
+
 - **Issue ID:** M-4
 - **Severity:** Medium
 - **Category:** AI / Backend
@@ -741,6 +745,10 @@
 ---
 
 ## M-10 — Reranker silently returns fabricated scores (`DummyLocalReranker`)
+
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`, together with M-4).**
+> **Implementation note:** `DummyLocalReranker.rerank` **raises in production** (fail loud at use — no import-time bomb, consistent with H-7) and logs at ERROR per call elsewhere ("fabricated scores — grounding confidence is meaningless"). `_get_default_reranker` logs at ERROR when it falls back (unimplemented provider name or selection failure) instead of a bare `pass`.
+> **Verification:** `backend/tests/test_silent_degradation.py`. 5 passed.
 
 - **Issue ID:** M-10 (split from FINAL_AUDIT M-4)
 - **Severity:** Medium

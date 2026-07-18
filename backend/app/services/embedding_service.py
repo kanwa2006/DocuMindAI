@@ -27,9 +27,13 @@ class LocalEmbeddingProvider(BaseEmbeddingProvider):
             logger.info(f"[embedding] Dimension: {self._dim}")
             self._use_local = True
         except Exception as e:
-            logger.warning(
-                f"[embedding] sentence_transformers not available ({e}). "
-                "Falling back to GeminiEmbeddingProvider."
+            # M-4: the primary model being unavailable degrades every vector
+            # in the corpus (768-dim padded Gemini vs 1024-dim bge-m3) — this
+            # must be an alert-worthy signal, not an info-level shrug.
+            logger.error(
+                f"[embedding] DEGRADED MODE — primary model {model_name} unavailable ({e}). "
+                "Falling back to GeminiEmbeddingProvider (768-dim zero-padded to 1024; "
+                "mixing with bge-m3 vectors harms similarity)."
             )
             self._use_local = False
             self._fallback = GeminiEmbeddingProvider()
@@ -80,15 +84,32 @@ class GeminiEmbeddingProvider(BaseEmbeddingProvider):
                     )
                 results.append(raw[:EMBEDDING_DIM])  # truncate if somehow larger
             except Exception as e:
-                logger.warning(f"[embedding] Gemini embed failed: {e} — using zero vector")
-                results.append([0.0] * EMBEDDING_DIM)
+                # M-4: never silently index a zero vector — it poisons the
+                # corpus with rows that match nothing (or everything at
+                # distance ~1) while the document still reaches READY and
+                # answers *look* grounded. Fail loud instead: the ingestion
+                # worker retries and dead-letters to FAILED; the query path
+                # surfaces an SSE error.
+                logger.error(f"[embedding] Gemini embed failed for text of length "
+                             f"{len(text)}: {e} — refusing to emit a zero vector")
+                raise RuntimeError(
+                    "Embedding generation failed and zero-vector fallback is disabled "
+                    "(M-4). Check embedding model availability / Gemini keys."
+                ) from e
         return results
 
 
 class DummyEmbeddingProvider(BaseEmbeddingProvider):
-    """Zero-vector fallback when no embedding backend is available."""
+    """Zero-vector test double. Never part of the automatic fallback chain —
+    only usable when explicitly injected (tests). M-4: refuses in production."""
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        logger.warning("[embedding] DummyEmbeddingProvider — embeddings will be zero vectors")
+        from app.core.config import settings
+        if settings.ENVIRONMENT == "production":
+            raise RuntimeError(
+                "DummyEmbeddingProvider refused in production: zero vectors would "
+                "poison the corpus while answers still look grounded (M-4)."
+            )
+        logger.error("[embedding] DEGRADED MODE — DummyEmbeddingProvider zero vectors in use")
         return [[0.0] * EMBEDDING_DIM for _ in texts]
 
 
