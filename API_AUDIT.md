@@ -99,7 +99,7 @@ The `docs/architecture/project-map.md` and `docs/marketing/interview-guide.md` d
 | `runSynthesis()` → `/research/synthesis/{id}` | `endpoints/research.py` | returns hardcoded fake data (not an error, but not real) |
 
 ### 2.3 SSE contracts
-`askQuestionStream()` parses SSE events `status`, `metadata`, `token`, `thinking_stage`, `trial_status`, `trust_report`, `error`, `done`. The backend `/query/stream` emits all of these **except `trust_report`** on the main path (only the summary path and deep-research emit trust-like data), so the `onTrustReport` callback is effectively unused for normal queries — consistent with Veritas not being wired into `/query/stream`.
+`askQuestionStream()` parses SSE events `status`, `metadata`, `token`, `thinking_stage`, `trial_status`, `trust_report`, `error`, `done`. **RESOLVED (2026-07-18, C-4):** the backend `/query/stream` now emits `trust_report` (real Veritas score, frontend `TrustReport` shape) after tokens and before `done` for grounded answers on both the retrieval and summary paths; ungrounded (general-mode) answers intentionally omit it — the UI shows the "Ungrounded" badge instead.
 
 ### 2.4 Unused / orphan endpoints (no frontend consumer found)
 - `POST /query/search`, `POST /query/debug` — superseded by `/query/stream`.

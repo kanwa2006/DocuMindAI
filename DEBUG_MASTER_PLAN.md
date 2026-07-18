@@ -126,6 +126,12 @@
 
 ## C-4 — Veritas Trust Engine is not invoked on the main `/query/stream` path
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).**
+> **Implementation note:** `endpoints/query.py` now accumulates the streamed answer on both paths (retrieval and map-reduce summary), computes `veritas_engine.compute_trust_score` post-stream, and emits an `event: trust_report` SSE frame after tokens/disclaimer and before `done`. `veritas_engine.py` untouched (§8a — wired via the caller). New helpers `_veritas_sse_payload` (maps the backend dataclass to the frontend `TrustReport` interface in `TrustScoreBadge.tsx`: `level` HIGH|MEDIUM|LOW with VERY_LOW/UNKNOWN→LOW, `evidence_items`, `factors[{name,weight,score}]`) and `_compute_trust_event` (failure logs at ERROR and skips the event — never breaks token delivery, never fabricates a score).
+> **Decisions:** trust_report is emitted **only for grounded answers** — scoring a general-knowledge answer with a document-grounding heuristic would fabricate meaning; the UI already shows an "Ungrounded" badge in general mode. The summary path's hardcoded `confidence_score: 0.95` metadata is unchanged (drives the grounded badge) — the real signal is now the trust_report; noted as residual polish.
+> **Verification:** `backend/tests/test_trust_report_event.py` (payload matches the frontend interface; SSE frame well-formed; VERY_LOW/UNKNOWN map to LOW; failure path loud-but-not-fatal). Full suite: 17 passed. SSE event names unchanged otherwise (`lib/api.ts` already parses `trust_report` — no frontend change needed).
+> **Residual risk:** Veritas factors remain heuristic (hardcoded constants; no real contradiction detection) — upgrading the engine itself is future work, out of C-4's scope.
+
 - **Issue ID:** C-4
 - **Severity:** Critical (product-claim gap) / functionally Medium
 - **Category:** AI / Streaming / API

@@ -29,6 +29,7 @@ from app.core.trial_enforcement import check_and_increment_trial
 from app.services.response_schemas import get_response_schema
 from app.services.language_detector import detect_query_language, get_language_instruction
 from app.services.email_service import send_trial_nudge_email, send_upgrade_reminder_email
+from app.services.veritas_engine import veritas_engine, VeritasEngine, VeritasTrustReport
 from app.core.rate_limiter import limiter
 import uuid
 
@@ -51,6 +52,57 @@ WORKSPACE_DISCLAIMERS = {
         "any financial, tax, or legal use."
     ),
 }
+
+
+# ── C-4: Veritas trust report on the main query path ──────────────────────────
+
+def _veritas_sse_payload(report: VeritasTrustReport) -> Dict[str, Any]:
+    """Map VeritasTrustReport to the frontend TrustReport interface.
+
+    The SSE consumer contract lives in frontend TrustScoreBadge.tsx
+    (final_score, level HIGH|MEDIUM|LOW, evidence_items, warnings,
+    factors[{name,weight,score}], contradictions, summary) and differs from
+    the backend dataclass field names — adapt here, at the caller, so
+    veritas_engine stays untouched (REPAIR_RULEBOOK §8a).
+    """
+    level = report.grade if report.grade in ("HIGH", "MEDIUM") else "LOW"
+    return {
+        "final_score": report.final_score,
+        "level": level,
+        "evidence_items": report.evidence,
+        "warnings": report.warnings,
+        "factors": [
+            {"name": name, "weight": VeritasEngine.WEIGHTS.get(name, 0.0), "score": score}
+            for name, score in report.factor_scores.items()
+        ],
+        "contradictions": [],
+        "summary": (
+            f"Veritas scored this answer {report.final_score}/100 "
+            f"({level}) from {len(report.factor_scores)} weighted factors."
+        ),
+    }
+
+
+async def _compute_trust_event(
+    answer: str, chunks: Any, query: str, document_ids: Any, db: Any
+) -> str:
+    """Compute the Veritas report and render the SSE frame.
+
+    Returns "" on failure — the trust event must never break token delivery,
+    but the failure is logged at ERROR (no silent degradation)."""
+    try:
+        dict_chunks = [c for c in (chunks or []) if isinstance(c, dict)]
+        report = await veritas_engine.compute_trust_score(
+            answer=answer,
+            primary_chunks=dict_chunks,
+            query=query,
+            document_ids=[str(d) for d in document_ids] if document_ids else None,
+            db=db,
+        )
+        return f"event: trust_report\ndata: {json.dumps(_veritas_sse_payload(report))}\n\n"
+    except Exception:
+        logger.error("[query/stream] Veritas trust computation failed", exc_info=True)
+        return ""
 
 
 # ── Redis helpers (Task 4.9) — failures are silently ignored, never break request ──
@@ -321,6 +373,10 @@ async def ask_question_stream(
                     f"data: {json.dumps({'confidence_score': 0.95, 'evidence': [], 'grounded': True, 'mode': 'grounded', 'tracing': {}})}\n\n"
                 )
 
+                # C-4: accumulate the summary answer + evidence so a real
+                # Veritas trust_report can be emitted after the stream.
+                summary_answer_parts: list = []
+                summary_evidence: list = []
                 async for frame in generate_full_document_summary_stream(
                     db=db,
                     query=body.query,
@@ -337,11 +393,13 @@ async def ask_question_stream(
                     elif kind == "evidence":
                         # Replace the placeholder evidence list once we know
                         # which docs were actually read.
+                        summary_evidence = frame["data"] or []
                         yield (
                             f"event: metadata\n"
                             f"data: {json.dumps({'confidence_score': 0.95, 'evidence': frame['data'], 'grounded': True, 'mode': 'grounded'})}\n\n"
                         )
                     elif kind == "token":
+                        summary_answer_parts.append(frame["data"])
                         yield f"event: token\ndata: {json.dumps({'token': frame['data']})}\n\n"
                         await asyncio.sleep(0.005)
                     elif kind == "done":
@@ -349,6 +407,12 @@ async def ask_question_stream(
                         disclaimer = WORKSPACE_DISCLAIMERS.get(workspace_type, "")
                         if disclaimer:
                             yield f"event: token\ndata: {json.dumps({'token': disclaimer})}\n\n"
+                        trust_frame = await _compute_trust_event(
+                            "".join(summary_answer_parts), summary_evidence,
+                            body.query, attached_doc_ids, db,
+                        )
+                        if trust_frame:
+                            yield trust_frame
                         yield f"event: done\ndata: {{}}\n\n"
                         return  # Don't fall through to the retrieval path below.
 
@@ -467,7 +531,11 @@ async def ask_question_stream(
             else:
                 user_prompt = f"Question: {body.query}"
 
+            # C-4: accumulate the streamed answer for the post-stream Veritas
+            # pass without delaying token delivery.
+            answer_parts: list = []
             async for token in llm_service.provider.generate_stream(system_prompt, user_prompt):
+                answer_parts.append(token)
                 yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"
                 # Micro-sleep allows ASGI to check for client disconnects
                 await asyncio.sleep(0.005)
@@ -477,6 +545,19 @@ async def ask_question_stream(
             disclaimer = WORKSPACE_DISCLAIMERS.get(workspace_type, "")
             if disclaimer:
                 yield f"event: token\ndata: {json.dumps({'token': disclaimer})}\n\n"
+
+            # C-4: emit a real Veritas trust_report after tokens, before done.
+            # Grounded answers only — scoring a general-knowledge answer with a
+            # document-grounding heuristic would fabricate meaning; the UI
+            # shows an "Ungrounded" badge in general mode instead.
+            if is_grounded:
+                trust_frame = await _compute_trust_event(
+                    "".join(answer_parts),
+                    grounding_payload.get("evidence_metadata", []),
+                    body.query, attached_doc_ids, db,
+                )
+                if trust_frame:
+                    yield trust_frame
 
             yield f"event: done\ndata: {{}}\n\n"
 

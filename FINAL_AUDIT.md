@@ -33,7 +33,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Root cause:** the orchestrator was built but never wired into `process_document`; its queue has no consumer.
 - **Evidence:** `document_tasks.py` imports `OCRService`, not `ocr_orchestrator`; `ocr_orchestrator` referenced only by `ocr_tasks.py`.
 
-### C-4 — Veritas "trust score on every response" is not implemented on the main path
+### C-4 — Veritas "trust score on every response" is not implemented on the main path — **RESOLVED (2026-07-18)**
+
+> `/query/stream` now emits a real `trust_report` SSE event (grounded answers, both retrieval and summary paths), adapted at the caller to the frontend `TrustReport` interface. Regression tests: `backend/tests/test_trust_report_event.py`. Veritas heuristics themselves unchanged (future work).
 - **Location:** `services/veritas_engine.py` is invoked only in `services/deep_research_agent.py:82`. `/query/stream` emits `confidence_score` from grounding (`endpoints/query.py:407`), and hardcodes `0.95` on the summary path (:321).
 - **Reason:** README/marketing claim every answer is scored 0–100 by an "AI evaluation layer." In reality Veritas is a **heuristic with hardcoded constants** and is never called for normal queries.
 - **Impact:** the product's flagship trust guarantee is not delivered on the path all seven workspaces use; the UI shows grounding rerank average, not a trust score.
