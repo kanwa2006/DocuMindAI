@@ -181,7 +181,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Impact:** malicious documents can attempt instruction override; no evidence isolation beyond `<evidence>` tags.
 - **Evidence:** prompt construction in `llm_service.py`, `legal.py`, `finance.py`, `exams.py`.
 
-### M-9 — `time.sleep()` inside the key-rotator lock
+### M-9 — `time.sleep()` inside the key-rotator lock — **RESOLVED (2026-07-18)**
+
+> Wait moved outside the lock with state re-check. Threaded regression tests in `backend/tests/test_key_rotator_lock.py`.
 - **Location:** `llm_key_rotation.py:85-91`.
 - **Impact:** when all keys cool down, one thread sleeps holding the lock, blocking others; also blocking in async contexts.
 - **Evidence:** `get_key()` body.

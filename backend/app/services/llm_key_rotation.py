@@ -73,40 +73,45 @@ class GeminiKeyRotator:
         Returns the next available API key.
         Skips: permanently bad keys (403), cooling-down keys (429).
         If ALL keys are unavailable, waits for the soonest cooldown to end.
-        """
-        with self._lock:
-            now = time.time()
-            available = [
-                k for k in self._keys
-                if k not in self._bad_keys
-                and self._cooling_keys.get(k, 0) <= now
-            ]
 
-            if not available:
-                # All keys cooling — wait for the soonest one
-                soonest = min(self._cooling_keys.values())
-                wait_time = max(0, soonest - now)
-                logger.warning(f"All API keys cooling. Waiting {wait_time:.1f}s...")
-                time.sleep(wait_time + 0.5)
-                # Retry after wait
+        M-9: the cooldown wait happens OUTSIDE the lock. Sleeping while
+        holding `self._lock` serialized every other caller (get_key,
+        report_rate_limit, report_invalid_key) behind one thread's full
+        cooldown wait; state is re-checked under the lock after each wait.
+        """
+        while True:
+            with self._lock:
+                now = time.time()
                 available = [
                     k for k in self._keys
                     if k not in self._bad_keys
+                    and self._cooling_keys.get(k, 0) <= now
                 ]
 
-            if not available:
-                raise RuntimeError(
-                    "All API keys are invalid (403). "
-                    "Add valid keys to .env and restart."
-                )
+                if available:
+                    # Round-robin through available keys
+                    for _ in range(len(self._keys)):
+                        key = next(self._cycle)
+                        if key in available:
+                            return key
+                    return available[0]  # Fallback
 
-            # Round-robin through available keys
-            for _ in range(len(self._keys)):
-                key = next(self._cycle)
-                if key in available:
-                    return key
+                if len(self._bad_keys) >= len(self._keys):
+                    raise RuntimeError(
+                        "All API keys are invalid (403). "
+                        "Add valid keys to .env and restart."
+                    )
 
-            return available[0]  # Fallback
+                # All usable keys are cooling — compute the wait, then release
+                # the lock before sleeping.
+                cooling = [
+                    t for k, t in self._cooling_keys.items()
+                    if k not in self._bad_keys
+                ]
+                wait_time = max(0.0, min(cooling) - now) + 0.5
+
+            logger.warning(f"All API keys cooling. Waiting {wait_time:.1f}s...")
+            time.sleep(wait_time)
 
     def report_rate_limit(self, key: str, retry_after_seconds: int = 60):
         """Call this when Gemini returns 429. Cools down the key."""

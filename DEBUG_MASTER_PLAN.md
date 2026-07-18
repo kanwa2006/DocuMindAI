@@ -760,6 +760,9 @@
 
 ## M-9 — `time.sleep()` inside the key-rotator lock
 
+> **STATUS: ✅ RESOLVED (2026-07-18).** `get_key()` restructured into a re-check loop: the cooldown wait is computed under the lock but slept **outside** it, then state re-evaluated. All-invalid still raises the same RuntimeError; rotation behavior unchanged. Bad-key cooldowns are excluded from the wait computation (previously `min(self._cooling_keys.values())` could wait on a permanently-bad key's stale entry).
+> **Verification:** `backend/tests/test_key_rotator_lock.py` — rotation parity, all-invalid raise, sleep-never-under-lock (instrumented), and a threaded test proving `report_rate_limit` completes while another thread waits out a cooldown. 4 passed.
+
 - **Issue ID:** M-9
 - **Severity:** Medium
 - **Category:** Performance / AI / Backend
