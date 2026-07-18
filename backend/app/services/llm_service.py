@@ -389,6 +389,17 @@ EVIDENCE BLOCKS (ordered by document and page):
             "generation_time_sec": round(time.time() - start_time, 4)
         }
 
+    async def generate(self, system_prompt: str, user_prompt: str) -> str:
+        """Plain text generation, delegated to the provider.
+
+        C-6: ten call sites (legal risk-report/compare, finance ratios/compare,
+        research citations/gaps, report naming/tasks, deep-research steps 2/4)
+        call `llm_service.generate(...)`, but only the provider defined it —
+        every call raised AttributeError. The provider keeps ownership of key
+        rotation, model fallback, and safe text extraction.
+        """
+        return await self.provider.generate(system_prompt, user_prompt)
+
     async def get_embedding(self, text: str) -> List[float]:
         """Return a single 1024-dim embedding for a query/text.
 
