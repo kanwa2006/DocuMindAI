@@ -31,7 +31,7 @@ class Transaction(Base):
     category = Column(String, nullable=True)
     is_anomaly = Column(Boolean, default=False)
     anomaly_reason = Column(String, nullable=True)
-    embedding = Column(Vector(1536), nullable=True) # PHASE 4: Financial Vector Search
+    embedding = Column(Vector(1024), nullable=True) # C-7: matches embedding_service (bge-m3, 1024-dim); was 1536
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class AuditFinding(Base):

@@ -466,6 +466,20 @@
 
 ---
 
+## C-7 — All workspace embedding columns are vector(1536) but the pipeline produces 1024-dim (newly discovered)
+
+- **Issue ID:** C-7 (discovered 2026-07-18 while implementing H-4)
+- **Severity:** Critical (blocks the value of C-1/C-2 at the DB layer)
+- **Category:** Database / AI
+- **Files involved:** `models/{hr,legal,finance,study,research}.py` (7 embedding columns `Vector(1536)`); migrations `07c651c8dd4e`, `0f6209734afa`, `3cfcd82eefa5`, `416d80423fd3`, `8ec27d914474` (created them as 1536); `services/embedding_service.py` (`EMBEDDING_DIM=1024`, bge-m3).
+- **Current behavior:** inserting a 1024-dim vector into a `vector(1536)` column and `l2_distance` between a 1024-dim query and 1536 columns both raise dimension-mismatch errors — so even with C-1/C-2 fixed, workspace embedding population and all four `*/search` endpoints fail at the DB layer.
+- **Root cause:** OpenAI-ada-era (1536) scaffolding never updated when the pipeline standardized on bge-m3 (1024). `document_chunks` hit the same bug earlier and was resized (`a1b2c3d4e5f7`); the domain tables were missed.
+- **Fix:** models updated to `Vector(1024)`; migration `2a2aee1828d4` resizes the seven columns with `USING NULL` — safe because both writer paths were broken since inception, so the columns cannot hold real data in any deployment of this codebase.
+
+> **STATUS: ✅ RESOLVED (2026-07-18).** **Verification:** full chain + new migration green on scratch `ankane/pgvector:v0.5.1`; all seven columns report `vector(1024)`; downgrade restores 1536; re-upgrade clean. Guard test `backend/tests/test_embedding_dimensions.py` parametrizes all 8 embedding models against `EMBEDDING_DIM`. 8 passed.
+
+---
+
 ## H-8 — Alembic `env.py` hardcodes SSL, breaking migrations on non-SSL Postgres (newly discovered)
 
 - **Issue ID:** H-8 (discovered 2026-07-18 during H-1 verification)

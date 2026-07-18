@@ -13,7 +13,7 @@ class StudyNote(Base):
     title = Column(String, nullable=False)
     content = Column(String, nullable=False)
     tags = Column(JSON, default=[])
-    embedding = Column(Vector(1536), nullable=True) # PHASE 2: Study Vector Search
+    embedding = Column(Vector(1024), nullable=True) # C-7: matches embedding_service (bge-m3, 1024-dim); was 1536
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class FlashcardDeck(Base):
@@ -33,7 +33,7 @@ class Flashcard(Base):
     front = Column(String, nullable=False) # Question / Concept
     back = Column(String, nullable=False) # Answer / Explanation
     citation = Column(String, nullable=True)
-    embedding = Column(Vector(1536), nullable=True) # PHASE 2: Study Vector Search
+    embedding = Column(Vector(1024), nullable=True) # C-7: matches embedding_service (bge-m3, 1024-dim); was 1536
     
     # Spaced Repetition (SuperMemo-2 style)
     repetition_count = Column(Integer, default=0)

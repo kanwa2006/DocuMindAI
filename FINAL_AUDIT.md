@@ -48,6 +48,11 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 
 > Step 1 rewritten to call `RetrievalService.retrieve_chunks(db=…, query=…, document_ids=…)`, build grounded evidence blocks, and synthesize `doc_answer` via `llm_service.generate_answer`; the failure path now logs at ERROR instead of silently degrading. Regression tests: `backend/tests/test_deep_research_agent.py`. **Discovery during verification:** `deep_research_agent` has **no caller** anywhere (backend or frontend) — recorded as new issue N-1 in DEBUG_MASTER_PLAN.
 
+### C-7 — Workspace embedding columns vector(1536) vs 1024-dim pipeline (newly discovered 2026-07-18) — **RESOLVED (2026-07-18)**
+- **Location:** 7 embedding columns across hr/legal/finance/study/research models + their creation migrations, vs `embedding_service` EMBEDDING_DIM=1024 (bge-m3).
+- **Reason:** OpenAI-ada-era scaffold (1536) never updated; `document_chunks` had the identical bug fixed earlier (`a1b2c3d4e5f7`), domain tables were missed. Inserts and distance ops fail on dimension mismatch, nullifying C-1/C-2 at the DB layer.
+- **Resolution:** models → `Vector(1024)`; migration `2a2aee1828d4` (USING NULL — columns were unpopulatable, hence empty). Verified up/down on scratch pgvector. Guard: `backend/tests/test_embedding_dimensions.py`.
+
 ### C-6 — `llm_service.generate()` called 10× but never defined on `LLMService` (newly discovered 2026-07-18) — **RESOLVED (2026-07-18)**
 - **Location:** `endpoints/legal.py:305,382`, `finance.py:498,609`, `research.py:215,285`, `reports.py:339`, `app/tasks/report_tasks.py:240`, `deep_research_agent.py:147,212` vs `services/llm_service.py` (`LLMService` had no `generate` — only the provider did).
 - **Reason:** this audit's C-1 finding wrongly listed `generate` among `LLMService` methods (conflated service with provider). The read-only audit never executed these paths, so "risk-report/ratios work ✅" claims were **wrong** — every `llm_service.generate` call raised `AttributeError` → 500.

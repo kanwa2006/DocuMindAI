@@ -23,7 +23,7 @@ class ResearchPaper(Base):
     authors = Column(JSON, default=[])
     abstract = Column(String, nullable=True)
     published_year = Column(String, nullable=True)
-    embedding = Column(Vector(1536), nullable=True)
+    embedding = Column(Vector(1024), nullable=True)  # C-7: matches embedding_service (bge-m3, 1024-dim); was 1536
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class ResearchFinding(Base):
@@ -34,7 +34,7 @@ class ResearchFinding(Base):
     statement = Column(String, nullable=False)
     evidence_quote = Column(String, nullable=True)
     methodology = Column(String, nullable=True)
-    embedding = Column(Vector(1536), nullable=True)
+    embedding = Column(Vector(1024), nullable=True)  # C-7: matches embedding_service (bge-m3, 1024-dim); was 1536
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class ContradictionReport(Base):
