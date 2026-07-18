@@ -91,10 +91,13 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         if token:
             try:
                 import jwt as _jwt
+                # M-3: HS256 only — accepting RS256 alongside a symmetric
+                # secret is the algorithm-confusion pattern BUG-013 removed
+                # from auth.py; this decode must match settings.JWT_ALGORITHM.
                 claims = _jwt.decode(
                     token,
                     settings.AUTH_SECRET_KEY,
-                    algorithms=["HS256", "RS256"],
+                    algorithms=[settings.JWT_ALGORITHM],
                     options={"verify_signature": True},
                 )
                 user_id = claims.get("sub", "anonymous")

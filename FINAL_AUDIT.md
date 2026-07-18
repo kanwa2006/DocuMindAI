@@ -146,7 +146,7 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Impact:** deleted-document content can be served from cache for up to 300s.
 - **Evidence:** the two differing key formats.
 
-### M-3 — Algorithm-confusion smell in tenant middleware
+### M-3 — Algorithm-confusion smell in tenant middleware — **RESOLVED (2026-07-18)**
 - **Location:** `core/middleware.py:96-99` decodes JWT with `["HS256","RS256"]`, unlike `auth.py` (HS256 only).
 - **Impact:** latent; inconsistent with the hardened verifier.
 - **Evidence:** the `algorithms` list.

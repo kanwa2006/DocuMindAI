@@ -34,7 +34,7 @@ Companion to [FINAL_AUDIT.md](FINAL_AUDIT.md). Read-only security review of auth
 - **Impact:** revenue bypass / privilege (tier) escalation.
 - **Root cause:** insecure-by-default feature flag; the safe mode requires opt-in.
 
-**H-S2 — Algorithm-confusion smell in tenant middleware.**
+**H-S2 — Algorithm-confusion smell in tenant middleware.** — **RESOLVED (2026-07-18, M-3):** decode pins `settings.JWT_ALGORITHM` (HS256 only).
 `TenantContextMiddleware` decodes the session JWT with `algorithms=["HS256","RS256"]`, re-introducing the exact acceptance pattern that `auth.py` deliberately removed (BUG-013). It uses the symmetric `AUTH_SECRET_KEY` as the key. While this middleware only derives `collection_name` (not auth), allowing RS256 alongside a shared secret is a known dangerous pattern and is inconsistent with the hardened verifier.
 - **Evidence:** `core/middleware.py:96-99` vs `core/auth.py:26`.
 - **Impact:** latent; low direct exploitability here, but a foot-gun if this decode is ever trusted for authz.

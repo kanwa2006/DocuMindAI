@@ -563,6 +563,8 @@
 
 ## M-3 — JWT algorithm confusion in `TenantContextMiddleware`
 
+> **STATUS: ✅ RESOLVED (2026-07-18).** Decode pins `algorithms=[settings.JWT_ALGORITHM]` (HS256). Tests: `backend/tests/test_tenant_middleware_jwt.py` (source guard + HS256 functional check). 2 passed.
+
 - **Issue ID:** M-3
 - **Severity:** Medium
 - **Category:** Security / Authentication
