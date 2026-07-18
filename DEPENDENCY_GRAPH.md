@@ -433,7 +433,7 @@ services/grounding → services/retrieval → services/embedding/reranker
 - `deep_research_agent` → `from app.services.retrieval_service import retrieval_service` (**no such symbol** — C-5).
 - ~~12 call sites → `llm_service.get_embedding` (**method absent** — C-1)~~ **RESOLVED 2026-07-18:** `LLMService.get_embedding` now exists, delegating to `embedding_service` (async-safe).
 - `task_routes` → `embedding_tasks`/`retrieval_tasks` (**modules absent** — H-3).
-- `storage.py` → `settings.AWS_REGION` (**attr absent** — H-5).
+- ~~`storage.py` → `settings.AWS_REGION` (**attr absent** — H-5)~~ **RESOLVED 2026-07-18:** uses `S3_REGION`.
 - `document_tasks` → `doc.workspace_type` (**attr absent** — M-11).
 
 ### 9.4 Circular dependencies

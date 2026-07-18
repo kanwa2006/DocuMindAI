@@ -354,6 +354,8 @@
 
 ## H-5 — `S3StorageProvider` reads undefined `settings.AWS_REGION`
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).** One-line fix: `core/storage.py` now reads `settings.S3_REGION`. No `AWS_REGION` alias added (would be a second name for the same contract — the guard test asserts the phantom attr stays gone). Regression tests: `backend/tests/test_storage_s3_init.py` (provider init with mocked boto3 uses `S3_REGION`; Settings has no `AWS_REGION`). 2 passed.
+
 - **Issue ID:** H-5
 - **Severity:** High (for S3 deployments) / latent otherwise
 - **Category:** Infrastructure / Configuration / Storage

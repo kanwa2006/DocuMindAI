@@ -92,7 +92,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Root cause:** stubbed prototype never replaced with real clustering/contradiction logic.
 - **Evidence:** the function body constructs a static dict.
 
-### H-5 — S3 storage provider crashes on init (`AWS_REGION` undefined)
+### H-5 — S3 storage provider crashes on init (`AWS_REGION` undefined) — **RESOLVED (2026-07-18)**
+
+> `storage.py` now uses `settings.S3_REGION`. Regression tests: `backend/tests/test_storage_s3_init.py`.
 - **Location:** `core/storage.py:82` uses `settings.AWS_REGION`; `config.py` defines `S3_REGION`, not `AWS_REGION`.
 - **Reason:** attribute mismatch (`documents.py` correctly uses `S3_REGION`).
 - **Impact:** selecting `STORAGE_PROVIDER=s3` → `AttributeError` when the worker builds `storage_service` → S3 deployments break.
