@@ -392,6 +392,11 @@
 
 ## H-6 — Free plan self-upgrade when `RAZORPAY_ENABLED=false` (default)
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).**
+> **Implementation note:** `/billing/upgrade` sandbox path now returns **403 `payments_disabled`** (with a WARNING log) when `settings.ENVIRONMENT == "production"` and Razorpay is off. Dev/test sandbox upgrades unchanged; `RAZORPAY_ENABLED=true` behavior (402 → create-order) unchanged.
+> **Verification:** `backend/tests/test_billing_upgrade_gate.py` — production blocked (403), Razorpay-on still 402, dev sandbox still activates. 3 passed.
+> **Residual note:** frontend `UpgradeModal` treats non-2xx as failure generically; the 403 message is surfaced via detail. Per-tier quota enforcement after upgrade remains a roadmap item (unchanged).
+
 - **Issue ID:** H-6
 - **Severity:** High
 - **Category:** Security / Billing / API

@@ -28,7 +28,7 @@ Companion to [FINAL_AUDIT.md](FINAL_AUDIT.md). Read-only security review of auth
 
 ### HIGH
 
-**H-S1 — Free plan self-upgrade in the default configuration.**
+**H-S1 — Free plan self-upgrade in the default configuration.** — **RESOLVED (2026-07-18, H-6):** sandbox upgrade now 403s in production when payments are disabled.
 `RAZORPAY_ENABLED` defaults to `false`. In that mode `POST /billing/upgrade` calls `_activate_plan` directly, letting any authenticated user set their own plan to any tier (including `enterprise`) with **no payment**. If the app is deployed without explicitly setting `RAZORPAY_ENABLED=true`, paid features are free.
 - **Evidence:** `endpoints/billing.py:190-218`.
 - **Impact:** revenue bypass / privilege (tier) escalation.

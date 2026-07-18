@@ -103,7 +103,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Root cause:** inconsistent setting name between modules.
 - **Evidence:** `storage.py` `S3StorageProvider.__init__` vs `config.py`.
 
-### H-6 — Free plan self-upgrade in the default configuration
+### H-6 — Free plan self-upgrade in the default configuration — **RESOLVED (2026-07-18)**
+
+> Sandbox upgrade gated to non-production (403 `payments_disabled` in production with payments off). Tests: `backend/tests/test_billing_upgrade_gate.py`.
 - **Location:** `endpoints/billing.py:190-218`; default `RAZORPAY_ENABLED=false`.
 - **Reason:** with the flag off, `/billing/upgrade` activates any tier directly (no payment).
 - **Impact:** revenue bypass / tier escalation if shipped with the default.
