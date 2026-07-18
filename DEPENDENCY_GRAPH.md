@@ -184,11 +184,11 @@ ocr_orchestrator ──→ Docling + PaddleOCR   (only referenced by ocr_tasks �
 | `study_tasks` | process_study_batch | ✅ (C-2 fix) | `main-queue` | ✅ |
 | `research_tasks` | process_research_batch | ✅ (C-2 fix) | `main-queue` | ✅ |
 | `email_tasks` | (email) | ❌ | (default) | ❌ (mostly unused; email sent sync) |
-| `export_tasks` | export jobs | ✅ | `export_queue` | ❌ (queue not consumed) |
-| `ocr_tasks` | extract_document_ocr | ✅ | `ocr_gpu_queue` | ❌ (queue not consumed) |
+| `export_tasks` | export jobs | ✅ | `export_queue` | ✅ (H-3 fix: `-Q` expanded) |
+| `ocr_tasks` | extract_document_ocr | ✅ | `ocr_gpu_queue` | ✅ (H-3 fix: `-Q` expanded) |
 | `audio_tasks` | audio/voice | ✅ | (default) | ✅ |
-| `embedding_tasks`* | — | (route only) | `embedding_queue` | ❌ (**module does not exist**) |
-| `retrieval_tasks`* | — | (route only) | `retrieval_queue` | ❌ (**module does not exist**) |
+| ~~`embedding_tasks`~~ | — | — | — | route removed (H-3 fix — module never existed) |
+| ~~`retrieval_tasks`~~ | — | — | — | route removed (H-3 fix — module never existed) |
 | `automation.auto_*` (7) | scheduled | ✅ | default | ✅ if consumed, but **no Beat to schedule** (H-2) |
 
 \* phantom routes referencing nonexistent modules (H-3).

@@ -35,3 +35,28 @@ def test_every_include_module_imports():
         importlib.import_module(module)
 
 
+def test_task_routes_reference_existing_modules():
+    """H-3: no task_route may point at a nonexistent module (the phantom
+    embedding_tasks/retrieval_tasks routes were dead config)."""
+    for pattern in celery_app.conf.task_routes:
+        module_path = pattern.rsplit(".", 1)[0] if pattern.endswith(".*") else pattern
+        importlib.import_module(module_path)
+
+
+def test_routed_queues_are_consumed_by_compose_worker():
+    """H-3: every queue in task_routes must appear in the deployed worker's
+    -Q list (three-way rule leg 3). Parses docker-compose so drift fails CI."""
+    import pathlib
+    import re
+
+    compose = pathlib.Path(__file__).resolve().parents[2] / "infrastructure" / "docker-compose.yml"
+    text = compose.read_text(encoding="utf-8")
+    match = re.search(r"worker\s+-Q\s+([\w,\-]+)", text)
+    assert match, "worker -Q queue list not found in docker-compose.yml"
+    consumed = set(match.group(1).split(","))
+
+    routed = set(celery_app.conf.task_routes.values())
+    unconsumed = routed - consumed
+    assert not unconsumed, f"Routed queues with no consumer: {unconsumed}"
+
+

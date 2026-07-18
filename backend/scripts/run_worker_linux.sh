@@ -35,5 +35,5 @@ exec celery -A app.workers.celery_app worker \
   --loglevel=info \
   --max-tasks-per-child=1000 \
   -B \
-  -Q main-queue,celery \
+  -Q main-queue,celery,export_queue,ocr_gpu_queue \
   "$@"

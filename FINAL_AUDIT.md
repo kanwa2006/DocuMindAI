@@ -65,7 +65,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Root cause:** missing Beat container/process in orchestration.
 - **Evidence:** `docker-compose.yml` services list; no `beat` command anywhere.
 
-### H-3 — `export_tasks`/`ocr_tasks` (and embedding/retrieval queues) have no consumer
+### H-3 — `export_tasks`/`ocr_tasks` (and embedding/retrieval queues) have no consumer — **RESOLVED (2026-07-18)**
+
+> Phantom `embedding_tasks`/`retrieval_tasks` routes removed; worker `-Q` expanded to consume `export_queue` and `ocr_gpu_queue` in compose/scripts/docs. Regression tests in `backend/tests/test_worker_registration.py`.
 - **Location:** `task_routes` sends `export_tasks.*`→`export_queue`, `ocr_tasks.*`→`ocr_gpu_queue`, etc.; worker consumes only `main-queue,celery`.
 - **Reason:** routed queues aren't in the worker's `-Q` list.
 - **Impact:** async exports and OCR-queue tasks enqueue but never process.

@@ -121,7 +121,7 @@ Before editing, always inspect:
 - **Migrations** (does a schema change need Alembic?).
 - **Environment variables** (`DEPENDENCY_GRAPH.md` §7).
 
-Known dangling references — do not add more, and expect them when tracing: ~~`llm_service.get_embedding`~~ (fixed, C-1), `retrieval_service.query`/singleton (missing), `embedding_tasks`/`retrieval_tasks` routes (missing), `settings.AWS_REGION` (missing), `doc.workspace_type` (missing).
+Known dangling references — do not add more, and expect them when tracing: ~~`llm_service.get_embedding`~~ (fixed, C-1), `retrieval_service.query`/singleton (missing), ~~`embedding_tasks`/`retrieval_tasks` routes~~ (removed, H-3), `settings.AWS_REGION` (missing), `doc.workspace_type` (missing).
 
 ## Documentation Rules
 

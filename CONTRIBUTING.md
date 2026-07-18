@@ -116,7 +116,7 @@ In a separate terminal with the virtual environment active:
 ```bash
 cd backend
 venv\Scripts\activate
-celery -A app.workers.celery_app worker -Q main-queue,celery --loglevel=info
+celery -A app.workers.celery_app worker -Q main-queue,celery,export_queue,ocr_gpu_queue --loglevel=info
 ```
 
 ### Running Backend Tests

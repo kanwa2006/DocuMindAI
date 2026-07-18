@@ -250,6 +250,11 @@
 
 ## H-3 — Routed queues have no consumer; routes reference nonexistent task modules
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).**
+> **Implementation note:** (1) Removed the phantom `embedding_tasks`/`retrieval_tasks` routes from `celery_app.py task_routes` (modules never existed). (2) Expanded the deployed worker's queue list to `-Q main-queue,celery,export_queue,ocr_gpu_queue` in `infrastructure/docker-compose.yml`, `backend/scripts/run_worker_linux.sh`, `CONTRIBUTING.md`, and `docs/deployment/installation.md`. Queue names/routes preserved so a dedicated GPU worker can later take over `ocr_gpu_queue` without route changes.
+> **Verification:** `backend/tests/test_worker_registration.py` — `test_task_routes_reference_existing_modules` (fails on phantom routes) and `test_routed_queues_are_consumed_by_compose_worker` (parses docker-compose; fails on route/queue drift). 4 passed.
+> **Residual risk:** OCR/export tasks now execute on the CPU worker — heavy OCR jobs share capacity with ingestion until a dedicated worker is deployed.
+
 - **Issue ID:** H-3
 - **Severity:** High
 - **Category:** Worker / Infrastructure

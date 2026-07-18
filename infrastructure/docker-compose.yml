@@ -116,7 +116,9 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
-    command: celery -A app.workers.celery_app worker -Q main-queue,celery --loglevel=info
+    # H-3: every routed queue needs a consumer — export_queue and
+    # ocr_gpu_queue are consumed here until a dedicated (GPU) worker exists.
+    command: celery -A app.workers.celery_app worker -Q main-queue,celery,export_queue,ocr_gpu_queue --loglevel=info
 
   frontend:
     build:
