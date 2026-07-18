@@ -142,7 +142,10 @@ async def ai_tutor_chat(
         notes = (await db.execute(stmt)).scalars().all()
     context = "\n".join([f"{n.title}: {n.content}" for n in notes])
     
-    system_prompt = (
+    # M-8: notes content is untrusted document text; direct
+    # provider.generate_stream bypasses LLMService.generate, so harden here.
+    from app.services.llm_service import _harden_system_prompt
+    system_prompt = _harden_system_prompt(
         "You are a patient, encouraging AI tutor. Use the provided study notes as your primary "
         "source of truth. Explain concepts clearly, use examples, and never invent facts. "
         "If the notes don't cover the topic, say so honestly and offer what general knowledge you can."

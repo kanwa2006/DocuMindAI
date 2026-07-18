@@ -724,6 +724,11 @@
 
 ## M-8 — Prompt-injection surface in grounded generation
 
+> **STATUS: ✅ RESOLVED (2026-07-18).**
+> **Implementation note:** New `EVIDENCE_INJECTION_GUARD` constant + idempotent `_harden_system_prompt()` in `llm_service.py`, applied at the service boundary: (1) inside `_build_system_prompt` (grounded QA + `generate_json` users), (2) inside `LLMService.generate` (legal/finance/research/report custom prompts — all C-6 call sites), (3) at the two direct `provider.generate_stream` call sites that embed domain content (study tutor, research copilot). Evidence is framed as untrusted data; embedded instructions must be treated as content only.
+> **Verification:** `backend/tests/test_prompt_injection_guard.py` (guard precedes evidence; idempotent; caller prompts hardened via generate). 3 passed. Prompt-quality regression risk noted: guard is additive and instruction-neutral for benign content.
+> **Residual:** this is prompt-level hardening, not a proof against injection; adversarial-fixture evaluation with a live model remains future work (M-6 scope).
+
 - **Issue ID:** M-8
 - **Severity:** Medium
 - **Category:** Security / AI

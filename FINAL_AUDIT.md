@@ -174,7 +174,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Impact:** ambiguous effective behavior; stale logic/comments.
 - **Evidence:** the differing values.
 
-### M-8 — Prompt-injection surface in grounded generation
+### M-8 — Prompt-injection surface in grounded generation — **RESOLVED (2026-07-18)**
+
+> Anti-injection guard prepended at the service boundary and direct stream sites; evidence framed as untrusted data. Tests: `backend/tests/test_prompt_injection_guard.py`.
 - **Location:** all `_build_system_prompt`/domain prompts inject document text verbatim.
 - **Impact:** malicious documents can attempt instruction override; no evidence isolation beyond `<evidence>` tags.
 - **Evidence:** prompt construction in `llm_service.py`, `legal.py`, `finance.py`, `exams.py`.

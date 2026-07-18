@@ -54,7 +54,7 @@ Auth relies on a `token` cookie. Cookie flags (`HttpOnly`, `Secure`, `SameSite`)
 **M-S4 — Public shared-session endpoint.**
 `GET /shared/{token}` is intentionally unauthenticated and returns session messages. Security rests entirely on token unguessability and the absence of enumeration. Confirm tokens are high-entropy and that revocation (`unshareSession`) fully invalidates.
 
-**M-S5 — Prompt-injection exposure in document-grounded generation.**
+**M-S5 — Prompt-injection exposure in document-grounded generation.** — **RESOLVED (2026-07-18, M-8):** evidence framed as untrusted data via a shared guard at the LLM service boundary.
 User-uploaded document text is injected verbatim into LLM system prompts across workspaces (`_build_system_prompt`, legal/finance/exam prompts). A malicious document can attempt to override instructions ("ignore previous instructions…"). There is no input sanitization or instruction-isolation of evidence beyond `<evidence>` tags. For a "zero-hallucination/grounded" product this is the most relevant AI-security risk.
 
 **M-S6 — Cache-purge pattern mismatch on delete.**

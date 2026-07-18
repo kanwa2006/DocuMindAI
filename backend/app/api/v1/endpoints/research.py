@@ -410,7 +410,10 @@ async def ai_copilot_chat(
         findings = (await db.execute(stmt)).scalars().all()
     context = "\n".join([f"Finding: {f.statement}\nEvidence: {f.evidence_quote}" for f in findings])
 
-    system_prompt = (
+    # M-8: findings content is untrusted document text; direct
+    # provider.generate_stream bypasses LLMService.generate, so harden here.
+    from app.services.llm_service import _harden_system_prompt
+    system_prompt = _harden_system_prompt(
         "You are an expert research copilot. Use the provided research findings as your primary "
         "source of truth. Synthesise evidence clearly, cite findings where relevant, and never "
         "invent citations. If the findings don't cover the topic, say so honestly and offer "
