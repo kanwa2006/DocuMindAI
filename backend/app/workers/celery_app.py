@@ -12,6 +12,15 @@ celery_app = Celery(
         "app.workers.tasks.audio_tasks",
         "app.workers.tasks.ocr_tasks",
         "app.workers.tasks.hr_tasks",
+        # C-2 fix — these modules were routed in task_routes and dispatched by
+        # the legal/finance/study/research /process endpoints but never
+        # imported by the worker, so their tasks were unregistered and never
+        # ran. (email_tasks stays unregistered: email is sent synchronously
+        # via email_service; the module is dead code pending its own issue.)
+        "app.workers.tasks.legal_tasks",
+        "app.workers.tasks.finance_tasks",
+        "app.workers.tasks.study_tasks",
+        "app.workers.tasks.research_tasks",
         # Phase 20 — automation tasks
         "app.automation.auto_health_check",
         "app.automation.auto_key_rotation",

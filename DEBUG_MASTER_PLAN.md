@@ -59,6 +59,11 @@
 
 ## C-2 — Celery worker `include` omits legal/finance/study/research (and email) task modules
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).**
+> **Implementation note:** Added `legal_tasks`, `finance_tasks`, `study_tasks`, `research_tasks` to `celery_app.py include`. **Decision:** `email_tasks` deliberately left unregistered — email is sent synchronously via `email_service`; the module is dead code (removal deferred to its own issue). All four modules verified to import cleanly under the worker (regression risk for worker boot).
+> **Verification:** `backend/tests/test_worker_registration.py` — asserts all five `process_*_batch` tasks are in `celery_app.tasks` and every `include` module imports. Passed. C-1 was landed first, so the tasks' `get_embedding` calls now resolve.
+> **Residual risk:** end-to-end task execution requires a running broker/worker (`-Q main-queue,celery` already consumes `main-queue`, so these tasks are now registered *and* consumed).
+
 - **Issue ID:** C-2
 - **Severity:** Critical
 - **Category:** Worker / Infrastructure

@@ -17,7 +17,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Root cause:** embedding generation lives in `embedding_service`, not `llm_service`; the search endpoints were written against a method that was never added.
 - **Evidence:** method absent in `llm_service.py`; `frontend/src/lib/api.ts` `searchClauses` etc. call these routes.
 
-### C-2 — Celery worker cannot execute legal/finance/study/research tasks (missing from `include`)
+### C-2 — Celery worker cannot execute legal/finance/study/research tasks (missing from `include`) — **RESOLVED (2026-07-18)**
+
+> Four task modules added to `include`; `email_tasks` intentionally left out (dead code). Regression test: `backend/tests/test_worker_registration.py`.
 - **Location:** `workers/celery_app.py` `include=[...]` omits `legal_tasks`, `finance_tasks`, `study_tasks`, `research_tasks` (only `document_tasks`, `export_tasks`, `audio_tasks`, `ocr_tasks`, `hr_tasks`, automation are listed). `docker-compose.yml` worker runs `-Q main-queue,celery`.
 - **Reason:** the `/legal|finance|study|research/process` endpoints call `process_*_batch.delay(...)`, but the worker never imports/registers those modules, so it has no handler for the task.
 - **Impact:** async document processing for four workspaces never completes; documents stay "queued." Populating `legal_clauses`/`finance_transactions`/`study_flashcards`/`research_findings` embeddings depends on these tasks → also blocks the (already broken) `*/search`.

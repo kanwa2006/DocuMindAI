@@ -179,10 +179,10 @@ ocr_orchestrator ──→ Docling + PaddleOCR   (only referenced by ocr_tasks �
 |-------------|---------|:-----------------------:|-----------|:-----------------------------------------------------:|
 | `document_tasks` | process_document, process_clip_document, generate_proactive_insights_task | ✅ | default (`celery`) | ✅ |
 | `hr_tasks` | process_resume_batch, flag_stale_reviews | ✅ | `main-queue` | ✅ |
-| `legal_tasks` | process_contract_batch | ❌ | `main-queue` | ❌ (unregistered) |
-| `finance_tasks` | process_finance_batch | ❌ | `main-queue` | ❌ |
-| `study_tasks` | process_study_batch | ❌ | `main-queue` | ❌ |
-| `research_tasks` | process_research_batch | ❌ | `main-queue` | ❌ |
+| `legal_tasks` | process_contract_batch | ✅ (C-2 fix) | `main-queue` | ✅ |
+| `finance_tasks` | process_finance_batch | ✅ (C-2 fix) | `main-queue` | ✅ |
+| `study_tasks` | process_study_batch | ✅ (C-2 fix) | `main-queue` | ✅ |
+| `research_tasks` | process_research_batch | ✅ (C-2 fix) | `main-queue` | ✅ |
 | `email_tasks` | (email) | ❌ | (default) | ❌ (mostly unused; email sent sync) |
 | `export_tasks` | export jobs | ✅ | `export_queue` | ❌ (queue not consumed) |
 | `ocr_tasks` | extract_document_ocr | ✅ | `ocr_gpu_queue` | ❌ (queue not consumed) |
