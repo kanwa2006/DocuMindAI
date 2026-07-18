@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1800
     CHUNK_OVERLAP: int = 300
     OCR_CONFIDENCE_THRESHOLD: float = 0.80
+    # C-3: route scanned/image pages through the PaddleOCR/Docling
+    # orchestrator during ingestion. Rollback toggle for the heavy engines —
+    # disabling falls back to raw PyMuPDF text (loudly logged, usually empty).
+    OCR_SCANNED_ENABLED: bool = True
     MAX_UPLOAD_MB: int = 200
 
     # Gemini / LLM

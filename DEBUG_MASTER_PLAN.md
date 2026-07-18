@@ -95,6 +95,12 @@
 
 ## C-3 — Multi-engine OCR (PaddleOCR + Docling) is not wired into the ingestion path
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).**
+> **Implementation note (option a — inline):** `OCRService.extract_document_stream` now routes non-native (scanned/image) pages through `ocr_orchestrator.extract_document`: page rendered to a temp PNG at 2× zoom, `hint="handwritten"` (PaddleOCR primary, Docling fallback), fresh event loop per call (sync worker context, same pattern as proactive insights). Native pages and PPTX are byte-for-byte unchanged. On OCR failure the page falls back to raw `page.get_text("text")` with an **ERROR log** and `ocr_failed`/`requires_fallback` metadata (observable, not silent). New config `OCR_SCANNED_ENABLED` (default true; `Settings` + `backend/.env.example`) is the rollback toggle for the heavy engines (§31.4).
+> **Also fixed (prerequisite):** `ocr_orchestrator.py` targeted the PaddleOCR **2.x** API while requirements install **3.5.0** — `use_gpu`/`use_angle_cls` kwargs no longer exist (TypeError at init, uncaught by the old `except ImportError`) and the result format changed. Init now uses `use_textline_orientation=True, lang='en'` (device follows the installed paddlepaddle build — resolves the CPU-host `use_gpu=True` concern), engine init failures are caught broadly and logged at ERROR, and `PaddleOCREngine.extract` parses both the 3.x (`rec_texts`/`rec_scores`/`rec_polys`) and legacy 2.x formats.
+> **Verification:** `backend/tests/test_ocr_ingestion.py` (5 tests): native PDF never touches the orchestrator; scanned page routes through it with engine/confidence metadata; failure path is loud with observable metadata; config kill-switch honored; 3.x result parsing. Full suite: 22 passed.
+> **Residual risk:** real Paddle/Docling inference (model downloads, memory, latency on the shared CPU worker) not exercised in the test environment — first production scanned upload should be monitored; `ocr_gpu_queue` remains available for a dedicated worker (H-3).
+
 - **Issue ID:** C-3
 - **Severity:** Critical
 - **Category:** OCR / Worker / AI

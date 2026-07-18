@@ -147,7 +147,7 @@ Runs with a **synchronous** SQLAlchemy session (`SyncSessionLocal`):
 7. Fire-and-forget **`generate_proactive_insights_task`** (creates a fresh event loop to run the async insights service).
 8. On failure: retry with exponential backoff (max 3), then `FAILED` (dead-letter).
 
-**Critical:** the marketed multi-engine OCR (`OCROrchestrator` with `DoclingEngine` + `PaddleOCREngine` + `OCRValidationGateway`) is **not** used here. It is referenced only by `workers/tasks/ocr_tasks.py`, which is routed to `ocr_gpu_queue` (see §8). `extraction_router.route_extraction` (pymupdf4llm-first) also exists but is **not** called by `process_document` (the endpoint comment notes it was intentionally bypassed after documents got stuck in `INDEXING`).
+**RESOLVED (2026-07-18, C-3):** scanned/non-native pages are now routed through the `OCROrchestrator` (PaddleOCR primary, Docling fallback) inline in `OCRService.extract_document_stream`, gated by `OCR_SCANNED_ENABLED` (default true). Native pages/PPTX unchanged; OCR failures degrade loudly to raw text with `ocr_failed` metadata. `extraction_router.route_extraction` (pymupdf4llm-first) still exists and is **not** called by `process_document` (intentionally bypassed after documents got stuck in `INDEXING`).
 
 ---
 

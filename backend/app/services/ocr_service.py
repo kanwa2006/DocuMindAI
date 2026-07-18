@@ -1,9 +1,59 @@
 import os
 import fitz  # PyMuPDF
 import logging
-from typing import List, Dict, Any
+import tempfile
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _ocr_scanned_page(page: "fitz.Page", page_num: int) -> Optional[Dict[str, Any]]:
+    """C-3: run a scanned/image page through the multi-engine OCR orchestrator.
+
+    The page is rendered to a temp PNG at 2x zoom (OCR accuracy needs more
+    pixels than the PDF's native 72 dpi) and routed with hint="handwritten"
+    so PaddleOCR is the primary engine and Docling the fallback. The
+    orchestrator API is async but ingestion runs in a sync Celery task, so
+    a fresh event loop is used (same pattern as proactive insights).
+
+    Returns {"text": ..., "engine": ..., "confidence": ...} or None on
+    failure — the caller decides the fallback and MUST log it loudly.
+    """
+    import asyncio
+    from app.services.ocr_orchestrator import ocr_orchestrator
+
+    tmp_path = None
+    try:
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            tmp_path = tmp.name
+        pix.save(tmp_path)
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(
+                ocr_orchestrator.extract_document(
+                    tmp_path, mime_type="image/png", hint="handwritten"
+                )
+            )
+        finally:
+            loop.close()
+
+        if not result.text.strip() or result.text.strip() == "Mock Text":
+            return None
+        return {
+            "text": result.text,
+            "engine": result.engine_name,
+            "confidence": result.confidence,
+        }
+    except Exception as exc:
+        logger.error(
+            f"[OCR] Orchestrator failed on scanned page {page_num}: {exc}"
+        )
+        return None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 # P8 — PowerPoint extraction. python-pptx is an optional dep; gracefully
@@ -148,10 +198,37 @@ class OCRService:
                 is_native = OCRService.is_text_native(page)
                 
                 if not is_native:
-                    logger.warning(f"[Tracing] Page {page_num+1} appears scanned. Using fallback.")
-                    # Fallback architecture hook (Tesseract/EasyOCR would be injected here)
-                    extracted_text = page.get_text("text") # Fallback to raw text for now
-                    layout_meta = {"is_native": False, "requires_fallback": True}
+                    # C-3: scanned/image pages go through the real OCR
+                    # orchestrator (PaddleOCR primary, Docling fallback).
+                    # OCR_SCANNED_ENABLED is the rollback toggle: heavy
+                    # engines can be disabled without a code change.
+                    from app.core.config import settings
+                    ocr_result = None
+                    if settings.OCR_SCANNED_ENABLED:
+                        logger.info(
+                            f"[Tracing] Page {page_num+1} appears scanned — routing to OCR orchestrator."
+                        )
+                        ocr_result = _ocr_scanned_page(page, page_num + 1)
+                    if ocr_result:
+                        extracted_text = ocr_result["text"]
+                        layout_meta = {
+                            "is_native": False,
+                            "ocr_engine": ocr_result["engine"],
+                            "ocr_confidence": ocr_result["confidence"],
+                        }
+                    else:
+                        # Degraded path — loud, observable, never silent.
+                        logger.error(
+                            f"[Tracing] Page {page_num+1} is scanned and OCR was "
+                            f"{'disabled' if not settings.OCR_SCANNED_ENABLED else 'unavailable/failed'} — "
+                            "falling back to raw text extraction (likely empty)."
+                        )
+                        extracted_text = page.get_text("text")
+                        layout_meta = {
+                            "is_native": False,
+                            "requires_fallback": True,
+                            "ocr_failed": settings.OCR_SCANNED_ENABLED,
+                        }
                 else:
                     # Layout-aware extraction preserving reading order
                     blocks = page.get_text("blocks")

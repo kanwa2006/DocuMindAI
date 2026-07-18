@@ -26,7 +26,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Root cause:** task registration (`include`) not kept in sync with `task_routes` and the endpoints that dispatch them.
 - **Evidence:** `celery_app.py:9-23` vs `task_routes` :28-42; `endpoints/{legal,finance,study,research}.py` `*_batch.delay`.
 
-### C-3 — Marketed multi-engine OCR is not on the ingestion path (and its queue is unconsumed)
+### C-3 — Marketed multi-engine OCR is not on the ingestion path (and its queue is unconsumed) — **RESOLVED (2026-07-18)**
+
+> Scanned pages now route through the orchestrator inline in `extract_document_stream` (Paddle primary, Docling fallback, loud degraded path, `OCR_SCANNED_ENABLED` toggle); orchestrator upgraded to the installed PaddleOCR 3.x API. Queue consumption fixed under H-3. Regression tests: `backend/tests/test_ocr_ingestion.py`.
 - **Location:** ingestion uses `services/ocr_service.OCRService.extract_document_stream` (`workers/tasks/document_tasks.py:55`). The `OCROrchestrator` (PaddleOCR + Docling + validation gateway) is used only by `workers/tasks/ocr_tasks.py`, routed to `ocr_gpu_queue` (`celery_app.py:38`), which the compose worker does not consume.
 - **Reason:** real extraction is PyMuPDF text only; scanned/handwritten pages fall back to `page.get_text("text")` (`ocr_service.py:150-154`, a "Tesseract would be injected here" stub).
 - **Impact:** handwritten/rotated/scanned documents yield little or no text → empty retrieval → refusals or wrong answers. Contradicts the headline "Multi-Engine OCR" feature.

@@ -440,7 +440,7 @@ services/grounding → services/retrieval → services/embedding/reranker
 None fatal observed. `deep_research_agent` uses **function-local imports** (`from app.services.llm_service import llm_service` inside `research()`) to avoid import cycles — a deliberate pattern. `llm_key_rotation` ↔ `gemini_env` guarded by try/except.
 
 ### 9.5 Dead / orphan modules
-- `services/ocr_orchestrator.py` + `workers/tasks/ocr_tasks.py` (dead on ingest — C-3).
+- ~~`services/ocr_orchestrator.py` + `workers/tasks/ocr_tasks.py` (dead on ingest — C-3)~~ **RESOLVED 2026-07-18:** orchestrator wired into `OCRService.extract_document_stream` for scanned pages; `ocr_gpu_queue` consumed (H-3).
 - `services/extraction_router.py` (bypassed by ingestion).
 - `endpoints/ws.py` (unused surface — L-7).
 - `workers/tasks/email_tasks.py` (unregistered; email sent sync).
