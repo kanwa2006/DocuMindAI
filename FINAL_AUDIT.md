@@ -62,7 +62,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 
 ## HIGH
 
-### H-1 — Default vector backend is an in-memory NumPy scan, not pgvector or FAISS
+### H-1 — Default vector backend is an in-memory NumPy scan, not pgvector or FAISS — **RESOLVED (2026-07-18)**
+
+> Default is now pgvector with an HNSW cosine index (migration `d0aab53082d2`, verified up/down on scratch pgvector). NumPy branch retained as loud dev-only fallback; dead faiss import removed. Discovered+fixed en route: H-8 (alembic env.py hardcoded SSL broke migrations on non-SSL Postgres incl. CI).
 - **Location:** `config.py:64` (`VECTOR_BACKEND="faiss"`), `.env.example:104`; `retrieval_service.py:67-141` (else branch loads all chunk embeddings and computes NumPy cosine).
 - **Reason:** the "faiss" path never uses FAISS (`import faiss` is guarded and unused; `faiss` isn't in `requirements.txt`); pgvector cosine runs only when `VECTOR_BACKEND=pgvector`.
 - **Impact:** O(N) memory/compute per query; no ANN index; won't scale; contradicts "pgvector semantic search" marketing.

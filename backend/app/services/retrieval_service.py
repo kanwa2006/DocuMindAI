@@ -12,12 +12,12 @@ from app.services.embedding_service import embedding_service
 from app.core.config import settings
 import numpy as np
 
-try:
-    import faiss
-except ImportError:
-    faiss = None
-
 logger = logging.getLogger(__name__)
+
+# H-1: the misleading `import faiss` is gone — FAISS was never used and was
+# not a dependency; the non-pgvector branch below is a NumPy scan. Warn once
+# per process when that dev-only fallback is active.
+_numpy_fallback_warned = False
 
 class RetrievalService:
     @staticmethod
@@ -65,7 +65,16 @@ class RetrievalService:
                 
             stmt_vec = stmt_vec.order_by(distance_expr).limit(fusion_k)
         else:
-            # Local FAISS / Numpy Fallback
+            # Dev-only NumPy fallback (labelled "faiss" historically; FAISS
+            # was never actually used). O(N) memory+compute per query.
+            global _numpy_fallback_warned
+            if not _numpy_fallback_warned:
+                logger.warning(
+                    f"[Retrieval] VECTOR_BACKEND={settings.VECTOR_BACKEND!r} uses the "
+                    "in-memory NumPy scan — dev-only; set VECTOR_BACKEND=pgvector for "
+                    "indexed ANN retrieval."
+                )
+                _numpy_fallback_warned = True
             stmt_vec = (
                 select(DocumentChunk, DocumentPage.page_number, Document.filename)
                 .join(Document, DocumentChunk.document_id == Document.id)

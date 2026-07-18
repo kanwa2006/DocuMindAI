@@ -225,6 +225,11 @@
 
 ## H-1 — Default `VECTOR_BACKEND=faiss` is an in-memory NumPy brute-force scan
 
+> **STATUS: ✅ RESOLVED (2026-07-18, branch `repair/debug-master-plan`).**
+> **Implementation note:** (1) `VECTOR_BACKEND` default flipped to `pgvector` in `config.py`, root `.env.example`, and the live `backend/.env` (`backend/.env.example` already said pgvector). (2) New migration `d0aab53082d2` creates HNSW index `ix_document_chunks_embedding_hnsw` on `document_chunks.embedding` with `vector_cosine_ops` (matches `cosine_distance` in retrieval), built `CONCURRENTLY` in an autocommit block; downgrade drops it. (3) `retrieval_service.py` (extra-care, authorized): removed the never-used guarded `import faiss`; the NumPy branch stays as an explicit dev-only fallback and now logs a once-per-process WARNING.
+> **Verification:** full 56-migration chain + new migration ran green on a scratch `ankane/pgvector:v0.5.1` container; index confirmed present (`\di+`, access method `hnsw`), downgrade removes it, re-upgrade recreates it. Tests: `backend/tests/test_vector_backend_default.py` (class default, migration content, faiss import gone). Suite: 42 passed. M-4 landed first (real vectors), per dependency order.
+> **Residual risk:** existing corpora embedded under the old default are unchanged (same 1024-dim column — no re-index required); pgvector exact vs HNSW approximate recall differences are the standard ANN trade-off.
+
 - **Issue ID:** H-1
 - **Severity:** High
 - **Category:** AI / Performance / Configuration / Database
@@ -458,6 +463,20 @@
 - **Suggested implementation order:** Phase 2, coordinate with C-1.
 - **Success criteria:** import is key-independent; first-use failure remains explicit.
 - **Notes:** Preserve the "no silent DummyLLMProvider in prod" intent — fail loud at call time.
+
+---
+
+## H-8 — Alembic `env.py` hardcodes SSL, breaking migrations on non-SSL Postgres (newly discovered)
+
+- **Issue ID:** H-8 (discovered 2026-07-18 during H-1 verification)
+- **Severity:** High
+- **Category:** Database / Infrastructure / CI
+- **Files involved:** `backend/alembic/env.py` (`connect_args["ssl"] = "require"` for every Postgres URL).
+- **Current behavior:** `alembic upgrade head` fails with `ConnectionError: … rejected SSL upgrade` against any server without SSL — including the **CI pgvector service container** (`DATABASE_URL=…@localhost:5432/documind_test`) and local/scratch Docker databases. The hardcode existed to serve the Supabase `DATABASE_URL` (which omits an sslmode param).
+- **Expected behavior:** honor an explicit `ssl`/`sslmode` URL param (stripped from the URL — the asyncpg dialect rejects it as a kwarg); otherwise require SSL only for non-local hosts (localhost/127.0.0.1/::1/db/pgbouncer/postgres are local).
+- **Root cause:** environment-specific connection policy hardcoded into shared migration bootstrap.
+
+> **STATUS: ✅ RESOLVED (2026-07-18).** Implemented exactly as above. **Verification:** full 56-migration chain ran green on a scratch `ankane/pgvector:v0.5.1` container (previously failed at connect), and the Supabase path is preserved (non-local host → `ssl="require"`).
 
 ---
 

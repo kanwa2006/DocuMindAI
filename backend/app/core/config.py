@@ -65,7 +65,9 @@ class Settings(BaseSettings):
     TOP_K_RESULTS: int = 20
 
     # Vector Backend
-    VECTOR_BACKEND: str = "faiss"
+    # H-1: pgvector is the default — the "faiss" option never used FAISS (it
+    # is an in-memory NumPy scan, dev-only fallback; O(N) per query).
+    VECTOR_BACKEND: str = "pgvector"
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
 
