@@ -376,7 +376,8 @@ export const askQuestionStream = async (
           onError(parsed.detail || parsed.message || "Error");
         } else if (event === "done") {
           onDone();
-          // Phase 10 — show upgrade modal 500ms AFTER the last (5th) query response renders
+          // Phase 10 — show upgrade modal 500ms AFTER the final trial query response
+          // renders (keys on queriesRemaining === 0; the limit itself is server-side)
           if (lastTrialStatus && lastTrialStatus.queriesRemaining === 0 && typeof window !== "undefined") {
             setTimeout(() => {
               window.dispatchEvent(new CustomEvent("trial:exhausted"));

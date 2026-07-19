@@ -25,7 +25,7 @@ from app.models.org import User
 from app.core.auth import get_current_user
 from app.core.workspace import resolve_workspace_id
 from app.core.config import settings
-from app.core.trial_enforcement import check_and_increment_trial
+from app.core.trial_enforcement import check_and_increment_trial, TRIAL_QUERY_LIMIT
 from app.services.response_schemas import get_response_schema
 from app.services.language_detector import detect_query_language, get_language_instruction
 from app.services.email_service import send_trial_nudge_email, send_upgrade_reminder_email
@@ -264,16 +264,19 @@ async def ask_question_stream(
                     f"event: trial_status\n"
                     f"data: {json.dumps({'queries_used': trial_status['queries_used'], 'queries_remaining': trial_status['queries_remaining']})}\n\n"
                 )
-                # Fire-and-forget lifecycle emails — never blocks the stream
+                # Fire-and-forget lifecycle emails — never blocks the stream.
+                # M-7: thresholds derive from TRIAL_QUERY_LIMIT (nudge with 2
+                # queries left, upgrade reminder with 1 left). The old
+                # hardcoded 3/4 assumed a 5-query limit; the limit is 10.
                 if user_obj and getattr(user_obj, "email_notifications_enabled", True):
                     _loop = asyncio.get_event_loop()
                     _q_used = trial_status["queries_used"]
-                    if _q_used == 3:
+                    if _q_used == TRIAL_QUERY_LIMIT - 2:
                         _loop.run_in_executor(
                             None, send_trial_nudge_email,
-                            user_obj.email, user_obj.full_name, 3,
+                            user_obj.email, user_obj.full_name, _q_used,
                         )
-                    elif _q_used == 4:
+                    elif _q_used == TRIAL_QUERY_LIMIT - 1:
                         _loop.run_in_executor(
                             None, send_upgrade_reminder_email,
                             user_obj.email, user_obj.full_name,

@@ -703,6 +703,10 @@
 
 ## M-7 — Config vs `.env.example` default mismatches + stale trial-limit comments
 
+> **STATUS: ✅ RESOLVED (2026-07-19).**
+> **Decisions:** (1) Observability defaults **off** everywhere (`config.py` now False/False, `backend/.env.example` aligned; root `.env.example` already false) — opt-in for production; a collector-less dev stack spams span-export errors otherwise. (2) Trial nudge emails now derive from `TRIAL_QUERY_LIMIT`: nudge at `LIMIT-2` used, upgrade reminder at `LIMIT-1` (the hardcoded 3/4 was a 5-query-limit relic). Stale "5th query" comment in `lib/api.ts` corrected (logic there already keyed on `queriesRemaining === 0`, unaffected).
+> **Verification:** `backend/tests/test_config_defaults.py` (defaults off; env examples agree; thresholds derived). 3 passed.
+
 - **Issue ID:** M-7
 - **Severity:** Medium
 - **Category:** Configuration

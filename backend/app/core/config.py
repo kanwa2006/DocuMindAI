@@ -123,9 +123,11 @@ class Settings(BaseSettings):
     # Sentry
     SENTRY_DSN: Optional[str] = None
 
-    # Monitoring
-    OTEL_ENABLED: bool = True
-    PROMETHEUS_ENABLED: bool = True
+    # Monitoring — M-7: defaults are OFF (opt-in). config.py said True while
+    # .env.example said false; and a stack without an OTLP collector spams
+    # span-export errors. Production deployments enable these explicitly.
+    OTEL_ENABLED: bool = False
+    PROMETHEUS_ENABLED: bool = False
     LOG_LEVEL: str = "INFO"
 
     # Reranker

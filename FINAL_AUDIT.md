@@ -173,7 +173,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Impact:** almost no regression protection; vuln scan never fails the build.
 - **Evidence:** the test file and CI step.
 
-### M-7 — Config vs `.env.example` default mismatches
+### M-7 — Config vs `.env.example` default mismatches — **RESOLVED (2026-07-19)**
+
+> Observability defaults off everywhere; trial nudges derive from TRIAL_QUERY_LIMIT. Tests: `backend/tests/test_config_defaults.py`.
 - **Location:** `config.py` (`OTEL_ENABLED=True`, `PROMETHEUS_ENABLED=True`) vs `.env.example` (`false`); `TRIAL_QUERY_LIMIT=10` vs `query.py` "5th query" comments/nudges.
 - **Impact:** ambiguous effective behavior; stale logic/comments.
 - **Evidence:** the differing values.
