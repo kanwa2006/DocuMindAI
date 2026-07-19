@@ -75,13 +75,12 @@ async def sse_study_processing_updates(
     PHASE 1: Live Processing Updates
     Server-Sent Events (SSE) endpoint to push study pipeline status.
     """
-    async def event_generator():
-        for i in range(1, 10):
-            await asyncio.sleep(2)
-            yield f"data: {{\"status\": \"processing\", \"progress\": {i * 10}, \"document_id\": \"{document_id}\"}}\n\n"
-        yield f"data: {{\"status\": \"complete\", \"document_id\": \"{document_id}\"}}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    # M-1: real Document.status transitions instead of a fake heartbeat.
+    from app.services.processing_events import document_status_event_stream
+    return StreamingResponse(
+        document_status_event_stream(document_id, current_user["id"]),
+        media_type="text/event-stream",
+    )
 
 @router.get("/search")
 async def semantic_search_study(

@@ -224,15 +224,14 @@ async def sse_processing_updates(
     PHASE 1: Live Processing Updates
     Server-Sent Events (SSE) endpoint to push processing status to the frontend.
     """
-    async def event_generator():
-        # In production, this would subscribe to a Redis Pub/Sub channel
-        # For this demonstration, we push heartbeat messages simulating progress
-        for i in range(1, 10):
-            await asyncio.sleep(2)
-            yield f"data: {{\"status\": \"processing\", \"progress\": {i * 10}, \"job_id\": \"{job_id}\"}}\n\n"
-        yield f"data: {{\"status\": \"complete\", \"job_id\": \"{job_id}\"}}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    # M-1: real per-job candidate progress instead of a fake heartbeat.
+    from app.core.workspace import resolve_workspace_id
+    from app.services.processing_events import hr_job_candidates_event_stream
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
+    return StreamingResponse(
+        hr_job_candidates_event_stream(job_id, workspace_id),
+        media_type="text/event-stream",
+    )
 
 @router.post("/candidates/{candidate_id}/notes", response_model=CandidateNoteResponse)
 async def add_candidate_note(

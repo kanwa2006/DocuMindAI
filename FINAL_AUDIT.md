@@ -134,7 +134,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 
 ## MEDIUM
 
-### M-1 — Simulated SSE progress endpoints
+### M-1 — Simulated SSE progress endpoints — **RESOLVED (2026-07-19)**
+
+> All five now stream real persisted state (`Document.status` transitions / HR JobMatch counts) via `services/processing_events.py`. Discovery: these endpoints had no frontend consumer at all. Tests: `backend/tests/test_processing_events.py`.
 - **Location:** `hr.py:218`, `legal.py:137`, `finance.py:385`, `study.py:69`, `research.py:338`.
 - **Reason:** `/events/*` emit `progress: i*10` heartbeats via `asyncio.sleep(2)`; comments admit "would subscribe to Redis Pub/Sub."
 - **Impact:** UI shows fake progress unrelated to actual task state.

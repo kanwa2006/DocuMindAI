@@ -501,6 +501,11 @@
 
 ## M-1 — Simulated SSE progress endpoints (fake heartbeats)
 
+> **STATUS: ✅ RESOLVED (2026-07-19).**
+> **Discovery:** contrary to the audit, **no frontend consumer exists** for any `/events/*` endpoint (no `EventSource`/wrapper in `lib/api.ts`) — the UI uses document-status polling. The endpoints were orphan surfaces emitting fabricated progress to any caller.
+> **Implementation note:** New `services/processing_events.py` powers all five endpoints with **real persisted state**: legal/finance/study/research stream the tracked `Document.status` transitions (QUEUED→PROCESSING→EXTRACTED→READY/FAILED; monotonic stage markers, fresh short-lived session per 2s poll, 5-min cap matching the frontend polling timeout, `not_found`/`failed`/`timeout` frames); HR streams the real `JobMatch` count for the job, completing when non-zero and stable. Response format kept (`status`/`progress`/`document_id`|`job_id`) with additive `stage`/`candidates_processed` fields. Chose DB-state polling over a Redis pub/sub protocol: no consumer justifies new plumbing, and Document.status is the system's actual source of truth for task state.
+> **Verification:** `backend/tests/test_processing_events.py` (status-transition stream, failure, not-found, HR stabilization). 4 passed; all five endpoint modules import.
+
 - **Issue ID:** M-1
 - **Severity:** Medium
 - **Category:** Streaming / API / Frontend
