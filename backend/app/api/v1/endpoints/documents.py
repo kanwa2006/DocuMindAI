@@ -369,10 +369,9 @@ async def list_documents(
     workspace are excluded.
     """
     effective_workspace = workspace_id or current_user.get("workspace_id", "general")
-    try:
-        ws_uuid = uuid.UUID(effective_workspace)
-    except (ValueError, AttributeError):
-        ws_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, effective_workspace)
+    # L-5: single derivation path — resolve_workspace_id lowercases slugs;
+    # the old inline uuid5 did not, a latent casing divergence.
+    ws_uuid = resolve_workspace_id(effective_workspace)
 
     stmt = (
         select(Document)
@@ -408,10 +407,9 @@ async def get_document(
         raise HTTPException(status_code=422, detail="Invalid Document ID format.")
 
     effective_workspace = current_user.get("workspace_id", "general")
-    try:
-        ws_uuid = uuid.UUID(effective_workspace)
-    except (ValueError, AttributeError):
-        ws_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, effective_workspace)
+    # L-5: single derivation path — resolve_workspace_id lowercases slugs;
+    # the old inline uuid5 did not, a latent casing divergence.
+    ws_uuid = resolve_workspace_id(effective_workspace)
 
     stmt = select(Document).where(
         Document.id == doc_uuid,
@@ -441,10 +439,9 @@ async def head_document(
         raise HTTPException(status_code=422, detail="Invalid Document ID format.")
 
     effective_workspace = current_user.get("workspace_id", "general")
-    try:
-        ws_uuid = uuid.UUID(effective_workspace)
-    except (ValueError, AttributeError):
-        ws_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, effective_workspace)
+    # L-5: single derivation path — resolve_workspace_id lowercases slugs;
+    # the old inline uuid5 did not, a latent casing divergence.
+    ws_uuid = resolve_workspace_id(effective_workspace)
 
     stmt = select(Document).where(
         Document.id == doc_uuid,
@@ -485,10 +482,9 @@ async def get_signed_url(
         raise HTTPException(status_code=422, detail="Invalid Document ID format.")
 
     effective_workspace = current_user.get("workspace_id", "general")
-    try:
-        ws_uuid = uuid.UUID(effective_workspace)
-    except (ValueError, AttributeError):
-        ws_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, effective_workspace)
+    # L-5: single derivation path — resolve_workspace_id lowercases slugs;
+    # the old inline uuid5 did not, a latent casing divergence.
+    ws_uuid = resolve_workspace_id(effective_workspace)
 
     stmt = select(Document).where(
         Document.id == doc_uuid,
@@ -523,10 +519,9 @@ async def delete_document(
         raise HTTPException(status_code=422, detail="Invalid Document ID format.")
 
     effective_workspace = current_user.get("workspace_id", "general")
-    try:
-        ws_uuid = uuid.UUID(effective_workspace)
-    except (ValueError, AttributeError):
-        ws_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, effective_workspace)
+    # L-5: single derivation path — resolve_workspace_id lowercases slugs;
+    # the old inline uuid5 did not, a latent casing divergence.
+    ws_uuid = resolve_workspace_id(effective_workspace)
 
     stmt = select(Document).where(
         Document.id == doc_uuid,
@@ -644,10 +639,9 @@ async def head_document_status(
         raise HTTPException(status_code=422, detail="Invalid Document ID format.")
 
     effective_workspace = current_user.get("workspace_id", "general")
-    try:
-        ws_uuid = uuid.UUID(effective_workspace)
-    except (ValueError, AttributeError):
-        ws_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, effective_workspace)
+    # L-5: single derivation path — resolve_workspace_id lowercases slugs;
+    # the old inline uuid5 did not, a latent casing divergence.
+    ws_uuid = resolve_workspace_id(effective_workspace)
 
     stmt = select(Document).where(
         Document.id == doc_uuid,
