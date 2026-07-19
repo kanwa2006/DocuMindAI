@@ -10,6 +10,9 @@ import redis.asyncio as redis
 
 from app.core.config import settings
 from app.services.llm_key_rotation import get_key_rotator
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -44,7 +47,9 @@ async def health_check():
         await asyncio.to_thread(_db_ping)
         status["db"] = "ok"
     except Exception as e:
-        status["db"] = f"error: {str(e)}"
+        # L-12: never echo raw exceptions (can leak DSN/host); log server-side.
+        logger.error(f"[health] DB check failed: {e}")
+        status["db"] = "error"
 
     # Check Redis
     try:
@@ -53,7 +58,8 @@ async def health_check():
         status["redis"] = "ok"
         await r.close()
     except Exception as e:
-        status["redis"] = f"error: {str(e)}"
+        logger.error(f"[health] Redis check failed: {e}")
+        status["redis"] = "error"
 
     if status["db"] != "ok" or status["redis"] != "ok":
         raise HTTPException(
@@ -79,7 +85,9 @@ async def detailed_health_check(
         await asyncio.to_thread(_db_ping)
         status["db"] = "ok"
     except Exception as e:
-        status["db"] = f"error: {str(e)}"
+        # L-12: never echo raw exceptions (can leak DSN/host); log server-side.
+        logger.error(f"[health] DB check failed: {e}")
+        status["db"] = "error"
 
     try:
         r = redis.from_url(settings.REDIS_URL)
@@ -87,7 +95,8 @@ async def detailed_health_check(
         status["redis"] = "ok"
         await r.close()
     except Exception as e:
-        status["redis"] = f"error: {str(e)}"
+        logger.error(f"[health] Redis check failed: {e}")
+        status["redis"] = "error"
 
     try:
         ks = get_key_rotator().key_status
@@ -100,9 +109,8 @@ async def detailed_health_check(
         }
 
     except Exception as e:
-        status["api_keys"] = {
-            "error": str(e)
-        }
+        logger.error(f"[health] Key-status check failed: {e}")
+        status["api_keys"] = {"error": "unavailable"}
 
     if status["db"] != "ok" or status["redis"] != "ok":
         raise HTTPException(

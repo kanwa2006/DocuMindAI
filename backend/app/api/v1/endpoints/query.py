@@ -574,7 +574,11 @@ async def ask_question_stream(
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
+            # L-12: raw exception text can expose internals (DSNs, hosts,
+            # stack details). Log the full error server-side; the client gets
+            # a generic message.
+            logger.error("[query/stream] Stream failed", exc_info=True)
+            yield f"event: error\ndata: {json.dumps({'detail': 'An internal error occurred while generating the response. Please retry.'})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
