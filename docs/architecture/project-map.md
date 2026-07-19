@@ -1,5 +1,12 @@
 # DocuMindAI — Architecture & API Map
 
+> **⚠️ HISTORICAL SNAPSHOT — partially superseded (L-1, 2026-07-20).**
+> Two problems this map describes were fixed long ago and are kept below only as history:
+> - **Doubled `/api/v1` prefix (A1):** resolved — all frontend calls go through `apiFetch` with no manual prefix.
+> - **Workspace-UUID crash:** resolved — `app/core/workspace.resolve_workspace_id()` (uuid5 over `NAMESPACE_DNS`, slug lowercased) is the single derivation everywhere.
+> The **"STABLE / never modify"** list at the bottom is superseded by [REPAIR_RULEBOOK.md §8a](../../REPAIR_RULEBOOK.md)'s graded extra-care process.
+> For current architecture use [ARCHITECTURE.md](../../ARCHITECTURE.md) and [DEPENDENCY_GRAPH.md](../../DEPENDENCY_GRAPH.md).
+
 Architecture: **Next.js (App Router) frontend** ↔ **FastAPI backend** ↔ **Postgres + pgvector / FAISS** + **Redis** + **Celery workers**.
 
 API base: all backend routes are mounted under `/api/v1` via `app/api/v1/api.py`.
@@ -37,7 +44,7 @@ Frontend convention: `NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1` (already
 ## Automation (Celery beat)
 `auto_daily_digest`, `auto_db_cleanup`, `auto_gst_notice`, `auto_health_check`, `auto_key_rotation`, `auto_model_check`, `auto_subscription_check` — all in `backend/app/automation/`.
 
-## Workspace identity (CRITICAL inconsistency)
+## Workspace identity — RESOLVED via resolve_workspace_id (historical)
 - `User.workspace_id` = `Column(String(50), default="general")` — string slug
 - `ChatSession.workspace_id` = `Column(UUID, nullable=False)` — UUID
 - `ScheduledReport.workspace_id` = `Column(String)` — string
@@ -45,9 +52,9 @@ Frontend convention: `NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1` (already
 - **No `Workspace` table exists.**
 - **Fix strategy**: deterministic `uuid.uuid5(NAMESPACE_OID, slug)` mapping via a new `app.core.workspace.resolve_workspace_id()` helper. No migration needed; existing UUIDs in `ChatSession.workspace_id` will be re-bound on the next write (read-by-owner remains compatible since reads filter by both owner_id and workspace_id).
 
-## Doubled-prefix bug (A1)
+## Doubled-prefix bug (A1) — RESOLVED (historical)
 `NEXT_PUBLIC_API_URL` already contains `/api/v1`. About 35 manual `${API_BASE}/api/v1/...` call sites across frontend/src bypass the convention. The fix is to drop `/api/v1` from those literals so they go through the same convention as `apiFetch`.
 
-## STABLE files (CLAUDE.md) — additive/wrapper only
+## STABLE files — SUPERSEDED by REPAIR_RULEBOOK §8a (historical)
 - `services/llm_service.py`, `llm_key_rotation.py`, `veritas_engine.py`, `automation/auto_health_check.py`, `automation/auto_daily_digest.py`
 - **Never modify**: `services/retrieval_service.py`, `services/grounding_service.py`, `services/chunking_service.py`, `workers/celery_app.py`, `workers/tasks/hr_tasks.py`

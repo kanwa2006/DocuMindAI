@@ -258,7 +258,7 @@ A second AI evaluation layer runs *after* generation. It scores the answer on fi
 - **Source coherence** — whether cited passages actually support the claims made
 - **Retrieval quality** — confidence of the underlying retrieval step
 
-The 0–100 trust score is returned to the user alongside every answer.
+The 0–100 trust score is returned to the user alongside every grounded answer (ungrounded general-knowledge replies show an explicit "Ungrounded" badge instead).
 
 ### 3. Hybrid Retrieval with Per-Workspace Tuning
 
