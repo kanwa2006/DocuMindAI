@@ -34,6 +34,11 @@ class CitationRequest(BaseModel):
 class GapsRequest(BaseModel):
     doc_ids: List[str]
 
+class DeepResearchRequest(BaseModel):
+    query: str
+    doc_ids: List[str] = []
+    session_id: Optional[str] = None
+
 # ── Citation formatters (Python string formatting — never LLM) ────────────────
 
 def _initials(full_name: str) -> str:
@@ -435,6 +440,48 @@ async def ai_copilot_chat(
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(chat_stream_generator(), media_type="text/event-stream")
+
+@router.post("/deep-research")
+async def deep_research(
+    body: DeepResearchRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """N-1: expose the 4-step Deep Research agent.
+
+    The agent (RAG → gap analysis → Tavily web search → synthesis, with a
+    Veritas trust score) existed but had no caller anywhere. Streams one
+    SSE `data:` frame per ResearchEvent, ending with [DONE]. Document ids
+    are validated against the caller's ownership before the agent runs.
+    """
+    from app.services.deep_research_agent import deep_research_agent
+
+    owner_id = uuid.UUID(current_user["id"])
+    valid_doc_ids: List[str] = []
+    for raw_id in body.doc_ids:
+        try:
+            doc_id = uuid.UUID(raw_id)
+        except ValueError:
+            continue
+        doc = (await db.execute(
+            select(Document).where(Document.id == doc_id, Document.owner_id == owner_id)
+        )).scalar_one_or_none()
+        if doc:
+            valid_doc_ids.append(str(doc_id))
+
+    async def event_generator():
+        try:
+            async for event in deep_research_agent.research(
+                body.query, valid_doc_ids, session_id=body.session_id, db=db
+            ):
+                yield f"data: {json.dumps(event.to_dict())}\n\n"
+        except Exception:
+            logger.error("[DeepResearch] stream failed", exc_info=True)
+            yield f"data: {json.dumps({'step': 'final', 'status': 'error', 'message': 'Deep research failed. Please retry.'})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 
 @router.get("/synthesis/{project_id}")
 async def synthesize_project(
