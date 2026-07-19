@@ -145,36 +145,13 @@ async def _set_cached_retrieval(cache_key: str, payload: Any, ttl: int = 300) ->
         pass
 
 
-@router.post("/search", response_model=QueryResponse)
-async def semantic_search(
-    request: QueryRequest,
-    current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-) -> Any:
-    """Pure semantic search endpoint. Protected by tenant isolation."""
-    payload = await RetrievalService.retrieve_chunks(
-        db=db,
-        query=request.query,
-        workspace_id=resolve_workspace_id(current_user["workspace_id"]),
-        top_k=request.top_k,
-        similarity_threshold=request.similarity_threshold
-    )
-
-    evidence = [EvidenceChunk(**c) for c in payload["results"]]
-
-    diagnostics = TracingDiagnostics(
-        embedding_time_sec=payload["tracing"]["embedding_time_sec"],
-        database_time_sec=payload["tracing"]["database_time_sec"],
-        total_time_sec=payload["tracing"]["total_time_sec"]
-    )
-
-    return QueryResponse(
-        query=request.query,
-        answer="[Search Only - Generation Bypassed]",
-        confidence_score=1.0,
-        evidence=evidence,
-        diagnostics=diagnostics
-    )
+# L-6: the duplicate answer surfaces were consolidated. /query/search and
+# /query/debug had no consumers (API_AUDIT §2.4) and were removed; two
+# answer paths remain with distinct roles:
+#   POST /query/stream — the interactive SSE path (trial, cache, Veritas).
+#   POST /query/ask    — the synchronous path used by the /chats ask flow
+#                        that persists messages.
+# Both ground via the same GroundingService + llm_service pipeline.
 
 
 @router.post("/ask", response_model=QueryResponse)
@@ -581,13 +558,3 @@ async def ask_question_stream(
             yield f"event: error\ndata: {json.dumps({'detail': 'An internal error occurred while generating the response. Please retry.'})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-@router.post("/debug", response_model=QueryResponse)
-async def debug_retrieval(
-    request: QueryRequest,
-    current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-) -> Any:
-    """Exposes deep trace metadata for prompt and relevance debugging."""
-    return await ask_question(request, current_user, db)
