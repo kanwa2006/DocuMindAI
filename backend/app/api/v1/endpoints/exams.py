@@ -648,15 +648,31 @@ async def extract_tables(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    file_path = doc.storage_path
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Document file not found on disk")
+    # L-3: storage_path may be an S3 key, not a disk path — download via
+    # storage_service to a temp file (same pattern as document_tasks) so
+    # table extraction works for both local and S3 deployments.
+    import asyncio
+    from app.core.storage import storage_service
 
-    # Determine if scanned: native PDF = selectable text present
-    is_scanned = not is_native_pdf(file_path)
+    _ext = os.path.splitext(doc.filename or "")[1].lower() or ".pdf"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=_ext) as tmp_file:
+        local_path = tmp_file.name
+    try:
+        try:
+            await asyncio.to_thread(
+                storage_service.download_file, doc.storage_path, local_path
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Document file not found in storage")
 
-    extractor = get_table_extractor()
-    tables = await extractor.extract_tables(file_path, is_scanned=is_scanned)
+        # Determine if scanned: native PDF = selectable text present
+        is_scanned = not is_native_pdf(local_path)
+
+        extractor = get_table_extractor()
+        tables = await extractor.extract_tables(local_path, is_scanned=is_scanned)
+    finally:
+        if os.path.exists(local_path):
+            os.remove(local_path)
 
     return {
         "document_id": request.document_id,
