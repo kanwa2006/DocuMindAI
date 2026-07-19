@@ -837,6 +837,8 @@
 
 ## M-11 — Proactive insights read `doc.workspace_type` which does not exist on the model
 
+> **STATUS: ✅ RESOLVED (2026-07-19).** The insights dispatch in `process_document` now reads the workspace slug from the upload's `ChatSession.workspace_type` (the slug is stored there at session creation — no schema change, no uuid5 reversal). Docs without a chat session default to "general" as before. **Verification:** `backend/tests/test_insights_workspace_resolution.py` (Document still has no workspace_type; ChatSession carries the slug; dispatch reads it). 3 passed; document_tasks imports clean.
+
 - **Issue ID:** M-11 (newly discovered during verification)
 - **Severity:** Medium
 - **Category:** AI / Worker / Backend

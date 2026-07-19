@@ -434,7 +434,7 @@ services/grounding → services/retrieval → services/embedding/reranker
 - ~~12 call sites → `llm_service.get_embedding` (**method absent** — C-1)~~ **RESOLVED 2026-07-18:** `LLMService.get_embedding` now exists, delegating to `embedding_service` (async-safe).
 - `task_routes` → `embedding_tasks`/`retrieval_tasks` (**modules absent** — H-3).
 - ~~`storage.py` → `settings.AWS_REGION` (**attr absent** — H-5)~~ **RESOLVED 2026-07-18:** uses `S3_REGION`.
-- `document_tasks` → `doc.workspace_type` (**attr absent** — M-11).
+- ~~`document_tasks` → `doc.workspace_type` (**attr absent** — M-11)~~ **RESOLVED 2026-07-19:** slug read from `ChatSession.workspace_type`.
 
 ### 9.4 Circular dependencies
 None fatal observed. `deep_research_agent` uses **function-local imports** (`from app.services.llm_service import llm_service` inside `research()`) to avoid import cycles — a deliberate pattern. `llm_key_rotation` ↔ `gemini_env` guarded by try/except.
