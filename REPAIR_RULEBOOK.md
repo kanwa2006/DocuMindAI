@@ -177,7 +177,7 @@ Before any change, inspect and account for:
 5. **Migrations** — does a schema change need Alembic?
 6. **Environment variables** — new/renamed/removed keys (`DEPENDENCY_GRAPH.md` §7).
 
-Watch for the known **dangling references** (do not add more): `llm_service.get_embedding` (missing), `retrieval_service.query`/singleton (missing), `embedding_tasks`/`retrieval_tasks` route targets (missing), `settings.AWS_REGION` (missing), `doc.workspace_type` (missing).
+**Dangling references: all resolved as of 2026-07-20** (C-1 `get_embedding`, C-5 `retrieval_service.query`, C-6 `llm_service.generate`, H-3 phantom task routes, H-5 `AWS_REGION`, M-11 `doc.workspace_type`). The rule stands: **never introduce a new reference to a symbol, module, route, or setting that does not exist** — the repair phase proved each one silently killed a feature.
 
 ---
 
