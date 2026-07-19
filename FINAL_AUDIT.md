@@ -163,7 +163,7 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Impact:** a "grounded" answer over zero vectors / fake rerank scores looks fine but is not actually grounded; no alert.
 - **Evidence:** the fallback branches.
 
-### M-5 — CI Node 18 vs Next.js 16
+### M-5 — CI Node 18 vs Next.js 16 — **RESOLVED (2026-07-19)**
 - **Location:** `.github/workflows/ci.yml` (`node-version: "18"`) with `next@16.2.6`/React 19.
 - **Impact:** Next 16 targets Node ≥20; the build step may warn/fail or diverge from local.
 - **Evidence:** CI file + `package.json`.

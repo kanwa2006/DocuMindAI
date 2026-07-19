@@ -639,6 +639,8 @@
 
 ## M-5 — CI uses Node 18 while the app targets Next.js 16 / React 19
 
+> **STATUS: ✅ RESOLVED (2026-07-19).** `ci.yml` node-version bumped to "20". `Dockerfile.frontend` was already `node:20-alpine` (verified) — CI was the only stale pin. Frontend build verified locally in the final verification pass.
+
 - **Issue ID:** M-5
 - **Severity:** Medium
 - **Category:** Deployment / Testing / Infrastructure
