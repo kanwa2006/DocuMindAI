@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from app.api.v1.endpoints import (
     health, documents, query, export, benchmark, exams,
-    hr, legal, finance, study, research, ws, auth, csrf, chats,
+    hr, legal, finance, study, research, auth, csrf, chats,
     corrections, retention, reports, billing, bookmarks, notifications, users,
     feedback, insights, admin,
 )
@@ -19,7 +19,8 @@ api_router.include_router(legal.router, prefix="/legal", tags=["legal"])
 api_router.include_router(finance.router, prefix="/finance", tags=["finance"])
 api_router.include_router(study.router, prefix="/study", tags=["study"])
 api_router.include_router(research.router, prefix="/research", tags=["research"])
-api_router.include_router(ws.router, tags=["websocket"])
+# L-7: the ws WebSocket router was removed — the product streams over SSE
+# and no frontend code ever opened a WebSocket (dead surface).
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(csrf.router, tags=["csrf"])
 api_router.include_router(chats.router, prefix="/chats", tags=["chats"])
