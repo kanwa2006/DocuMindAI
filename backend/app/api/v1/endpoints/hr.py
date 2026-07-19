@@ -346,7 +346,17 @@ async def update_candidate_stage(
 # ── Task 6-H2 — JD-to-Resume Embedding Similarity ────────────────────────────
 
 async def _get_jd_embedding(jd_text: str) -> List[float]:
-    """Return a cached embedding for the JD text (cached by sha256 of first 2000 chars)."""
+    """Return a cached embedding for the JD text (cached by sha256 of first 2000 chars).
+
+    L-8 (documented decision): HR JD↔resume scoring intentionally uses
+    all-MiniLM-L6-v2 (384-dim) rather than the pipeline's bge-m3 (1024-dim).
+    The vectors never enter pgvector columns or mix with the retrieval
+    corpus — cosine similarity here is consumed only as a scalar blended
+    into fit_score (0.6*llm + 0.4*sim*100), so vector-space consistency is
+    not at stake, and MiniLM is ~10x cheaper to load per worker. Do NOT
+    store these vectors in any embedding column (those are bge-m3 space,
+    see C-7).
+    """
     cache_key = hashlib.sha256(jd_text[:2000].encode()).hexdigest()
     if cache_key in _jd_embedding_cache:
         return _jd_embedding_cache[cache_key]
