@@ -200,6 +200,8 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 
 ## LOW
 
+> **ALL LOW FINDINGS RESOLVED (2026-07-20).** L-1 docs annotated/corrected · L-2 artifacts untracked · L-3 S3-safe table extraction · L-4 real diagram generation · L-5 single UUID derivation · L-6 dup paths consolidated (unused endpoints removed) · L-7 ws router removed · L-8 dual-embedding rationale documented · L-9 pagination added · L-10 honest 501 voice stub · L-11 LLM timeout · L-12 generic client errors · L-13 semantic HR search. Per-issue notes in DEBUG_MASTER_PLAN.
+
 - **L-1 — Stale docs.** `docs/architecture/project-map.md` and `docs/marketing/interview-guide.md` describe an already-fixed doubled-`/api/v1` prefix bug and a workspace-UUID crash (`resolve_workspace_id` now handles it). Current code is correct; docs mislead. *Evidence:* repo-wide search finds `${API_BASE}/api/v1` only in docs + one stale comment.
 - **L-2 — Committed runtime/build artifacts.** `backend/celerybeat-schedule.*`, `frontend/build.log`, `frontend/tmp/next-build/*` are in git. Empty `PROJECT_KNOWLEDGE_BASE.md`; untracked `docs/marketing/`.
 - **L-3 — Exam table extraction reads local disk path.** `exams.py:652` `os.path.exists(doc.storage_path)` works for local storage, breaks for S3 keys.

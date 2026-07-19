@@ -881,6 +881,8 @@
 
 ## L-1 — Stale internal docs (`docs/architecture/project-map.md`, `docs/marketing/`)
 
+> **STATUS: ✅ RESOLVED (2026-07-20).** project-map.md: fixed bugs marked historical, 'never modify' freeze marked superseded by §8a, banner points to current docs. README 'every answer' trust claim corrected to 'every grounded answer' (other headline claims are now actually delivered post-repair). docs/marketing/ stays untracked (out of repo scope).
+
 - **Issue ID:** L-1 · **Severity:** Low · **Category:** Documentation
 - **Files involved:** `docs/architecture/project-map.md`, `docs/marketing/*`.
 - **Root cause / current behavior:** they describe an already-fixed doubled-`/api/v1` prefix bug and a workspace-UUID crash (`resolve_workspace_id` now handles it); marketing overstates OCR/Veritas/pgvector.
@@ -896,6 +898,8 @@
 
 ## L-2 — Committed runtime/build artifacts
 
+> **STATUS: ✅ RESOLVED (2026-07-20).** celerybeat-schedule.*, frontend/build.log, frontend/tmp/next-build untracked via `git rm --cached` (local files preserved); pre-existing .gitignore rules now effective.
+
 - **Issue ID:** L-2 · **Severity:** Low · **Category:** Infrastructure / Configuration
 - **Files involved:** `backend/celerybeat-schedule.{bak,dat,dir}`, `frontend/build.log`, `frontend/tmp/next-build/*`, empty `PROJECT_KNOWLEDGE_BASE.md` (now populated), untracked `docs/marketing/`.
 - **Root cause / current behavior:** runtime/build outputs tracked in git.
@@ -909,6 +913,8 @@
 ---
 
 ## L-3 — Exam table extraction reads local disk path (breaks on S3)
+
+> **STATUS: ✅ RESOLVED (2026-07-20).** extract-tables downloads via `storage_service` to a temp file (document_tasks pattern), works local + S3, cleans up, 404s cleanly when the object is missing.
 
 - **Issue ID:** L-3 · **Severity:** Low · **Category:** API / Storage
 - **Files involved:** `endpoints/exams.py:651-653` (`os.path.exists(doc.storage_path)`), `services/table_extractor.py`, `services/pdf_extractor.is_native_pdf`.
@@ -924,6 +930,8 @@
 
 ## L-4 — `exams/generate/diagram` returns a hardcoded Mermaid template
 
+> **STATUS: ✅ RESOLVED (2026-07-20).** LLM generates topic-specific Mermaid; output validated (graph/flowchart prefix); 502 on failure instead of a fake diagram. Contract unchanged.
+
 - **Issue ID:** L-4 · **Severity:** Low · **Category:** AI / API
 - **Files involved:** `endpoints/exams.py:869-880`.
 - **Root cause / current behavior:** returns a static `graph TD` template regardless of topic.
@@ -935,6 +943,8 @@
 ---
 
 ## L-5 — Workspace-UUID casing divergence
+
+> **STATUS: ✅ RESOLVED (2026-07-20).** All six inline `uuid5` derivations in documents.py replaced with `resolve_workspace_id` (same namespace — existing rows unaffected).
 
 - **Issue ID:** L-5 · **Severity:** Low · **Category:** Backend / Database
 - **Files involved:** `core/workspace.py:32-52` (`resolve_workspace_id` lowercases slug); `endpoints/documents.py` inline `uuid.uuid5(NAMESPACE_DNS, effective_workspace)` (no lowercasing) at list/get/head/delete handlers.
@@ -948,6 +958,8 @@
 
 ## L-6 — Duplicate answer paths (`/query/stream`, `/query/ask`, `/chats` ask)
 
+> **STATUS: ✅ RESOLVED (2026-07-20).** Consumer-less `/query/search` and `/query/debug` removed; the two remaining paths have documented distinct roles (stream = interactive SSE; ask = sync persistence flow) over the same grounding pipeline.
+
 - **Issue ID:** L-6 (was L-7) · **Severity:** Low · **Category:** API / Backend
 - **Files involved:** `endpoints/query.py` (`/stream`, `/ask`, `/search`, `/debug`), `endpoints/chats.py:~451-470` (ask path persisting messages).
 - **Root cause / current behavior:** three grounding/LLM invocation paths risk behavioral drift and double retrieval.
@@ -959,6 +971,8 @@
 ---
 
 ## L-7 — Unused `ws` WebSocket router
+
+> **STATUS: ✅ RESOLVED (2026-07-20).** Router unmounted and `endpoints/ws.py` removed (no frontend WebSocket usage existed; product streams over SSE). 161 routes still build.
 
 - **Issue ID:** L-7 (was L-8) · **Severity:** Low · **Category:** API / Streaming
 - **Files involved:** `endpoints/ws.py`, mounted in `api.py:22`.
@@ -972,6 +986,8 @@
 
 ## L-8 — Two embedding models in use (bge-m3 vs all-MiniLM-L6-v2)
 
+> **STATUS: ✅ RESOLVED (2026-07-20) — documented rationale.** MiniLM kept for JD↔resume scoring: vectors used only as a scalar in fit_score blending, never persisted to pgvector columns (bge-m3 space, C-7); decision recorded in the hr.py docstring.
+
 - **Issue ID:** L-8 (was L-9) · **Severity:** Low · **Category:** AI / Performance
 - **Files involved:** `services/embedding_service.py` (bge-m3, 1024); `endpoints/hr.py:341-356,412-426` (`all-MiniLM-L6-v2`, 384).
 - **Root cause / current behavior:** HR JD scoring uses a second, smaller model → extra memory + inconsistent vector spaces.
@@ -983,6 +999,8 @@
 ---
 
 ## L-9 — No pagination on many list endpoints
+
+> **STATUS: ✅ RESOLVED (2026-07-20).** limit (default 100, max 500) + offset added to legal /rules & /contracts, finance /documents & /findings, study /decks, research /projects. Additive params; existing callers get bounded defaults.
 
 - **Issue ID:** L-9 (split from FINAL_AUDIT L-6) · **Severity:** Low · **Category:** API / Performance
 - **Files involved:** most workspace `list_*` endpoints (e.g., `hr.py`, `legal.py`, `finance.py`, `research.py`, `study.py`) return unbounded `scalars().all()`.
@@ -996,6 +1014,8 @@
 
 ## L-10 — `exams/process/voice` is a no-op stub
 
+> **STATUS: ✅ RESOLVED (2026-07-20).** Now returns an honest 501 not_implemented instead of a fabricated 'queued via Celery' success (no pipeline and no frontend consumer exist).
+
 - **Issue ID:** L-10 (split from FINAL_AUDIT L-4) · **Severity:** Low · **Category:** API / AI
 - **Files involved:** `endpoints/exams.py:882-889`.
 - **Root cause / current behavior:** returns a static "queued" message; no voice pipeline.
@@ -1007,6 +1027,8 @@
 ---
 
 ## L-11 — No server-side timeout on LLM calls
+
+> **STATUS: ✅ RESOLVED (2026-07-20).** All non-streaming LLMService paths run under `asyncio.wait_for(LLM_TIMEOUT_SECONDS)` (default 120s; Settings + .env.example). Tests: `backend/tests/test_llm_timeout.py`.
 
 - **Issue ID:** L-11 (split from FINAL_AUDIT L-6) · **Severity:** Low · **Category:** Performance / Backend
 - **Files involved:** `services/llm_service.py` (`generate`, `generate_stream` via `run_in_executor`), `endpoints/query.py`.
@@ -1020,6 +1042,8 @@
 
 ## L-12 — Verbose error strings leak internals
 
+> **STATUS: ✅ RESOLVED (2026-07-20).** Health endpoints and the /query/stream SSE error event return generic messages; full exceptions (with traceback for the stream) go to server logs.
+
 - **Issue ID:** L-12 (split from FINAL_AUDIT L-6) · **Severity:** Low · **Category:** Security / API
 - **Files involved:** `endpoints/health.py` (`f"error: {str(e)}"`), SSE `error` events in `query.py`, various endpoints returning raw exception text.
 - **Root cause / current behavior:** raw exceptions can expose DSNs/host/config.
@@ -1032,6 +1056,8 @@
 
 ## L-13 — HR candidate `search` uses `ILIKE`, not semantic search
 
+> **STATUS: ✅ RESOLVED (2026-07-20).** hr_tasks now populates CandidateProfile.embedding (name+skills+resume head); search ranks by pgvector L2 distance with legacy embedding-less rows last, ILIKE as loud fallback when query embedding fails.
+
 - **Issue ID:** L-13 (newly itemized) · **Severity:** Low · **Category:** AI / API
 - **Files involved:** `endpoints/hr.py:119-133` (`ILIKE` on name/skills; the pgvector version is commented out).
 - **Root cause / current behavior:** "semantic candidate search" is keyword matching.
@@ -1043,6 +1069,8 @@
 ---
 
 ## N-1 — `deep_research_agent` has no caller (newly discovered)
+
+> **STATUS: ✅ RESOLVED (2026-07-20).** New `POST /research/deep-research` SSE endpoint streams `ResearchEvent` frames (terminated by `[DONE]`), validating document ownership before the agent runs; `lib/api.ts` gains `runDeepResearch` following the existing SSE-fetch pattern. Panel-level UI adoption left to product. Test: `backend/tests/test_deep_research_endpoint.py`.
 
 - **Issue ID:** N-1 (discovered 2026-07-18 during C-5)
 - **Severity:** Medium (feature-gap; the service itself now works after C-5/C-6)
