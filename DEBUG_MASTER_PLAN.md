@@ -672,6 +672,11 @@
 
 ## M-6 — Only two backend tests; `pip-audit` is non-blocking
 
+> **STATUS: ✅ RESOLVED (2026-07-20).**
+> **Implementation note:** The suite grew from **2 to 78 tests** across the repair phase — every fixed issue shipped a regression test (worker registration, `get_embedding`/`generate` existence, lazy provider init, silent-degradation refusal, OCR routing, S3 init, billing production gate, trust_report contract, deep-research retrieval, synthesis, cache keys, JWT middleware pinning, key-rotator locking, processing events, embedding dimensions, vector defaults, config defaults) — including the two tests the rulebook said would have caught C-1/C-2. This change adds the missing **auth-layer coverage** (`tests/test_auth_security.py`: bcrypt roundtrip, HS256 pinning, refresh typing + longer expiry, expiry rejection) and makes **`pip-audit` blocking** in CI (triaged first: verified clean on 2026-07-19; future vulns get explicit `--ignore-vuln` triage rather than a swallowed failure).
+> **Verification:** full suite 78 passed. CI's "Regression Tests" step label is now accurate rather than aspirational.
+> **Residual:** DB-integration contract tests per workspace endpoint (live pgvector fixtures) remain future work — CI's migration job covers schema; endpoint logic is covered by unit-level tests with mocked sessions.
+
 - **Issue ID:** M-6
 - **Severity:** Medium
 - **Category:** Testing / Deployment

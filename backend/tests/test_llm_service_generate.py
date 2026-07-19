@@ -29,4 +29,9 @@ async def test_generate_delegates_to_provider():
     service = LLMService(provider=provider)
     result = await service.generate("sys", "user")
     assert result == "provider says hi"
-    assert provider.calls == [("sys", "user")]
+    assert len(provider.calls) == 1
+    system_prompt, user_prompt = provider.calls[0]
+    # M-8 prepends the anti-injection guard at this boundary; the caller's
+    # prompt must still arrive intact after it.
+    assert system_prompt.endswith("sys")
+    assert user_prompt == "user"

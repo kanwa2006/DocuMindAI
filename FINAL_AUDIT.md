@@ -168,7 +168,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Impact:** Next 16 targets Node ≥20; the build step may warn/fail or diverge from local.
 - **Evidence:** CI file + `package.json`.
 
-### M-6 — Only two backend tests; `pip-audit` non-blocking
+### M-6 — Only two backend tests; `pip-audit` non-blocking — **RESOLVED (2026-07-20)**
+
+> Suite is now 78 tests (regression test per fixed issue + auth coverage); pip-audit is blocking (verified clean before flipping).
 - **Location:** `tests/test_api_contracts.py`; `ci.yml` `pip-audit ... || echo`.
 - **Impact:** almost no regression protection; vuln scan never fails the build.
 - **Evidence:** the test file and CI step.

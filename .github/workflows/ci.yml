@@ -52,7 +52,10 @@ jobs:
       working-directory: ./backend
       run: |
         echo "Running PyPA pip-audit..."
-        pip-audit -r requirements.txt || echo "Warning: Vulnerabilities found, please review."
+        # M-6: blocking — the audit was verified clean on 2026-07-19. If a new
+        # vulnerability lands, triage it explicitly (--ignore-vuln ID) rather
+        # than reverting to a swallowed failure.
+        pip-audit -r requirements.txt --no-deps
         
     - name: Database Startup Readiness Check
       working-directory: ./backend
