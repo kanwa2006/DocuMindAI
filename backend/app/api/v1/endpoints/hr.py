@@ -117,20 +117,28 @@ async def list_job_candidates(
         stmt = stmt.where(JobMatch.status == status)
         
     if search:
-        # PHASE 2: Semantic Candidate Search
-        # In a full pgvector implementation, we would convert `search` to an embedding
-        # and sort by `<->` (L2 distance) or `<#>` (inner product).
-        # We simulate the hybrid structure here:
-        search_pattern = f"%{search}%"
-        stmt = stmt.where(
-            or_(
-                CandidateProfile.name.ilike(search_pattern),
-                CandidateProfile.skills.cast(String).ilike(search_pattern)
+        # L-13: real semantic candidate search. Rank by pgvector L2 distance
+        # over the profile embeddings populated by hr_tasks; profiles without
+        # an embedding (pre-fix rows) sort last instead of being hidden. If
+        # embedding generation fails, fall back loudly to the old ILIKE match.
+        query_embedding = None
+        try:
+            query_embedding = await llm_service.get_embedding(search)
+        except Exception as exc:
+            logger.error(f"[HR] Search embedding failed, falling back to ILIKE: {exc}")
+
+        if query_embedding is not None:
+            stmt = stmt.order_by(
+                CandidateProfile.embedding.l2_distance(query_embedding).nulls_last()
             )
-        )
-        # To order by pgvector semantic distance:
-        # embedding = await llm_service.get_embedding(search)
-        # stmt = stmt.order_by(CandidateProfile.embedding.l2_distance(embedding))
+        else:
+            search_pattern = f"%{search}%"
+            stmt = stmt.where(
+                or_(
+                    CandidateProfile.name.ilike(search_pattern),
+                    CandidateProfile.skills.cast(String).ilike(search_pattern)
+                )
+            )
     else:
         stmt = stmt.order_by(JobMatch.fit_score.desc())
         

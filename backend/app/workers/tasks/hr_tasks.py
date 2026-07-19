@@ -112,6 +112,21 @@ async def process_candidate_async(job_id: str, document_id: str, workspace_id: s
                 )
                 db.add(candidate)
                 await db.flush()
+
+                # L-13: populate the profile embedding so /hr candidates
+                # search can rank semantically (pgvector) instead of ILIKE.
+                # Failure is loud but non-fatal — search falls back to ILIKE.
+                try:
+                    embed_text = (
+                        f"{candidate.name} "
+                        f"{', '.join(candidate.skills or [])} "
+                        f"{resume_text[:1000]}"
+                    )
+                    candidate.embedding = await llm_service.get_embedding(embed_text)
+                except Exception as embed_exc:
+                    logger.error(
+                        f"[HR Task] Candidate embedding failed for {doc_uuid}: {embed_exc}"
+                    )
             except Exception as e:
                 logger.error(f"[HR Task] LLM Parse Failed for {doc_uuid}: {e}")
                 return
