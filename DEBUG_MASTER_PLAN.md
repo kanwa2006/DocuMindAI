@@ -532,6 +532,9 @@
 
 ## M-2 — Retrieval cache not purged on document delete (key-pattern mismatch)
 
+> **STATUS: ✅ RESOLVED (2026-07-19).** New single-source helper `_retrieval_cache_key()` in `query.py` builds `retrieval:uid_{user_id}:{workspace}:{hash}` — the `uid_{user}` prefix matches `delete_document`'s existing purge pattern, and the key is now tenant-scoped (the old key wasn't). Purge side unchanged. Cache entries under the old format simply expire (TTL 300s).
+> **Verification:** `backend/tests/test_retrieval_cache_key.py` (fnmatch against the purge pattern; tenant scoping; query/doc-id sensitivity + order stability). 3 passed; query streaming tests still green.
+
 - **Issue ID:** M-2
 - **Severity:** Medium
 - **Category:** Backend / Performance / Security (data retention)

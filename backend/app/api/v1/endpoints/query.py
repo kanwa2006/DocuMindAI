@@ -105,6 +105,21 @@ async def _compute_trust_event(
         return ""
 
 
+def _retrieval_cache_key(user_id: str, workspace_type: str, query: str, attached_doc_ids) -> str:
+    """M-2: single source of truth for the retrieval cache key.
+
+    The key MUST start with `retrieval:uid_{user_id}:` — that is the pattern
+    `delete_document` purges (documents.py). The old write key
+    (`retrieval:{workspace}:{hash}`) never matched the purge pattern, so
+    deleted-document content could be served from cache for up to the TTL.
+    """
+    attached_ids_key = ",".join(sorted(str(d) for d in attached_doc_ids or []))
+    digest = hashlib.sha256(
+        f"{workspace_type}:{query}:{attached_ids_key}".encode()
+    ).hexdigest()[:16]
+    return f"retrieval:uid_{user_id}:{workspace_type}:{digest}"
+
+
 # ── Redis helpers (Task 4.9) — failures are silently ignored, never break request ──
 
 async def _get_cached_retrieval(cache_key: str) -> Any:
@@ -416,24 +431,16 @@ async def ask_question_stream(
                         yield f"event: done\ndata: {{}}\n\n"
                         return  # Don't fall through to the retrieval path below.
 
-            # Task 4.9 — Redis retrieval cache key
-            doc_ids_str = str(current_user.get("workspace_id", ""))
-            query_hash = hashlib.sha256(
-                f"{workspace_type}:{body.query}:{doc_ids_str}".encode()
-            ).hexdigest()[:16]
-            cache_key = f"retrieval:{workspace_type}:{query_hash}"
+            # Task 4.9 / M-2 — tenant-scoped retrieval cache key (includes the
+            # chat's attached doc ids so two chats in the same workspace
+            # asking the same question don't share results, and the
+            # uid_{user} prefix so delete_document's purge pattern matches).
+            cache_key = _retrieval_cache_key(
+                current_user["id"], workspace_type, body.query, attached_doc_ids
+            )
 
             # 1. Retrieval phase
             yield f"event: status\ndata: {json.dumps({'message': 'Retrieving semantic chunks...'})}\n\n"
-
-            # P1: include the chat's attached doc ids in the cache key so two
-            # chats in the same workspace asking the same question don't
-            # share results.
-            attached_ids_key = ",".join(sorted(str(d) for d in attached_doc_ids))
-            cache_key = (
-                f"retrieval:{workspace_type}:"
-                f"{hashlib.sha256((cache_key + ':' + attached_ids_key).encode()).hexdigest()[:16]}"
-            )
 
             grounding_payload = await _get_cached_retrieval(cache_key)
             if grounding_payload:

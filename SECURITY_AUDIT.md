@@ -57,7 +57,7 @@ Auth relies on a `token` cookie. Cookie flags (`HttpOnly`, `Secure`, `SameSite`)
 **M-S5 — Prompt-injection exposure in document-grounded generation.** — **RESOLVED (2026-07-18, M-8):** evidence framed as untrusted data via a shared guard at the LLM service boundary.
 User-uploaded document text is injected verbatim into LLM system prompts across workspaces (`_build_system_prompt`, legal/finance/exam prompts). A malicious document can attempt to override instructions ("ignore previous instructions…"). There is no input sanitization or instruction-isolation of evidence beyond `<evidence>` tags. For a "zero-hallucination/grounded" product this is the most relevant AI-security risk.
 
-**M-S6 — Cache-purge pattern mismatch on delete.**
+**M-S6 — Cache-purge pattern mismatch on delete.** — **RESOLVED (2026-07-19, M-2):** write key unified to the purged `retrieval:uid_{user}:*` namespace, tenant-scoped.
 `delete_document` purges Redis keys `retrieval:uid_{uid}:*`, but the retrieval cache is written as `retrieval:{workspace}:{hash}`. Deleted-document content can persist in the retrieval cache (TTL 300s) and be served in answers after deletion — a data-retention/consistency concern.
 - **Evidence:** `documents.py:601` vs `query.py:360-372`.
 

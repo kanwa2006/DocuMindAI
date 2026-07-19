@@ -140,7 +140,9 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPAC
 - **Impact:** UI shows fake progress unrelated to actual task state.
 - **Evidence:** identical stub generators in each file.
 
-### M-2 — Retrieval cache not purged on document delete
+### M-2 — Retrieval cache not purged on document delete — **RESOLVED (2026-07-19)**
+
+> Write key now `retrieval:uid_{user}:{workspace}:{hash}`, matching the delete purge pattern and adding tenant scope. Tests: `backend/tests/test_retrieval_cache_key.py`.
 - **Location:** `documents.py:601` purges `retrieval:uid_{uid}:*`; cache written as `retrieval:{workspace}:{hash}` (`query.py:360-372`).
 - **Reason:** key-pattern mismatch.
 - **Impact:** deleted-document content can be served from cache for up to 300s.
