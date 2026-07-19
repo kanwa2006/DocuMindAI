@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -107,10 +107,12 @@ async def create_compliance_rule(
 @router.get("/rules", response_model=List[ComplianceRuleResponse])
 async def list_rules(
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    result = await db.execute(select(ComplianceRule).where(ComplianceRule.workspace_id == workspace_id))
+    result = await db.execute(select(ComplianceRule).where(ComplianceRule.workspace_id == workspace_id).limit(limit).offset(offset))
     return result.scalars().all()
 
 @router.post("/contracts/process")
@@ -220,10 +222,12 @@ async def add_contract_approval(
 @router.get("/contracts", response_model=List[ContractResponse])
 async def list_contracts(
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    result = await db.execute(select(Contract).where(Contract.workspace_id == workspace_id).order_by(Contract.created_at.desc()))
+    result = await db.execute(select(Contract).where(Contract.workspace_id == workspace_id).order_by(Contract.created_at.desc()).limit(limit).offset(offset))
     return result.scalars().all()
 
 @router.get("/contracts/{contract_id}/clauses")

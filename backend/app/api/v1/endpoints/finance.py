@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -438,19 +438,23 @@ async def semantic_search_transactions(
 @router.get("/documents", response_model=List[FinancialDocumentResponse])
 async def list_financial_documents(
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    result = await db.execute(select(FinancialDocument).where(FinancialDocument.workspace_id == workspace_id).order_by(FinancialDocument.created_at.desc()))
+    result = await db.execute(select(FinancialDocument).where(FinancialDocument.workspace_id == workspace_id).order_by(FinancialDocument.created_at.desc()).limit(limit).offset(offset))
     return result.scalars().all()
 
 @router.get("/findings", response_model=List[AuditFindingResponse])
 async def list_audit_findings(
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    result = await db.execute(select(AuditFinding).where(AuditFinding.workspace_id == workspace_id).order_by(AuditFinding.created_at.desc()))
+    result = await db.execute(select(AuditFinding).where(AuditFinding.workspace_id == workspace_id).order_by(AuditFinding.created_at.desc()).limit(limit).offset(offset))
     return result.scalars().all()
 
 

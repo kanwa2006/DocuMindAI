@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -170,10 +170,12 @@ async def ai_tutor_chat(
 @router.get("/decks", response_model=List[DeckResponse])
 async def list_decks(
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    result = await db.execute(select(FlashcardDeck).where(FlashcardDeck.workspace_id == workspace_id))
+    result = await db.execute(select(FlashcardDeck).where(FlashcardDeck.workspace_id == workspace_id).limit(limit).offset(offset))
     return result.scalars().all()
 
 @router.get("/decks/{deck_id}/flashcards", response_model=List[FlashcardResponse])
