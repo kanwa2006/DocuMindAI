@@ -420,13 +420,22 @@ EVIDENCE BLOCKS (ordered by document and page):
             
         system_prompt = self._build_system_prompt(grounded_context)
         user_prompt = f"Question: {query}"
-        
-        answer = await self.provider.generate(system_prompt, user_prompt)
+
+        answer = await self._provider_generate(system_prompt, user_prompt)
         
         return {
             "answer": answer,
             "generation_time_sec": round(time.time() - start_time, 4)
         }
+
+    async def _provider_generate(self, system_prompt: str, user_prompt: str) -> str:
+        """L-11: every non-streaming generation goes through a hard
+        server-side timeout so a slow upstream cannot pin a worker thread
+        indefinitely. asyncio.TimeoutError propagates loudly to callers."""
+        return await asyncio.wait_for(
+            self.provider.generate(system_prompt, user_prompt),
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+        )
 
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
         """Plain text generation, delegated to the provider.
@@ -440,7 +449,7 @@ EVIDENCE BLOCKS (ordered by document and page):
         M-8: caller-supplied system prompts embed uploaded document text, so
         the anti-injection guard is prepended here (idempotent).
         """
-        return await self.provider.generate(_harden_system_prompt(system_prompt), user_prompt)
+        return await self._provider_generate(_harden_system_prompt(system_prompt), user_prompt)
 
     async def get_embedding(self, text: str) -> List[float]:
         """Return a single 1024-dim embedding for a query/text.
@@ -478,7 +487,7 @@ EVIDENCE BLOCKS (ordered by document and page):
         for attempt in range(max_retries):
             try:
                 # In production, use provider features (e.g. OpenAI response_format={"type": "json_object"})
-                raw_response = await self.provider.generate(system_prompt, user_prompt)
+                raw_response = await self._provider_generate(system_prompt, user_prompt)
                 
                 # Cleanup potential markdown ticks if the LLM leaked them
                 clean_json = raw_response.strip()

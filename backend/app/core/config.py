@@ -133,6 +133,11 @@ class Settings(BaseSettings):
     # Reranker
     RERANKER_PROVIDER: str = "local"
 
+    # L-11: hard server-side cap on non-streaming LLM calls. A slow upstream
+    # otherwise pins a worker thread indefinitely (the client AbortSignal
+    # only frees the browser). Streaming keeps client-side cancellation.
+    LLM_TIMEOUT_SECONDS: int = 120
+
     # Workspace-specific retrieval config (Task 4.8)
     # PHASE 2: top_k bumped across the board to give the LLM more coverage of
     # the document. The "answers only cover the first pages" symptom was
