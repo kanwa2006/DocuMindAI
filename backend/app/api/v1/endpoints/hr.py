@@ -144,12 +144,30 @@ async def list_job_candidates(
         
     result = await db.execute(stmt)
     records = result.all()
-    
-    # Return formatted response
+
+    # H-10: raw ORM objects are not serializable without a response model —
+    # this endpoint 500'd (PydanticSerializationError) the first time real
+    # JobMatch rows existed. Serialize exactly the shape the frontend
+    # CandidateRankingsPanel consumes.
     return [
         {
-            "match": match,
-            "profile": profile
+            "match": {
+                "id": str(match.id),
+                "fit_score": match.fit_score,
+                "semantic_score": match.semantic_score,
+                "final_score": match.final_score,
+                "status": match.status,
+                "match_analysis": match.match_analysis,
+            },
+            "profile": {
+                "id": str(profile.id),
+                "name": profile.name,
+                "email": profile.email,
+                "skills": profile.skills or [],
+                "experience_years": profile.experience_years,
+                "education": profile.education or [],
+                "stage": profile.stage,
+            },
         }
         for match, profile in records
     ]

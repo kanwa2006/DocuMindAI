@@ -9,6 +9,9 @@ psycopg2-binary>=2.9.9
 alembic>=1.13.1
 celery>=5.3.6
 paddleocr>=2.7.0.3
+# paddleocr needs the paddle runtime; without it the OCR orchestrator falls
+# back to Docling (validated, but Paddle should be the primary engine)
+paddlepaddle>=2.6.0
 docling>=1.1.0
 layoutparser>=0.3.4
 transformers>=4.37.2

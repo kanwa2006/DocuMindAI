@@ -512,6 +512,19 @@
 
 ---
 
+## H-10 — HR candidates endpoint returned raw ORM objects → 500 on first real data (newly discovered)
+
+- **Issue ID:** H-10 (discovered 2026-07-20 during the live showcase — the first time real JobMatch rows ever existed)
+- **Severity:** High (breaks the HR rankings panel end-to-end)
+- **Category:** API / Backend
+- **Files involved:** `endpoints/hr.py` `list_candidates` — returned `{"match": JobMatch, "profile": CandidateProfile}` raw ORM objects with no response model → `PydanticSerializationError` → HTTP 500.
+- **Why it survived the audit and repair phases:** the failure is data-dependent. Candidate processing was broken since inception (C-1 missing `get_embedding` context, C-2 unregistered modules, C-7 dimension mismatch), so no deployment ever had JobMatch rows to serialize; the endpoint only detonated once the repaired pipeline produced real data.
+- **Fix:** explicit serialization to exactly the shape the frontend `CandidateRankingsPanel` consumes (`match.{id,fit_score,semantic_score,final_score,status,match_analysis}`, `profile.{id,name,email,skills,experience_years,education,stage}`).
+
+> **STATUS: ✅ RESOLVED (2026-07-20).** **Verification:** `backend/tests/test_hr_candidates_serialization.py` (payload JSON-serializable + frontend-shaped; source guard against raw ORM returns). Live check: endpoint returns 200 with 3 seeded candidates after restart.
+
+---
+
 ## M-1 — Simulated SSE progress endpoints (fake heartbeats)
 
 > **STATUS: ✅ RESOLVED (2026-07-19).**
