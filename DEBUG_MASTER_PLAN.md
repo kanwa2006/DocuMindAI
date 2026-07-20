@@ -499,6 +499,19 @@
 
 ---
 
+## H-9 — Both DB engines force SSL, breaking every non-SSL Postgres (newly discovered)
+
+- **Issue ID:** H-9 (discovered 2026-07-20 while standing up the live demo stack)
+- **Severity:** High
+- **Category:** Database / Configuration / Deployment
+- **Files involved:** `core/config.py` (`sync_database_url` unconditionally appended `sslmode=require`), `db/session.py` (`get_engine_args` unconditionally set asyncpg `{"ssl": "require"}`), `endpoints/health.py` (`_db_ping` hardcoded `sslmode="require"`).
+- **Current behavior:** the application could not connect to ANY non-SSL Postgres — including the project's own docker-compose `db`/`pgbouncer` services — from the API (async), the workers (sync), or the health check. It only ever worked against SSL-terminating managed hosts (Supabase). Same family as H-8, which fixed the identical hardcode in `alembic/env.py` only.
+- **Fix:** shared `LOCAL_DB_HOSTS` policy in `core/config.py` (`localhost`/`127.0.0.1`/`::1`/`db`/`pgbouncer`/`postgres`): SSL forced only for non-local hosts; explicit `sslmode` URL params always honored; health ping uses `prefer` for local hosts.
+
+> **STATUS: ✅ RESOLVED (2026-07-20).** **Verification:** `backend/tests/test_db_ssl_policy.py` (5 tests: local no-force, remote require, explicit param preserved, async engine args both ways, host detection); live demo stack on a scratch non-SSL pgvector container reports `{"api":"ok","db":"ok","redis":"ok"}` (previously `db:"error"`).
+
+---
+
 ## M-1 — Simulated SSE progress endpoints (fake heartbeats)
 
 > **STATUS: ✅ RESOLVED (2026-07-19).**

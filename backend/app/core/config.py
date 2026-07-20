@@ -3,6 +3,19 @@ from pydantic import Field, model_validator
 from typing import ClassVar, Optional, List, Dict, Any
 import os
 
+# H-9: hosts that never get forced SSL (local dev, docker-compose services).
+# Shared policy with alembic/env.py (H-8).
+LOCAL_DB_HOSTS = {"localhost", "127.0.0.1", "::1", "db", "pgbouncer", "postgres"}
+
+
+def _is_local_db_host(url: str) -> bool:
+    from urllib.parse import urlsplit
+    try:
+        return (urlsplit(url).hostname or "").lower() in LOCAL_DB_HOSTS
+    except ValueError:
+        return False
+
+
 class Settings(BaseSettings):
     ENVIRONMENT: str = "development" # local, development, production
     PROJECT_NAME: str = "DocuMindAI"
@@ -187,7 +200,11 @@ class Settings(BaseSettings):
         url = url.replace("&ssl=true", "&sslmode=require")
         url = url.replace("?ssl=require", "?sslmode=require")
         url = url.replace("&ssl=require", "&sslmode=require")
-        if "sslmode=" not in url:
+        # H-9: only force SSL for non-local hosts (Supabase et al.). The old
+        # unconditional append made every sync connection — health checks,
+        # Celery workers — fail against non-SSL Postgres, including the
+        # project's own docker-compose stack. Same policy as alembic (H-8).
+        if "sslmode=" not in url and not _is_local_db_host(url):
             url += ("&" if "?" in url else "?") + "sslmode=require"
         return url
 

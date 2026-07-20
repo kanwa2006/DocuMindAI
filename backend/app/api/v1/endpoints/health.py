@@ -19,6 +19,8 @@ router = APIRouter()
 
 def _db_ping():
     """Direct psycopg2 ping — uses sslmode (not ssl) which psycopg2 requires."""
+    from app.core.config import _is_local_db_host
+
     u = urlparse(settings.sync_database_url)
 
     conn = psycopg2.connect(
@@ -27,7 +29,9 @@ def _db_ping():
         dbname=u.path.lstrip("/"),
         user=u.username,
         password=u.password or "",
-        sslmode="require",
+        # H-9: forcing require here broke health against non-SSL local/compose
+        # Postgres; prefer negotiates SSL when the server offers it.
+        sslmode="prefer" if _is_local_db_host(settings.sync_database_url) else "require",
         connect_timeout=5,
     )
 

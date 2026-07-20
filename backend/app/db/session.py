@@ -25,7 +25,11 @@ def get_engine_args(url: str, is_async: bool):
         # asyncpg accepts the `ssl` kwarg; psycopg2 rejects it (must be `sslmode`).
         # For sync, sslmode is already baked into the URL by settings.sync_database_url,
         # so no connect_args needed here.
-        if is_async:
+        # H-9: never force SSL for local/compose hosts — the old unconditional
+        # {"ssl": "require"} made the async engine unable to connect to any
+        # non-SSL Postgres (including the project's own docker-compose db).
+        from app.core.config import _is_local_db_host
+        if is_async and not _is_local_db_host(url):
             connect_args = {"ssl": "require"}
             # When going through Supavisor (either pooler port), disable the
             # asyncpg prepared-statement cache. In transaction mode the pooler
