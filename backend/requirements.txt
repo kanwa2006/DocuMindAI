@@ -1,4 +1,9 @@
 passlib[bcrypt]==1.7.4
+# passlib 1.7.4's bcrypt handler is incompatible with bcrypt >= 4.1 (it reads
+# the removed bcrypt.__about__ and then mis-checks the 72-byte limit, raising
+# even on short passwords). Pin to the last 4.0.x, which passlib supports.
+# Unpinned, a fresh CI install resolved to bcrypt 5.x and broke password hashing.
+bcrypt==4.0.1
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 pydantic>=2.5.3
