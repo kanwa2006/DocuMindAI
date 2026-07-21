@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -75,13 +75,12 @@ async def sse_study_processing_updates(
     PHASE 1: Live Processing Updates
     Server-Sent Events (SSE) endpoint to push study pipeline status.
     """
-    async def event_generator():
-        for i in range(1, 10):
-            await asyncio.sleep(2)
-            yield f"data: {{\"status\": \"processing\", \"progress\": {i * 10}, \"document_id\": \"{document_id}\"}}\n\n"
-        yield f"data: {{\"status\": \"complete\", \"document_id\": \"{document_id}\"}}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    # M-1: real Document.status transitions instead of a fake heartbeat.
+    from app.services.processing_events import document_status_event_stream
+    return StreamingResponse(
+        document_status_event_stream(document_id, current_user["id"]),
+        media_type="text/event-stream",
+    )
 
 @router.get("/search")
 async def semantic_search_study(
@@ -142,7 +141,10 @@ async def ai_tutor_chat(
         notes = (await db.execute(stmt)).scalars().all()
     context = "\n".join([f"{n.title}: {n.content}" for n in notes])
     
-    system_prompt = (
+    # M-8: notes content is untrusted document text; direct
+    # provider.generate_stream bypasses LLMService.generate, so harden here.
+    from app.services.llm_service import _harden_system_prompt
+    system_prompt = _harden_system_prompt(
         "You are a patient, encouraging AI tutor. Use the provided study notes as your primary "
         "source of truth. Explain concepts clearly, use examples, and never invent facts. "
         "If the notes don't cover the topic, say so honestly and offer what general knowledge you can."
@@ -168,10 +170,12 @@ async def ai_tutor_chat(
 @router.get("/decks", response_model=List[DeckResponse])
 async def list_decks(
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    result = await db.execute(select(FlashcardDeck).where(FlashcardDeck.workspace_id == workspace_id))
+    result = await db.execute(select(FlashcardDeck).where(FlashcardDeck.workspace_id == workspace_id).limit(limit).offset(offset))
     return result.scalars().all()
 
 @router.get("/decks/{deck_id}/flashcards", response_model=List[FlashcardResponse])

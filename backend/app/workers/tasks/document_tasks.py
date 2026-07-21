@@ -118,7 +118,21 @@ def process_document(self, document_id: str):
 
         # Phase 21 — fire-and-forget proactive insights (does not block document completion)
         try:
-            workspace_type = getattr(doc, "workspace_type", None) or "general"
+            # M-11: Document has no workspace_type attribute (the old
+            # getattr always fell through to "general", so domain insight
+            # prompts never ran). The workspace slug lives on the chat
+            # session the document was uploaded into; uuid5 workspace ids
+            # cannot be reversed, so read the slug from there.
+            workspace_type = "general"
+            if doc.chat_session_id:
+                from app.models.chat import ChatSession
+                chat_session = (
+                    db.query(ChatSession)
+                    .filter(ChatSession.id == doc.chat_session_id)
+                    .first()
+                )
+                if chat_session and chat_session.workspace_type:
+                    workspace_type = chat_session.workspace_type
             session_id = str(doc.chat_session_id) if doc.chat_session_id else None
             owner_id = str(doc.owner_id) if doc.owner_id else None
             generate_proactive_insights_task.delay(document_id, workspace_type, session_id, owner_id)

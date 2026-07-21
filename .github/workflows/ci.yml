@@ -9,6 +9,24 @@ on:
 jobs:
   backend-validation:
     runs-on: ubuntu-latest
+    # The FastAPI Settings object (core/config.py) has ten required fields with
+    # no defaults — including AUTH_SECRET_KEY/CSRF_SECRET_KEY. Locally they come
+    # from backend/.env; CI has no .env, so importing `settings` (which Alembic's
+    # env.py and every app module do) fails validation unless we provide them
+    # here. Test-only values; the real secrets are supplied by the deployment.
+    env:
+      ENVIRONMENT: test
+      AUTH_SECRET_KEY: ci-test-auth-secret
+      CSRF_SECRET_KEY: ci-test-csrf-secret
+      FRONTEND_URL: http://localhost:3000
+      POSTGRES_SERVER: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: documind_test
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
     services:
       postgres:
         image: ankane/pgvector:v0.5.1
@@ -52,7 +70,10 @@ jobs:
       working-directory: ./backend
       run: |
         echo "Running PyPA pip-audit..."
-        pip-audit -r requirements.txt || echo "Warning: Vulnerabilities found, please review."
+        # M-6: blocking — the audit was verified clean on 2026-07-19. If a new
+        # vulnerability lands, triage it explicitly (--ignore-vuln ID) rather
+        # than reverting to a swallowed failure.
+        pip-audit -r requirements.txt --no-deps
         
     - name: Database Startup Readiness Check
       working-directory: ./backend
@@ -83,7 +104,8 @@ jobs:
     - name: Setup Node.js
       uses: actions/setup-node@v3
       with:
-        node-version: "18"
+        # M-5: Next.js 16 requires Node >= 20; 18 diverged from local builds.
+        node-version: "20"
         
     - name: Install Dependencies
       working-directory: ./frontend

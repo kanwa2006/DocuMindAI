@@ -198,7 +198,9 @@ async def upgrade_plan(
 
     • If RAZORPAY_ENABLED=true  → returns 402 instructing the client to use
       /billing/create-order instead (prevents bypassing payment in production).
-    • If RAZORPAY_ENABLED=false → activates plan directly (dev / sandbox mode).
+    • If RAZORPAY_ENABLED=false → activates plan directly, but ONLY outside
+      production (dev / sandbox mode). H-6: a production deployment with the
+      default flag must not hand out free tier escalation.
     """
     if RAZORPAY_ENABLED:
         raise HTTPException(
@@ -207,6 +209,22 @@ async def upgrade_plan(
                 "error": "payment_required",
                 "message": "Use POST /billing/create-order to initiate Razorpay checkout.",
                 "create_order_url": "/billing/create-order",
+            },
+        )
+
+    # H-6: the sandbox free-upgrade path is a dev/test convenience. In
+    # production with payments disabled, upgrades are simply unavailable —
+    # never free.
+    from app.core.config import settings
+    if settings.ENVIRONMENT == "production":
+        logger.warning(
+            f"[Billing] Blocked sandbox upgrade in production: user={current_user['id']} → {body.plan}"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "payments_disabled",
+                "message": "Payments are not enabled on this deployment. Contact support to upgrade.",
             },
         )
 

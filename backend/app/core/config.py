@@ -3,6 +3,19 @@ from pydantic import Field, model_validator
 from typing import ClassVar, Optional, List, Dict, Any
 import os
 
+# H-9: hosts that never get forced SSL (local dev, docker-compose services).
+# Shared policy with alembic/env.py (H-8).
+LOCAL_DB_HOSTS = {"localhost", "127.0.0.1", "::1", "db", "pgbouncer", "postgres"}
+
+
+def _is_local_db_host(url: str) -> bool:
+    from urllib.parse import urlsplit
+    try:
+        return (urlsplit(url).hostname or "").lower() in LOCAL_DB_HOSTS
+    except ValueError:
+        return False
+
+
 class Settings(BaseSettings):
     ENVIRONMENT: str = "development" # local, development, production
     PROJECT_NAME: str = "DocuMindAI"
@@ -46,6 +59,10 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1800
     CHUNK_OVERLAP: int = 300
     OCR_CONFIDENCE_THRESHOLD: float = 0.80
+    # C-3: route scanned/image pages through the PaddleOCR/Docling
+    # orchestrator during ingestion. Rollback toggle for the heavy engines —
+    # disabling falls back to raw PyMuPDF text (loudly logged, usually empty).
+    OCR_SCANNED_ENABLED: bool = True
     MAX_UPLOAD_MB: int = 200
 
     # Gemini / LLM
@@ -61,7 +78,9 @@ class Settings(BaseSettings):
     TOP_K_RESULTS: int = 20
 
     # Vector Backend
-    VECTOR_BACKEND: str = "faiss"
+    # H-1: pgvector is the default — the "faiss" option never used FAISS (it
+    # is an in-memory NumPy scan, dev-only fallback; O(N) per query).
+    VECTOR_BACKEND: str = "pgvector"
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
 
@@ -117,13 +136,20 @@ class Settings(BaseSettings):
     # Sentry
     SENTRY_DSN: Optional[str] = None
 
-    # Monitoring
-    OTEL_ENABLED: bool = True
-    PROMETHEUS_ENABLED: bool = True
+    # Monitoring — M-7: defaults are OFF (opt-in). config.py said True while
+    # .env.example said false; and a stack without an OTLP collector spams
+    # span-export errors. Production deployments enable these explicitly.
+    OTEL_ENABLED: bool = False
+    PROMETHEUS_ENABLED: bool = False
     LOG_LEVEL: str = "INFO"
 
     # Reranker
     RERANKER_PROVIDER: str = "local"
+
+    # L-11: hard server-side cap on non-streaming LLM calls. A slow upstream
+    # otherwise pins a worker thread indefinitely (the client AbortSignal
+    # only frees the browser). Streaming keeps client-side cancellation.
+    LLM_TIMEOUT_SECONDS: int = 120
 
     # Workspace-specific retrieval config (Task 4.8)
     # PHASE 2: top_k bumped across the board to give the LLM more coverage of
@@ -174,7 +200,11 @@ class Settings(BaseSettings):
         url = url.replace("&ssl=true", "&sslmode=require")
         url = url.replace("?ssl=require", "?sslmode=require")
         url = url.replace("&ssl=require", "&sslmode=require")
-        if "sslmode=" not in url:
+        # H-9: only force SSL for non-local hosts (Supabase et al.). The old
+        # unconditional append made every sync connection — health checks,
+        # Celery workers — fail against non-SSL Postgres, including the
+        # project's own docker-compose stack. Same policy as alembic (H-8).
+        if "sslmode=" not in url and not _is_local_db_host(url):
             url += ("&" if "?" in url else "?") + "sslmode=require"
         return url
 

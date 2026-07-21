@@ -1,4 +1,9 @@
 passlib[bcrypt]==1.7.4
+# passlib 1.7.4's bcrypt handler is incompatible with bcrypt >= 4.1 (it reads
+# the removed bcrypt.__about__ and then mis-checks the 72-byte limit, raising
+# even on short passwords). Pin to the last 4.0.x, which passlib supports.
+# Unpinned, a fresh CI install resolved to bcrypt 5.x and broke password hashing.
+bcrypt==4.0.1
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 pydantic>=2.5.3
@@ -9,6 +14,9 @@ psycopg2-binary>=2.9.9
 alembic>=1.13.1
 celery>=5.3.6
 paddleocr>=2.7.0.3
+# paddleocr needs the paddle runtime; without it the OCR orchestrator falls
+# back to Docling (validated, but Paddle should be the primary engine)
+paddlepaddle>=2.6.0
 docling>=1.1.0
 layoutparser>=0.3.4
 transformers>=4.37.2

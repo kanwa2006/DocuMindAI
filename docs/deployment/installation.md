@@ -85,7 +85,7 @@ In a new terminal with the backend virtual environment active, start the Celery 
 ```bash
 cd backend
 venv\Scripts\activate
-celery -A app.workers.celery_app worker -Q main-queue,celery --loglevel=info
+celery -A app.workers.celery_app worker -Q main-queue,celery,export_queue,ocr_gpu_queue --loglevel=info
 ```
 
 ### 5. Frontend Setup (Next.js)

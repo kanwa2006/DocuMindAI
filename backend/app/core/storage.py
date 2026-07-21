@@ -79,7 +79,9 @@ class S3StorageProvider(BaseStorageProvider):
             's3',
             aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            region_name=settings.AWS_REGION,
+            # H-5: the config key is S3_REGION (settings.AWS_REGION never
+            # existed — selecting STORAGE_PROVIDER=s3 crashed at init).
+            region_name=settings.S3_REGION,
             endpoint_url=settings.S3_ENDPOINT_URL
         )
         

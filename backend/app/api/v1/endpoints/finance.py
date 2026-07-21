@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -391,14 +391,12 @@ async def sse_finance_processing_updates(
     PHASE 1: Live Processing Updates
     Server-Sent Events (SSE) endpoint to push finance processing status.
     """
-    async def event_generator():
-        # Simulated heartbeat for SSE UI update
-        for i in range(1, 10):
-            await asyncio.sleep(2)
-            yield f"data: {{\"status\": \"processing\", \"progress\": {i * 10}, \"document_id\": \"{document_id}\"}}\n\n"
-        yield f"data: {{\"status\": \"complete\", \"document_id\": \"{document_id}\"}}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    # M-1: real Document.status transitions instead of a fake heartbeat.
+    from app.services.processing_events import document_status_event_stream
+    return StreamingResponse(
+        document_status_event_stream(document_id, current_user["id"]),
+        media_type="text/event-stream",
+    )
 
 @router.get("/transactions/search")
 async def semantic_search_transactions(
@@ -440,19 +438,23 @@ async def semantic_search_transactions(
 @router.get("/documents", response_model=List[FinancialDocumentResponse])
 async def list_financial_documents(
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    result = await db.execute(select(FinancialDocument).where(FinancialDocument.workspace_id == workspace_id).order_by(FinancialDocument.created_at.desc()))
+    result = await db.execute(select(FinancialDocument).where(FinancialDocument.workspace_id == workspace_id).order_by(FinancialDocument.created_at.desc()).limit(limit).offset(offset))
     return result.scalars().all()
 
 @router.get("/findings", response_model=List[AuditFindingResponse])
 async def list_audit_findings(
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    result = await db.execute(select(AuditFinding).where(AuditFinding.workspace_id == workspace_id).order_by(AuditFinding.created_at.desc()))
+    result = await db.execute(select(AuditFinding).where(AuditFinding.workspace_id == workspace_id).order_by(AuditFinding.created_at.desc()).limit(limit).offset(offset))
     return result.scalars().all()
 
 

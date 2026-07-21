@@ -39,7 +39,7 @@ class Clause(Base):
     clause_type = Column(String, nullable=True) # E.g., Confidentiality
     risk_level = Column(String, nullable=True) # HIGH, MEDIUM, LOW, COMPLIANT
     compliance_notes = Column(String, nullable=True)
-    embedding = Column(Vector(1536), nullable=True) # For semantic search and clause similarity
+    embedding = Column(Vector(1024), nullable=True) # C-7: matches embedding_service (bge-m3, 1024-dim); was 1536
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class RedlineSuggestion(Base):

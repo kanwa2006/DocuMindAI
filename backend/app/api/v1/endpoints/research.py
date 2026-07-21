@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -13,10 +13,10 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.core.auth import get_current_user
 from app.core.workspace import resolve_workspace_id
-from app.models.research import ResearchProject, ResearchPaper, ResearchFinding
+from app.models.research import ResearchProject, ResearchPaper, ResearchFinding, ContradictionReport
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
-from app.schemas.research import PaperExtractionSchema
+from app.schemas.research import PaperExtractionSchema, ContradictionVerdictSchema
 from app.services.llm_service import llm_service
 from app.workers.tasks.research_tasks import process_research_batch
 
@@ -33,6 +33,11 @@ class CitationRequest(BaseModel):
 
 class GapsRequest(BaseModel):
     doc_ids: List[str]
+
+class DeepResearchRequest(BaseModel):
+    query: str
+    doc_ids: List[str] = []
+    session_id: Optional[str] = None
 
 # ── Citation formatters (Python string formatting — never LLM) ────────────────
 
@@ -344,13 +349,12 @@ async def sse_research_processing_updates(
     PHASE 1: Live Processing Updates
     Server-Sent Events (SSE) endpoint to push research pipeline status.
     """
-    async def event_generator():
-        for i in range(1, 10):
-            await asyncio.sleep(2)
-            yield f"data: {{\"status\": \"processing\", \"progress\": {i * 10}, \"document_id\": \"{document_id}\"}}\n\n"
-        yield f"data: {{\"status\": \"complete\", \"document_id\": \"{document_id}\"}}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    # M-1: real Document.status transitions instead of a fake heartbeat.
+    from app.services.processing_events import document_status_event_stream
+    return StreamingResponse(
+        document_status_event_stream(document_id, current_user["id"]),
+        media_type="text/event-stream",
+    )
 
 @router.get("/search")
 async def semantic_search_research(
@@ -410,7 +414,10 @@ async def ai_copilot_chat(
         findings = (await db.execute(stmt)).scalars().all()
     context = "\n".join([f"Finding: {f.statement}\nEvidence: {f.evidence_quote}" for f in findings])
 
-    system_prompt = (
+    # M-8: findings content is untrusted document text; direct
+    # provider.generate_stream bypasses LLMService.generate, so harden here.
+    from app.services.llm_service import _harden_system_prompt
+    system_prompt = _harden_system_prompt(
         "You are an expert research copilot. Use the provided research findings as your primary "
         "source of truth. Synthesise evidence clearly, cite findings where relevant, and never "
         "invent citations. If the findings don't cover the topic, say so honestly and offer "
@@ -434,6 +441,48 @@ async def ai_copilot_chat(
 
     return StreamingResponse(chat_stream_generator(), media_type="text/event-stream")
 
+@router.post("/deep-research")
+async def deep_research(
+    body: DeepResearchRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """N-1: expose the 4-step Deep Research agent.
+
+    The agent (RAG → gap analysis → Tavily web search → synthesis, with a
+    Veritas trust score) existed but had no caller anywhere. Streams one
+    SSE `data:` frame per ResearchEvent, ending with [DONE]. Document ids
+    are validated against the caller's ownership before the agent runs.
+    """
+    from app.services.deep_research_agent import deep_research_agent
+
+    owner_id = uuid.UUID(current_user["id"])
+    valid_doc_ids: List[str] = []
+    for raw_id in body.doc_ids:
+        try:
+            doc_id = uuid.UUID(raw_id)
+        except ValueError:
+            continue
+        doc = (await db.execute(
+            select(Document).where(Document.id == doc_id, Document.owner_id == owner_id)
+        )).scalar_one_or_none()
+        if doc:
+            valid_doc_ids.append(str(doc_id))
+
+    async def event_generator():
+        try:
+            async for event in deep_research_agent.research(
+                body.query, valid_doc_ids, session_id=body.session_id, db=db
+            ):
+                yield f"data: {json.dumps(event.to_dict())}\n\n"
+        except Exception:
+            logger.error("[DeepResearch] stream failed", exc_info=True)
+            yield f"data: {json.dumps({'step': 'final', 'status': 'error', 'message': 'Deep research failed. Please retry.'})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 @router.get("/synthesis/{project_id}")
 async def synthesize_project(
     project_id: uuid.UUID,
@@ -442,38 +491,131 @@ async def synthesize_project(
 ):
     """
     PHASE 2: CROSS-DOCUMENT SYNTHESIS
-    Detects contradictions and consensus among papers in a project.
+
+    H-4: real analysis (this endpoint previously returned hardcoded fake
+    clusters/contradictions). Extract-then-compute split: Python owns the
+    clustering (cosine over stored finding embeddings), consensus scores,
+    and severity; the LLM only classifies the relationship of candidate
+    cross-paper pairs. Response keys unchanged (frontend contract).
     """
+    import numpy as np
+
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    stmt = select(ResearchFinding).where(ResearchFinding.workspace_id == workspace_id) # simplified for prototype
-    findings = (await db.execute(stmt)).scalars().all()
-    
-    # In a real implementation, we'd run a vector clustering pass here to group similarities.
-    # For now, simulate a contradiction report.
+    rows = (await db.execute(
+        select(ResearchFinding, ResearchPaper.title)
+        .join(ResearchPaper, ResearchFinding.paper_id == ResearchPaper.id)
+        .where(
+            ResearchPaper.project_id == project_id,
+            ResearchFinding.workspace_id == workspace_id,
+        )
+    )).all()
+
+    if not rows:
+        return {"status": "success", "clusters": [], "contradictions": []}
+
+    embedded = [
+        (f, title, np.asarray(f.embedding, dtype=float))
+        for f, title in rows if f.embedding is not None
+    ]
+    unembedded = [(f, title) for f, title in rows if f.embedding is None]
+
+    def _cos(a: "np.ndarray", b: "np.ndarray") -> float:
+        denom = float(np.linalg.norm(a) * np.linalg.norm(b)) or 1e-9
+        return float(np.dot(a, b) / denom)
+
+    # 1. Greedy centroid-free clustering: a finding joins the first cluster
+    #    whose seed it matches at >= 0.75 cosine (deterministic, no LLM).
+    grouped: list = []
+    for item in embedded:
+        for cluster in grouped:
+            if _cos(item[2], cluster[0][2]) >= 0.75:
+                cluster.append(item)
+                break
+        else:
+            grouped.append([item])
+
+    clusters_payload = []
+    for cluster in grouped:
+        pair_sims = [
+            _cos(a[2], b[2])
+            for i, a in enumerate(cluster) for b in cluster[i + 1:]
+        ]
+        consensus = round(sum(pair_sims) / len(pair_sims), 2) if pair_sims else 1.0
+        representative = max(cluster, key=lambda it: len(it[0].statement))
+        clusters_payload.append({
+            "topic": representative[0].statement,
+            "consensus_score": consensus,
+            "findings": [
+                {"statement": it[0].statement, "paper": it[1]} for it in cluster
+            ],
+        })
+    for f, title in unembedded:
+        clusters_payload.append({
+            "topic": f.statement,
+            "consensus_score": 1.0,
+            "findings": [{"statement": f.statement, "paper": title}],
+        })
+
+    # 2. Contradiction candidates: cross-paper pairs on a similar topic
+    #    (cosine 0.60–0.97; near-duplicates excluded), top 5 by similarity.
+    candidate_pairs = []
+    for i, a in enumerate(embedded):
+        for b in embedded[i + 1:]:
+            if a[0].paper_id == b[0].paper_id:
+                continue
+            sim = _cos(a[2], b[2])
+            if 0.60 <= sim < 0.97:
+                candidate_pairs.append((sim, a, b))
+    candidate_pairs.sort(key=lambda p: -p[0])
+
+    contradictions_payload = []
+    for sim, a, b in candidate_pairs[:5]:
+        try:
+            verdict = await llm_service.generate_json(
+                query=(
+                    "Do these two research findings agree, contradict each "
+                    "other, or address unrelated points? Classify the relationship."
+                ),
+                grounded_context=(
+                    f"Finding A ({a[1]}): {a[0].statement}\n"
+                    f"Finding B ({b[1]}): {b[0].statement}"
+                ),
+                response_schema=ContradictionVerdictSchema,
+            )
+        except Exception as exc:
+            # No fabricated verdicts: skip the pair, loudly.
+            logger.error(f"[Synthesis] Contradiction check failed for pair "
+                         f"({a[0].id}, {b[0].id}): {exc}")
+            continue
+        if verdict.verdict == "contradict":
+            contradictions_payload.append({
+                "description": verdict.description,
+                "severity": "HIGH" if sim >= 0.80 else "MEDIUM",
+            })
+            db.add(ContradictionReport(
+                workspace_id=workspace_id,
+                finding_a_id=a[0].id,
+                finding_b_id=b[0].id,
+                description=verdict.description,
+            ))
+    if contradictions_payload:
+        await db.commit()
+
     return {
         "status": "success",
-        "clusters": [
-            {
-                "topic": "X causes Y",
-                "consensus_score": 0.85,
-                "findings": [{"statement": f.statement} for f in findings[:2]]
-            }
-        ],
-        "contradictions": [
-            {
-                "description": "Paper A suggests X has no effect, while Paper B found a strong correlation.",
-                "severity": "HIGH"
-            }
-        ]
+        "clusters": clusters_payload,
+        "contradictions": contradictions_payload,
     }
 
 @router.get("/projects")
 async def list_projects(
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    result = await db.execute(select(ResearchProject).where(ResearchProject.workspace_id == workspace_id))
+    result = await db.execute(select(ResearchProject).where(ResearchProject.workspace_id == workspace_id).limit(limit).offset(offset))
     return [{"id": p.id, "title": p.title, "description": p.description} for p in result.scalars().all()]
 
 @router.get("/projects/{project_id}/papers")

@@ -30,7 +30,7 @@ class CandidateProfile(Base):
     experience_years = Column(Float, nullable=True)
     education = Column(JSON, default=[])
     extracted_data = Column(JSON, nullable=True) # Full parsed JSON from LLM
-    embedding = Column(Vector(1536), nullable=True) # PHASE 2: Semantic Candidate Search
+    embedding = Column(Vector(1024), nullable=True) # C-7: matches embedding_service (bge-m3, 1024-dim); was 1536
     stage = Column(String, default="applied")  # 6-H1: pipeline stage tracking
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

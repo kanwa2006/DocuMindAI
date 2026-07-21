@@ -12,6 +12,15 @@ celery_app = Celery(
         "app.workers.tasks.audio_tasks",
         "app.workers.tasks.ocr_tasks",
         "app.workers.tasks.hr_tasks",
+        # C-2 fix — these modules were routed in task_routes and dispatched by
+        # the legal/finance/study/research /process endpoints but never
+        # imported by the worker, so their tasks were unregistered and never
+        # ran. (email_tasks stays unregistered: email is sent synchronously
+        # via email_service; the module is dead code pending its own issue.)
+        "app.workers.tasks.legal_tasks",
+        "app.workers.tasks.finance_tasks",
+        "app.workers.tasks.study_tasks",
+        "app.workers.tasks.research_tasks",
         # Phase 20 — automation tasks
         "app.automation.auto_health_check",
         "app.automation.auto_key_rotation",
@@ -34,10 +43,14 @@ celery_app.conf.task_routes = {
     "app.workers.tasks.research_tasks.*": "main-queue",
     
     # PHASE 6: GPU WORKER ARCHITECTURE
-    # Memory-safe batching queues for VRAM-intensive models
+    # Memory-safe batching queues for VRAM-intensive models.
+    # H-3 fix: these queues MUST be consumed by a running worker (-Q). The
+    # default deployment runs a single worker consuming
+    # main-queue,celery,export_queue,ocr_gpu_queue; a dedicated GPU worker
+    # may take over ocr_gpu_queue later without changing these routes.
+    # (Phantom routes for nonexistent embedding_tasks/retrieval_tasks
+    # modules were removed — do not re-add a route without a real module.)
     "app.workers.tasks.ocr_tasks.*": "ocr_gpu_queue",
-    "app.workers.tasks.embedding_tasks.*": "embedding_queue",
-    "app.workers.tasks.retrieval_tasks.*": "retrieval_queue",
     "app.workers.tasks.export_tasks.*": "export_queue",
 }
 

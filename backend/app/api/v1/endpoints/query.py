@@ -25,10 +25,11 @@ from app.models.org import User
 from app.core.auth import get_current_user
 from app.core.workspace import resolve_workspace_id
 from app.core.config import settings
-from app.core.trial_enforcement import check_and_increment_trial
+from app.core.trial_enforcement import check_and_increment_trial, TRIAL_QUERY_LIMIT
 from app.services.response_schemas import get_response_schema
 from app.services.language_detector import detect_query_language, get_language_instruction
 from app.services.email_service import send_trial_nudge_email, send_upgrade_reminder_email
+from app.services.veritas_engine import veritas_engine, VeritasEngine, VeritasTrustReport
 from app.core.rate_limiter import limiter
 import uuid
 
@@ -51,6 +52,72 @@ WORKSPACE_DISCLAIMERS = {
         "any financial, tax, or legal use."
     ),
 }
+
+
+# ── C-4: Veritas trust report on the main query path ──────────────────────────
+
+def _veritas_sse_payload(report: VeritasTrustReport) -> Dict[str, Any]:
+    """Map VeritasTrustReport to the frontend TrustReport interface.
+
+    The SSE consumer contract lives in frontend TrustScoreBadge.tsx
+    (final_score, level HIGH|MEDIUM|LOW, evidence_items, warnings,
+    factors[{name,weight,score}], contradictions, summary) and differs from
+    the backend dataclass field names — adapt here, at the caller, so
+    veritas_engine stays untouched (REPAIR_RULEBOOK §8a).
+    """
+    level = report.grade if report.grade in ("HIGH", "MEDIUM") else "LOW"
+    return {
+        "final_score": report.final_score,
+        "level": level,
+        "evidence_items": report.evidence,
+        "warnings": report.warnings,
+        "factors": [
+            {"name": name, "weight": VeritasEngine.WEIGHTS.get(name, 0.0), "score": score}
+            for name, score in report.factor_scores.items()
+        ],
+        "contradictions": [],
+        "summary": (
+            f"Veritas scored this answer {report.final_score}/100 "
+            f"({level}) from {len(report.factor_scores)} weighted factors."
+        ),
+    }
+
+
+async def _compute_trust_event(
+    answer: str, chunks: Any, query: str, document_ids: Any, db: Any
+) -> str:
+    """Compute the Veritas report and render the SSE frame.
+
+    Returns "" on failure — the trust event must never break token delivery,
+    but the failure is logged at ERROR (no silent degradation)."""
+    try:
+        dict_chunks = [c for c in (chunks or []) if isinstance(c, dict)]
+        report = await veritas_engine.compute_trust_score(
+            answer=answer,
+            primary_chunks=dict_chunks,
+            query=query,
+            document_ids=[str(d) for d in document_ids] if document_ids else None,
+            db=db,
+        )
+        return f"event: trust_report\ndata: {json.dumps(_veritas_sse_payload(report))}\n\n"
+    except Exception:
+        logger.error("[query/stream] Veritas trust computation failed", exc_info=True)
+        return ""
+
+
+def _retrieval_cache_key(user_id: str, workspace_type: str, query: str, attached_doc_ids) -> str:
+    """M-2: single source of truth for the retrieval cache key.
+
+    The key MUST start with `retrieval:uid_{user_id}:` — that is the pattern
+    `delete_document` purges (documents.py). The old write key
+    (`retrieval:{workspace}:{hash}`) never matched the purge pattern, so
+    deleted-document content could be served from cache for up to the TTL.
+    """
+    attached_ids_key = ",".join(sorted(str(d) for d in attached_doc_ids or []))
+    digest = hashlib.sha256(
+        f"{workspace_type}:{query}:{attached_ids_key}".encode()
+    ).hexdigest()[:16]
+    return f"retrieval:uid_{user_id}:{workspace_type}:{digest}"
 
 
 # ── Redis helpers (Task 4.9) — failures are silently ignored, never break request ──
@@ -78,36 +145,13 @@ async def _set_cached_retrieval(cache_key: str, payload: Any, ttl: int = 300) ->
         pass
 
 
-@router.post("/search", response_model=QueryResponse)
-async def semantic_search(
-    request: QueryRequest,
-    current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-) -> Any:
-    """Pure semantic search endpoint. Protected by tenant isolation."""
-    payload = await RetrievalService.retrieve_chunks(
-        db=db,
-        query=request.query,
-        workspace_id=resolve_workspace_id(current_user["workspace_id"]),
-        top_k=request.top_k,
-        similarity_threshold=request.similarity_threshold
-    )
-
-    evidence = [EvidenceChunk(**c) for c in payload["results"]]
-
-    diagnostics = TracingDiagnostics(
-        embedding_time_sec=payload["tracing"]["embedding_time_sec"],
-        database_time_sec=payload["tracing"]["database_time_sec"],
-        total_time_sec=payload["tracing"]["total_time_sec"]
-    )
-
-    return QueryResponse(
-        query=request.query,
-        answer="[Search Only - Generation Bypassed]",
-        confidence_score=1.0,
-        evidence=evidence,
-        diagnostics=diagnostics
-    )
+# L-6: the duplicate answer surfaces were consolidated. /query/search and
+# /query/debug had no consumers (API_AUDIT §2.4) and were removed; two
+# answer paths remain with distinct roles:
+#   POST /query/stream — the interactive SSE path (trial, cache, Veritas).
+#   POST /query/ask    — the synchronous path used by the /chats ask flow
+#                        that persists messages.
+# Both ground via the same GroundingService + llm_service pipeline.
 
 
 @router.post("/ask", response_model=QueryResponse)
@@ -197,16 +241,19 @@ async def ask_question_stream(
                     f"event: trial_status\n"
                     f"data: {json.dumps({'queries_used': trial_status['queries_used'], 'queries_remaining': trial_status['queries_remaining']})}\n\n"
                 )
-                # Fire-and-forget lifecycle emails — never blocks the stream
+                # Fire-and-forget lifecycle emails — never blocks the stream.
+                # M-7: thresholds derive from TRIAL_QUERY_LIMIT (nudge with 2
+                # queries left, upgrade reminder with 1 left). The old
+                # hardcoded 3/4 assumed a 5-query limit; the limit is 10.
                 if user_obj and getattr(user_obj, "email_notifications_enabled", True):
                     _loop = asyncio.get_event_loop()
                     _q_used = trial_status["queries_used"]
-                    if _q_used == 3:
+                    if _q_used == TRIAL_QUERY_LIMIT - 2:
                         _loop.run_in_executor(
                             None, send_trial_nudge_email,
-                            user_obj.email, user_obj.full_name, 3,
+                            user_obj.email, user_obj.full_name, _q_used,
                         )
-                    elif _q_used == 4:
+                    elif _q_used == TRIAL_QUERY_LIMIT - 1:
                         _loop.run_in_executor(
                             None, send_upgrade_reminder_email,
                             user_obj.email, user_obj.full_name,
@@ -321,6 +368,10 @@ async def ask_question_stream(
                     f"data: {json.dumps({'confidence_score': 0.95, 'evidence': [], 'grounded': True, 'mode': 'grounded', 'tracing': {}})}\n\n"
                 )
 
+                # C-4: accumulate the summary answer + evidence so a real
+                # Veritas trust_report can be emitted after the stream.
+                summary_answer_parts: list = []
+                summary_evidence: list = []
                 async for frame in generate_full_document_summary_stream(
                     db=db,
                     query=body.query,
@@ -337,11 +388,13 @@ async def ask_question_stream(
                     elif kind == "evidence":
                         # Replace the placeholder evidence list once we know
                         # which docs were actually read.
+                        summary_evidence = frame["data"] or []
                         yield (
                             f"event: metadata\n"
                             f"data: {json.dumps({'confidence_score': 0.95, 'evidence': frame['data'], 'grounded': True, 'mode': 'grounded'})}\n\n"
                         )
                     elif kind == "token":
+                        summary_answer_parts.append(frame["data"])
                         yield f"event: token\ndata: {json.dumps({'token': frame['data']})}\n\n"
                         await asyncio.sleep(0.005)
                     elif kind == "done":
@@ -349,27 +402,25 @@ async def ask_question_stream(
                         disclaimer = WORKSPACE_DISCLAIMERS.get(workspace_type, "")
                         if disclaimer:
                             yield f"event: token\ndata: {json.dumps({'token': disclaimer})}\n\n"
+                        trust_frame = await _compute_trust_event(
+                            "".join(summary_answer_parts), summary_evidence,
+                            body.query, attached_doc_ids, db,
+                        )
+                        if trust_frame:
+                            yield trust_frame
                         yield f"event: done\ndata: {{}}\n\n"
                         return  # Don't fall through to the retrieval path below.
 
-            # Task 4.9 — Redis retrieval cache key
-            doc_ids_str = str(current_user.get("workspace_id", ""))
-            query_hash = hashlib.sha256(
-                f"{workspace_type}:{body.query}:{doc_ids_str}".encode()
-            ).hexdigest()[:16]
-            cache_key = f"retrieval:{workspace_type}:{query_hash}"
+            # Task 4.9 / M-2 — tenant-scoped retrieval cache key (includes the
+            # chat's attached doc ids so two chats in the same workspace
+            # asking the same question don't share results, and the
+            # uid_{user} prefix so delete_document's purge pattern matches).
+            cache_key = _retrieval_cache_key(
+                current_user["id"], workspace_type, body.query, attached_doc_ids
+            )
 
             # 1. Retrieval phase
             yield f"event: status\ndata: {json.dumps({'message': 'Retrieving semantic chunks...'})}\n\n"
-
-            # P1: include the chat's attached doc ids in the cache key so two
-            # chats in the same workspace asking the same question don't
-            # share results.
-            attached_ids_key = ",".join(sorted(str(d) for d in attached_doc_ids))
-            cache_key = (
-                f"retrieval:{workspace_type}:"
-                f"{hashlib.sha256((cache_key + ':' + attached_ids_key).encode()).hexdigest()[:16]}"
-            )
 
             grounding_payload = await _get_cached_retrieval(cache_key)
             if grounding_payload:
@@ -467,7 +518,11 @@ async def ask_question_stream(
             else:
                 user_prompt = f"Question: {body.query}"
 
+            # C-4: accumulate the streamed answer for the post-stream Veritas
+            # pass without delaying token delivery.
+            answer_parts: list = []
             async for token in llm_service.provider.generate_stream(system_prompt, user_prompt):
+                answer_parts.append(token)
                 yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"
                 # Micro-sleep allows ASGI to check for client disconnects
                 await asyncio.sleep(0.005)
@@ -478,21 +533,28 @@ async def ask_question_stream(
             if disclaimer:
                 yield f"event: token\ndata: {json.dumps({'token': disclaimer})}\n\n"
 
+            # C-4: emit a real Veritas trust_report after tokens, before done.
+            # Grounded answers only — scoring a general-knowledge answer with a
+            # document-grounding heuristic would fabricate meaning; the UI
+            # shows an "Ungrounded" badge in general mode instead.
+            if is_grounded:
+                trust_frame = await _compute_trust_event(
+                    "".join(answer_parts),
+                    grounding_payload.get("evidence_metadata", []),
+                    body.query, attached_doc_ids, db,
+                )
+                if trust_frame:
+                    yield trust_frame
+
             yield f"event: done\ndata: {{}}\n\n"
 
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
+            # L-12: raw exception text can expose internals (DSNs, hosts,
+            # stack details). Log the full error server-side; the client gets
+            # a generic message.
+            logger.error("[query/stream] Stream failed", exc_info=True)
+            yield f"event: error\ndata: {json.dumps({'detail': 'An internal error occurred while generating the response. Please retry.'})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-@router.post("/debug", response_model=QueryResponse)
-async def debug_retrieval(
-    request: QueryRequest,
-    current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-) -> Any:
-    """Exposes deep trace metadata for prompt and relevance debugging."""
-    return await ask_question(request, current_user, db)

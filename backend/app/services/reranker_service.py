@@ -39,11 +39,25 @@ class LocalCrossEncoder(BaseRerankerProvider):
 
 class DummyLocalReranker(BaseRerankerProvider):
     def rerank(self, query: str, documents: List[str]) -> List[float]:
+        """Placeholder reranker returning FABRICATED scores.
+
+        M-10: these alternating 0.85/0.99 scores feed the grounding
+        confidence the UI displays, so silently serving them disguises a
+        broken reranker as a working one. In production this now fails
+        loud (at use, not import — see H-7); elsewhere it logs at ERROR on
+        every call so degraded runs are unmissable.
         """
-        Placeholder local reranker to satisfy architecture without heavy pip dependencies.
-        In production, this would be replaced with a CrossEncoder or Cohere Rerank API.
-        """
-        logger.info(f"[Tracing] Running dummy local reranking for {len(documents)} candidates.")
+        from app.core.config import settings
+        if settings.ENVIRONMENT == "production":
+            raise RuntimeError(
+                "DummyLocalReranker refused in production: the real cross-encoder "
+                "is unavailable and fabricated rerank scores would corrupt grounding "
+                "confidence. Fix RERANKER_PROVIDER / sentence-transformers instead."
+            )
+        logger.error(
+            f"[Reranker] DEGRADED MODE — fabricated rerank scores for {len(documents)} "
+            "candidates (DummyLocalReranker). Grounding confidence is meaningless."
+        )
         # Simulates returning scores between 0.8 and 0.99
         return [0.85 + (0.14 * (i % 2)) for i in range(len(documents))]
 
@@ -77,8 +91,16 @@ def _get_default_reranker() -> BaseRerankerProvider:
         from app.core.config import settings
         if getattr(settings, "RERANKER_PROVIDER", "local") == "local":
             return LocalCrossEncoder()
-    except Exception:
-        pass
+        # M-10: a non-"local" provider name has no real implementation —
+        # that is a config error, not a reason to silently fabricate scores.
+        logger.error(
+            f"[Reranker] RERANKER_PROVIDER={settings.RERANKER_PROVIDER!r} has no real "
+            "implementation — falling back to DummyLocalReranker (fabricated scores; "
+            "refused at use in production)."
+        )
+    except Exception as exc:
+        logger.error(f"[Reranker] Default reranker selection failed ({exc}) — "
+                     "falling back to DummyLocalReranker.")
     return DummyLocalReranker()
 
 

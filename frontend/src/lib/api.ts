@@ -376,7 +376,8 @@ export const askQuestionStream = async (
           onError(parsed.detail || parsed.message || "Error");
         } else if (event === "done") {
           onDone();
-          // Phase 10 — show upgrade modal 500ms AFTER the last (5th) query response renders
+          // Phase 10 — show upgrade modal 500ms AFTER the final trial query response
+          // renders (keys on queriesRemaining === 0; the limit itself is server-side)
           if (lastTrialStatus && lastTrialStatus.queriesRemaining === 0 && typeof window !== "undefined") {
             setTimeout(() => {
               window.dispatchEvent(new CustomEvent("trial:exhausted"));
@@ -705,6 +706,44 @@ export const runSynthesis = async (projectId: string): Promise<any> => {
   const res = await apiFetch(`/research/synthesis/${projectId}`, {});
   if (!res.ok) throw new Error("Synthesis failed");
   return res.json();
+};
+
+// N-1: Deep Research agent (RAG → gaps → web search → synthesis + trust
+// score). Streams one JSON event per SSE data: frame; [DONE] terminates.
+export const runDeepResearch = async (
+  query: string,
+  docIds: string[],
+  onEvent: (event: any) => void,
+  sessionId?: string,
+  signal?: AbortSignal,
+): Promise<void> => {
+  const res = await apiFetch(`/research/deep-research`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, doc_ids: docIds, session_id: sessionId }),
+    signal,
+  });
+  if (!res.ok || !res.body) throw new Error("Deep research failed");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const data = frame.replace(/^data: /, "").trim();
+      if (!data || data === "[DONE]") continue;
+      try {
+        onEvent(JSON.parse(data));
+      } catch {
+        // ignore malformed frames
+      }
+    }
+  }
 };
 
 export const searchResearch = async (query: string): Promise<any[]> => {

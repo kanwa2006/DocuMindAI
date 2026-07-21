@@ -117,31 +117,57 @@ async def list_job_candidates(
         stmt = stmt.where(JobMatch.status == status)
         
     if search:
-        # PHASE 2: Semantic Candidate Search
-        # In a full pgvector implementation, we would convert `search` to an embedding
-        # and sort by `<->` (L2 distance) or `<#>` (inner product).
-        # We simulate the hybrid structure here:
-        search_pattern = f"%{search}%"
-        stmt = stmt.where(
-            or_(
-                CandidateProfile.name.ilike(search_pattern),
-                CandidateProfile.skills.cast(String).ilike(search_pattern)
+        # L-13: real semantic candidate search. Rank by pgvector L2 distance
+        # over the profile embeddings populated by hr_tasks; profiles without
+        # an embedding (pre-fix rows) sort last instead of being hidden. If
+        # embedding generation fails, fall back loudly to the old ILIKE match.
+        query_embedding = None
+        try:
+            query_embedding = await llm_service.get_embedding(search)
+        except Exception as exc:
+            logger.error(f"[HR] Search embedding failed, falling back to ILIKE: {exc}")
+
+        if query_embedding is not None:
+            stmt = stmt.order_by(
+                CandidateProfile.embedding.l2_distance(query_embedding).nulls_last()
             )
-        )
-        # To order by pgvector semantic distance:
-        # embedding = await llm_service.get_embedding(search)
-        # stmt = stmt.order_by(CandidateProfile.embedding.l2_distance(embedding))
+        else:
+            search_pattern = f"%{search}%"
+            stmt = stmt.where(
+                or_(
+                    CandidateProfile.name.ilike(search_pattern),
+                    CandidateProfile.skills.cast(String).ilike(search_pattern)
+                )
+            )
     else:
         stmt = stmt.order_by(JobMatch.fit_score.desc())
         
     result = await db.execute(stmt)
     records = result.all()
-    
-    # Return formatted response
+
+    # H-10: raw ORM objects are not serializable without a response model —
+    # this endpoint 500'd (PydanticSerializationError) the first time real
+    # JobMatch rows existed. Serialize exactly the shape the frontend
+    # CandidateRankingsPanel consumes.
     return [
         {
-            "match": match,
-            "profile": profile
+            "match": {
+                "id": str(match.id),
+                "fit_score": match.fit_score,
+                "semantic_score": match.semantic_score,
+                "final_score": match.final_score,
+                "status": match.status,
+                "match_analysis": match.match_analysis,
+            },
+            "profile": {
+                "id": str(profile.id),
+                "name": profile.name,
+                "email": profile.email,
+                "skills": profile.skills or [],
+                "experience_years": profile.experience_years,
+                "education": profile.education or [],
+                "stage": profile.stage,
+            },
         }
         for match, profile in records
     ]
@@ -224,15 +250,14 @@ async def sse_processing_updates(
     PHASE 1: Live Processing Updates
     Server-Sent Events (SSE) endpoint to push processing status to the frontend.
     """
-    async def event_generator():
-        # In production, this would subscribe to a Redis Pub/Sub channel
-        # For this demonstration, we push heartbeat messages simulating progress
-        for i in range(1, 10):
-            await asyncio.sleep(2)
-            yield f"data: {{\"status\": \"processing\", \"progress\": {i * 10}, \"job_id\": \"{job_id}\"}}\n\n"
-        yield f"data: {{\"status\": \"complete\", \"job_id\": \"{job_id}\"}}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    # M-1: real per-job candidate progress instead of a fake heartbeat.
+    from app.core.workspace import resolve_workspace_id
+    from app.services.processing_events import hr_job_candidates_event_stream
+    workspace_id = resolve_workspace_id(current_user["workspace_id"])
+    return StreamingResponse(
+        hr_job_candidates_event_stream(job_id, workspace_id),
+        media_type="text/event-stream",
+    )
 
 @router.post("/candidates/{candidate_id}/notes", response_model=CandidateNoteResponse)
 async def add_candidate_note(
@@ -339,7 +364,17 @@ async def update_candidate_stage(
 # ── Task 6-H2 — JD-to-Resume Embedding Similarity ────────────────────────────
 
 async def _get_jd_embedding(jd_text: str) -> List[float]:
-    """Return a cached embedding for the JD text (cached by sha256 of first 2000 chars)."""
+    """Return a cached embedding for the JD text (cached by sha256 of first 2000 chars).
+
+    L-8 (documented decision): HR JD↔resume scoring intentionally uses
+    all-MiniLM-L6-v2 (384-dim) rather than the pipeline's bge-m3 (1024-dim).
+    The vectors never enter pgvector columns or mix with the retrieval
+    corpus — cosine similarity here is consumed only as a scalar blended
+    into fit_score (0.6*llm + 0.4*sim*100), so vector-space consistency is
+    not at stake, and MiniLM is ~10x cheaper to load per worker. Do NOT
+    store these vectors in any embedding column (those are bge-m3 space,
+    see C-7).
+    """
     cache_key = hashlib.sha256(jd_text[:2000].encode()).hexdigest()
     if cache_key in _jd_embedding_cache:
         return _jd_embedding_cache[cache_key]

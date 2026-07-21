@@ -648,15 +648,31 @@ async def extract_tables(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    file_path = doc.storage_path
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Document file not found on disk")
+    # L-3: storage_path may be an S3 key, not a disk path — download via
+    # storage_service to a temp file (same pattern as document_tasks) so
+    # table extraction works for both local and S3 deployments.
+    import asyncio
+    from app.core.storage import storage_service
 
-    # Determine if scanned: native PDF = selectable text present
-    is_scanned = not is_native_pdf(file_path)
+    _ext = os.path.splitext(doc.filename or "")[1].lower() or ".pdf"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=_ext) as tmp_file:
+        local_path = tmp_file.name
+    try:
+        try:
+            await asyncio.to_thread(
+                storage_service.download_file, doc.storage_path, local_path
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Document file not found in storage")
 
-    extractor = get_table_extractor()
-    tables = await extractor.extract_tables(file_path, is_scanned=is_scanned)
+        # Determine if scanned: native PDF = selectable text present
+        is_scanned = not is_native_pdf(local_path)
+
+        extractor = get_table_extractor()
+        tables = await extractor.extract_tables(local_path, is_scanned=is_scanned)
+    finally:
+        if os.path.exists(local_path):
+            os.remove(local_path)
 
     return {
         "document_id": request.document_id,
@@ -872,18 +888,46 @@ async def generate_diagram(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    PHASE 5: Diagram Generation (Mermaid/Graphviz)
-    """
-    return {
-        "type": "mermaid",
-        "content": f"graph TD;\n    A[{topic} Introduction] --> B[Core Components];\n    B --> C[Implementation];\n    C --> D[Evaluation];"
-    }
+    PHASE 5: Diagram Generation (Mermaid).
 
-@router.post("/process/voice")
+    L-4: previously returned one hardcoded template regardless of topic.
+    The LLM now generates topic-specific Mermaid; on failure the endpoint
+    returns 502 instead of a fake diagram.
+    """
+    system_prompt = (
+        "You generate Mermaid diagrams for teaching. Respond with ONLY raw "
+        "Mermaid code (no markdown fences, no prose), starting with 'graph TD' "
+        "or 'flowchart TD'. 6-12 nodes, clear educational structure."
+    )
+    try:
+        raw = await llm_service.generate(
+            system_prompt, f"Create a concept diagram for the topic: {topic}"
+        )
+    except Exception:
+        logging.getLogger(__name__).error(
+            "[exams] Diagram generation failed", exc_info=True
+        )
+        raise HTTPException(status_code=502, detail="Diagram generation failed. Please retry.")
+
+    content = raw.strip()
+    if content.startswith("```"):
+        content = content.strip("`").lstrip("mermaid").strip()
+    if not (content.startswith("graph") or content.startswith("flowchart")):
+        raise HTTPException(status_code=502, detail="Diagram generation returned invalid output. Please retry.")
+
+    return {"type": "mermaid", "content": content}
+
+@router.post("/process/voice", status_code=501)
 async def process_voice_notes(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    PHASE 4: Voice -> Exam Pipeline Stub
+    L-10: this stub used to claim "Voice processing queued via Celery" while
+    no voice→exam pipeline exists — a fabricated success. It now answers
+    honestly with 501 until the feature is actually built (audio_tasks
+    exists but no transcription→exam flow is wired).
     """
-    return {"status": "processing", "message": "Voice processing queued via Celery."}
+    return {
+        "status": "not_implemented",
+        "message": "Voice-to-exam processing is not available yet.",
+    }

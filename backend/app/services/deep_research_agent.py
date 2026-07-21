@@ -77,8 +77,35 @@ class DeepResearchAgent:
             message="Analyzing your uploaded documents..."
         )
         try:
-            from app.services.retrieval_service import retrieval_service
-            doc_answer, doc_citations = await retrieval_service.query(query, document_ids)
+            from uuid import UUID
+            from app.services.retrieval_service import RetrievalService
+
+            if db is None:
+                raise RuntimeError(
+                    "DeepResearchAgent.research requires a db session for document retrieval"
+                )
+
+            doc_uuid_ids = [UUID(str(d)) for d in document_ids] if document_ids else None
+            retrieval = await RetrievalService.retrieve_chunks(
+                db=db,
+                query=query,
+                top_k=8,
+                document_ids=doc_uuid_ids,
+            )
+            doc_citations = retrieval.get("results", [])
+
+            if doc_citations:
+                # Mirror the grounding evidence-block format so the answer
+                # stays under the grounded prompt contract (cited, refusal).
+                evidence_text = "\n".join(
+                    f'<evidence document="{c["filename"]}" page="{c["page_number"]}" '
+                    f'chunk_id="{c["chunk_id"]}">{c["text_content"]}</evidence>'
+                    for c in doc_citations
+                )
+                doc_answer = (await llm_service.generate_answer(query, evidence_text))["answer"]
+            else:
+                doc_answer = ""
+
             doc_trust = await veritas_engine.compute_trust_score(
                 answer=doc_answer,
                 primary_chunks=doc_citations,
@@ -87,7 +114,10 @@ class DeepResearchAgent:
                 db=db,
             )
         except Exception as exc:
-            logger.warning("RAG pipeline error in DeepResearch step 1: %s", exc)
+            # C-5: this failure was previously swallowed at WARNING, which hid
+            # a permanently-broken retrieval call. Keep the degraded path but
+            # make the failure loud and observable.
+            logger.error("RAG pipeline error in DeepResearch step 1: %s", exc, exc_info=True)
             doc_answer = ""
             doc_citations = []
             from app.services.veritas_engine import VeritasTrustReport
