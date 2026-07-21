@@ -733,12 +733,44 @@ Full annotated list: [`backend/.env.example`](backend/.env.example).
 
 ## 16. Screenshots
 
+> All screenshots are captured from the running application against a seeded demo corpus — no mockups. Demo documents live in [`docs/demo-documents/`](docs/demo-documents).
+
+**Grounded answers with page-level citations and a per-answer trust score**
+
+![General workspace — grounded answer, four source citations, trust score](docs/screenshots/general-workspace.png)
+
+*A paid-leave question answered strictly from the uploaded handbook: the answer cites `meridian_employee_handbook.pdf, p.1`, lists all four source chunks, and carries a computed "Trust Score" badge.*
+
+**Multi-engine OCR: a scanned, image-only memo answered and cited**
+
+![OCR — answer sourced from a scanned document](docs/screenshots/ocr-scanned-document-answer.png)
+
+*The site-inspection memo was uploaded as an image-only PDF and read by the OCR orchestrator (Docling). Its specifics — "strings C4-07 through C4-12", "Tracker row 18 misaligned by 4 degrees", the "30 cm" vegetation limit — are extracted, indexed, retrieved, and cited to `scanned_site_inspection_memo.pdf, p.1`.*
+
 | | |
 |---|---|
-| ![Dashboard](docs/screenshots/dashboard.png) *Workspace dashboard — seven domains, one corpus.* | ![General workspace](docs/screenshots/general-workspace.png) *Grounded chat: citations, evidence panel, trust score.* |
-| ![Teacher workspace](docs/screenshots/exam-workspace.png) *Exam generation with mark validation and DOCX export.* | ![HR workspace](docs/screenshots/hr-workspace.png) *Ranked candidates with explainable fit-score breakdowns.* |
-| ![Legal workspace](docs/screenshots/legal-workspace.png) *Contract risk report with Python-side escalation.* | 🖼️ *Finance workspace — 15 computed ratios with per-input citations and integrity confidence.* (screenshot pending) |
-| 🖼️ *Student workspace — SM-2 flashcards, anti-cheat quizzes, tutor chat.* (screenshot pending) | 🖼️ *Research workspace — synthesis clusters, contradiction reports, deep-research stream.* (screenshot pending) |
+| ![Dashboard](docs/screenshots/dashboard.png) **Dashboard** — seven workspaces over one document corpus. | ![Streaming answer](docs/screenshots/streaming-answer.png) **Live streaming** — tokens render as the SSE stream arrives. |
+| ![HR candidate ranking](docs/screenshots/hr-candidate-ranking.png) **HR** — semantic candidate ranking with explainable fit scores (97/83/40) and skills-match chips. | ![Research contradiction](docs/screenshots/research-workspace.png) **Research** — cross-paper synthesis that detects the two papers *disagree*, with both cited. |
+| ![Proactive insights](docs/screenshots/proactive-insights.png) **Proactive insights** — computed ratios (Current 2.13, Quick 1.73) with page citations, surfaced automatically on upload. | ![Finance ratio engine](docs/screenshots/finance-ratio-analysis.png) **Finance** — the 15-ratio engine: every ratio with its formula, an audit-trail tab, and "verify against source" framing. |
+| ![Exam generator](docs/screenshots/exam-generator-config.png) **Teacher** — exam builder with Bloom's-taxonomy distribution and live "Total 100/100 ✓" mark validation. | ![Student flashcards](docs/screenshots/student-flashcards.png) **Student** — cited flashcards scheduled with SM-2 spaced repetition. |
+| ![Legal workspace](docs/screenshots/legal-workspace.png) **Legal** — MSA Q&A with mandatory not-legal-advice disclaimer and clause citations. | ![Document upload](docs/screenshots/upload-documents.png) **Upload** — per-chat document attachment with live processing status. |
+| ![Research gaps](docs/screenshots/research-gaps.png) **Research gaps** — unanswered questions surfaced across the paper set. | ![Landing page](docs/screenshots/landing-page.png) **Landing** — the marketing surface (SSR). |
+
+<details>
+<summary>More screenshots</summary>
+
+| | |
+|---|---|
+| ![AI tutor](docs/screenshots/student-study-assistant.png) **Student tutor** — grounded, streamed explanations from the student's own notes. | ![Citation export](docs/screenshots/citation-export-options.png) **Citations** — APA / MLA / IEEE / Chicago / BibTeX / Vancouver export. |
+| ![Document viewer](docs/screenshots/document-viewer.png) **Viewer** — in-browser PDF viewing. | ![Settings](docs/screenshots/settings.png) **Settings** — account & preferences. |
+
+</details>
+
+### 60-second product demo
+
+![DocuMindAI product demo](docs/demo/documind-demo.gif)
+
+*The full flow — scanned-document OCR, grounded streaming answer, trust scoring, then HR ranking, Research synthesis, Finance, Teacher, and Legal workspaces. [Download the MP4](docs/demo/documind-demo.mp4).*
 
 ---
 
