@@ -2,7 +2,7 @@
 
 The single, severity-ranked issue list for the later debugging phase. Every finding includes **Location**, **Reason**, **Impact**, **Root cause**, and **Evidence**. This is a read-only audit — **nothing was fixed**. Severities reflect impact on a production deployment of the default configuration.
 
-Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKSPACES.md](WORKSPACES.md) · [API_AUDIT.md](API_AUDIT.md) · [INTEGRATIONS.md](INTEGRATIONS.md) · [SECURITY_AUDIT.md](SECURITY_AUDIT.md) · [QUALITY_AUDIT.md](QUALITY_AUDIT.md).
+Cross-references: [ARCHITECTURE.md](../architecture/ARCHITECTURE.md) · [WORKSPACES.md](../architecture/WORKSPACES.md) · [API_AUDIT.md](../architecture/API_AUDIT.md) · [INTEGRATIONS.md](../architecture/INTEGRATIONS.md) · [SECURITY_AUDIT.md](SECURITY_AUDIT.md) · [QUALITY_AUDIT.md](QUALITY_AUDIT.md).
 
 ---
 

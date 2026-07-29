@@ -1,6 +1,6 @@
 # DocuMindAI — FAANG Interview Preparation Guide
 
-This guide turns the DocuMindAI codebase into interview-ready material: how each subsystem works, how to explain the design decisions, likely questions with strong answers, trade-offs, the engineering competencies demonstrated, resume bullets, and system-design concepts. It is grounded in the actual implementation (see [ARCHITECTURE.md](ARCHITECTURE.md)), and it is honest about what is real vs. aspirational — interviewers reward candidates who can name the gaps.
+This guide turns the DocuMindAI codebase into interview-ready material: how each subsystem works, how to explain the design decisions, likely questions with strong answers, trade-offs, the engineering competencies demonstrated, resume bullets, and system-design concepts. It is grounded in the actual implementation (see [ARCHITECTURE.md](../architecture/ARCHITECTURE.md)), and it is honest about what is real vs. aspirational — interviewers reward candidates who can name the gaps.
 
 ---
 

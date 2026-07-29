@@ -1,6 +1,6 @@
 # CLAUDE.md — DocuMindAI Operating Manual
 
-This is the permanent operating manual for Claude Code sessions in this repository. It is not a README, user guide, or marketing document. Treat every rule here as binding. The governing engineering rules live in [REPAIR_RULEBOOK.md](REPAIR_RULEBOOK.md); this file tells you how to run a session.
+This is the permanent operating manual for Claude Code sessions in this repository. It is not a README, user guide, or marketing document. Treat every rule here as binding. The governing engineering rules live in [REPAIR_RULEBOOK.md](docs/engineering/REPAIR_RULEBOOK.md); this file tells you how to run a session.
 
 ---
 
@@ -66,13 +66,13 @@ Note: `.agents/skills/**` is third-party design tooling, **not** part of the app
 
 | Document | Use for |
 |----------|---------|
-| [PROJECT_KNOWLEDGE_BASE.md](PROJECT_KNOWLEDGE_BASE.md) | Index + one-paragraph summary |
-| [REPORT.md](REPORT.md) | Executive overview, scorecard, marketing-vs-reality gaps |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Subsystems, pipelines, flows |
-| [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md) | Structure, import graph, change-impact, env table, flows |
-| [DEBUG_MASTER_PLAN.md](DEBUG_MASTER_PLAN.md) | The issue backlog (C-1..L-13) + phases + safe order |
-| [FINAL_AUDIT.md](FINAL_AUDIT.md) | Verified findings with evidence |
-| [REPAIR_RULEBOOK.md](REPAIR_RULEBOOK.md) | Binding engineering rules |
+| [PROJECT_KNOWLEDGE_BASE.md](docs/README.md) | Index + one-paragraph summary |
+| [REPORT.md](docs/audit/REPORT.md) | Executive overview, scorecard, marketing-vs-reality gaps |
+| [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) | Subsystems, pipelines, flows |
+| [DEPENDENCY_GRAPH.md](docs/architecture/DEPENDENCY_GRAPH.md) | Structure, import graph, change-impact, env table, flows |
+| [DEBUG_MASTER_PLAN.md](docs/engineering/DEBUG_MASTER_PLAN.md) | The issue backlog (C-1..L-13) + phases + safe order |
+| [FINAL_AUDIT.md](docs/audit/FINAL_AUDIT.md) | Verified findings with evidence |
+| [REPAIR_RULEBOOK.md](docs/engineering/REPAIR_RULEBOOK.md) | Binding engineering rules |
 | WORKSPACES / API_AUDIT / INTEGRATIONS / SECURITY_AUDIT / QUALITY_AUDIT / INTERVIEW_GUIDE | Deep references |
 
 ## How Claude Should Start Every Session
@@ -84,13 +84,13 @@ Note: `.agents/skills/**` is third-party design tooling, **not** part of the app
 5. Trace dependencies before editing. Then follow the Implementation Rules.
 
 ### Required reading order
-1. [PROJECT_KNOWLEDGE_BASE.md](PROJECT_KNOWLEDGE_BASE.md)
-2. [REPORT.md](REPORT.md)
-3. [ARCHITECTURE.md](ARCHITECTURE.md)
-4. [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md)
-5. [DEBUG_MASTER_PLAN.md](DEBUG_MASTER_PLAN.md)
-6. [FINAL_AUDIT.md](FINAL_AUDIT.md)
-7. [REPAIR_RULEBOOK.md](REPAIR_RULEBOOK.md)
+1. [PROJECT_KNOWLEDGE_BASE.md](docs/README.md)
+2. [REPORT.md](docs/audit/REPORT.md)
+3. [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md)
+4. [DEPENDENCY_GRAPH.md](docs/architecture/DEPENDENCY_GRAPH.md)
+5. [DEBUG_MASTER_PLAN.md](docs/engineering/DEBUG_MASTER_PLAN.md)
+6. [FINAL_AUDIT.md](docs/audit/FINAL_AUDIT.md)
+7. [REPAIR_RULEBOOK.md](docs/engineering/REPAIR_RULEBOOK.md)
 
 (For a focused fix you may read the issue-relevant sections rather than every doc end-to-end, but always verify against code.)
 
@@ -172,7 +172,7 @@ Verify end-to-end → Update docs → Mark issue complete → STOP.
 
 ## Safe Modification Rules (files needing extra care)
 
-Per [REPAIR_RULEBOOK.md](REPAIR_RULEBOOK.md) §8a. The old "never modify" label is superseded by a graded process; touching these requires an authorizing issue, minimal diff, full regression, and an implementation note:
+Per [REPAIR_RULEBOOK.md](docs/engineering/REPAIR_RULEBOOK.md) §8a. The old "never modify" label is superseded by a graded process; touching these requires an authorizing issue, minimal diff, full regression, and an implementation note:
 
 - `services/llm_service.py` — **additive only** (adding `get_embedding` for C-1 is allowed; don't alter generation/rotation). Raises at import without keys (H-7).
 - `services/llm_key_rotation.py` — additive + the authorized M-9 fix (sleep-under-lock). Concurrency-sensitive.
@@ -228,4 +228,4 @@ A successful Claude coding session:
 - Updates documentation in the same change (issue status, implementation note, dependency/contract docs, FINAL_AUDIT annotation).
 - Ends with a clear report of what changed, what was verified, and what regressions were checked — then **stops and waits**.
 
-*Operating manual only. No source code is modified by this file. Engineering rules: [REPAIR_RULEBOOK.md](REPAIR_RULEBOOK.md).*
+*Operating manual only. No source code is modified by this file. Engineering rules: [REPAIR_RULEBOOK.md](docs/engineering/REPAIR_RULEBOOK.md).*

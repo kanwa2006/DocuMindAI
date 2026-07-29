@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🧠 DocuMindAI
+<img src="frontend/public/logo.png" alt="DocuMindAI" width="180" />
+
+# DocuMindAI
 
 ### Grounded document intelligence, seven specialized AI workspaces, one production-grade platform.
 
@@ -14,9 +16,9 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL_16-pgvector%20%2B%20HNSW-336791?style=flat-square&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io)
 [![Celery](https://img.shields.io/badge/Celery-5-37814A?style=flat-square&logo=celery&logoColor=white)](https://docs.celeryq.dev)
-[![Tests](https://img.shields.io/badge/tests-82%20passing-brightgreen?style=flat-square)](backend/tests)
+[![Tests](https://img.shields.io/badge/tests-89%20passing-brightgreen?style=flat-square)](backend/tests)
 [![CI](https://img.shields.io/github/actions/workflow/status/kanwa2006/DocuMindAI/ci.yml?style=flat-square&label=CI&logo=github-actions&logoColor=white)](https://github.com/kanwa2006/DocuMindAI/actions)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue?style=flat-square)](RELEASE_NOTES_v1.0.0.md)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue?style=flat-square)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/kanwa2006/DocuMindAI?style=flat-square)](https://github.com/kanwa2006/DocuMindAI/stargazers)
 
@@ -155,9 +157,11 @@ If you're evaluating this repository as an engineer, these files are the highest
 | Streaming architecture | [`backend/app/api/v1/endpoints/query.py`](backend/app/api/v1/endpoints/query.py) (the SSE generator, cache, Veritas emission) |
 | Worker correctness | [`backend/app/workers/celery_app.py`](backend/app/workers/celery_app.py) (include/routes/queues kept in three-way agreement) and [`document_tasks.py`](backend/app/workers/tasks/document_tasks.py) (retry → dead-letter) |
 | OCR orchestration | [`backend/app/services/ocr_service.py`](backend/app/services/ocr_service.py) + [`ocr_orchestrator.py`](backend/app/services/ocr_orchestrator.py) |
-| Test philosophy | [`backend/tests/`](backend/tests) — 82 tests across 20+ files; nearly every one pins a real, once-shipped bug (worker registration drift, dimension mismatches, silent fallbacks, lock-held sleeps) |
+| Test philosophy | [`backend/tests/`](backend/tests) — 89 tests across 26 files; nearly every one pins a real, once-shipped bug (worker registration drift, dimension mismatches, silent fallbacks, lock-held sleeps) |
 
 The test suite doubles as an engineering changelog: names like `test_worker_registration.py`, `test_silent_degradation.py`, and `test_embedding_dimensions.py` tell you exactly which classes of production failure this codebase has learned to prevent structurally.
+
+**Full technical documentation lives in [`docs/`](docs/README.md)** — [system architecture](docs/architecture/ARCHITECTURE.md), [dependency graph and change-impact matrix](docs/architecture/DEPENDENCY_GRAPH.md), [per-workspace docs](docs/architecture/WORKSPACES.md), the [engineering rulebook](docs/engineering/REPAIR_RULEBOOK.md), and the [audit & deployment guide](docs/deployment/PROJECT_AUDIT_AND_DEPLOYMENT.md).
 
 ---
 
@@ -266,7 +270,9 @@ Flashcards generated from documents carry citations back to source and are sched
 
 **Target users:** academics, analysts. **Problem solved:** literature synthesis that doesn't fabricate.
 
-Citations follow extract-then-compute at its purest: the LLM extracts bibliographic metadata; **Python formatters** produce APA, MLA, IEEE, Chicago, BibTeX, and Vancouver — formatting is deterministic string logic, never generation. Cross-document **synthesis** clusters findings by embedding cosine similarity (Python), asks the LLM only to classify candidate cross-paper pairs (agree / contradict / unrelated), assigns severity in Python, and persists contradiction reports. Gap analysis surfaces unanswered questions across papers. The **Deep Research agent** (`POST /research/deep-research`, SSE) runs a four-step pipeline — document RAG → LLM gap identification → Tavily web search restricted to academic/government domains → synthesis — with a Veritas trust score on the document evidence and document-ownership validation before anything runs.
+Citations follow extract-then-compute at its purest: the LLM extracts bibliographic metadata; **Python formatters** produce APA, MLA, IEEE, Chicago, BibTeX, and Vancouver — formatting is deterministic string logic, never generation. Cross-document **synthesis** clusters findings by embedding cosine similarity (Python), asks the LLM only to classify candidate cross-paper pairs (agree / contradict / unrelated), assigns severity in Python, and persists contradiction reports. Gap analysis surfaces unanswered questions across papers. The **Deep Research agent** (`POST /research/deep-research`, SSE) runs a four-step pipeline — document RAG → LLM gap identification → web search restricted to academic/government domains → synthesis — with a Veritas trust score on the document evidence and document-ownership validation before anything runs.
+
+> **Status note — web search step.** Steps 1, 2 and 4 run today. Step 3 (web search) is implemented against Tavily but is **not active**: `TAVILY_API_KEY` is not declared in `Settings` and the `tavily` client is not in `requirements.txt`, so the call degrades to a logged warning and Deep Research proceeds on document evidence alone. Tracked in [docs/deployment/PROJECT_AUDIT_AND_DEPLOYMENT.md](docs/deployment/PROJECT_AUDIT_AND_DEPLOYMENT.md) §10.
 
 **Example workflow:** attach five papers to a project → synthesis groups findings and flags that Paper B's result contradicts Paper D's → deep research fills the gap from arXiv/PubMed, tagging every web-sourced claim `[Web Source]` → export the bibliography in IEEE.
 
@@ -320,7 +326,7 @@ The section for readers who evaluate systems by their failure modes.
 
 ### 9.1 Provider abstraction & dependency injection
 
-Every external capability sits behind a small ABC: `BaseLLMProvider` (generate / generate_stream), `BaseEmbeddingProvider`, `BaseRerankerProvider`, `BaseStorageProvider`, `BaseOCREngine`. Services take providers via **constructor injection** with production defaults — `LLMService(provider=None)` builds the Gemini provider lazily on first use, while tests inject doubles directly; FastAPI's `Depends` injects DB sessions and the authenticated user per-request. The payoff shows in the test suite: 82 tests exercise real service logic against injected providers with zero network calls.
+Every external capability sits behind a small ABC: `BaseLLMProvider` (generate / generate_stream), `BaseEmbeddingProvider`, `BaseRerankerProvider`, `BaseStorageProvider`, `BaseOCREngine`. Services take providers via **constructor injection** with production defaults — `LLMService(provider=None)` builds the Gemini provider lazily on first use, while tests inject doubles directly; FastAPI's `Depends` injects DB sessions and the authenticated user per-request. The payoff shows in the test suite: 89 tests exercise real service logic against injected providers with zero network calls.
 
 **Configuration-driven selection, honestly stated:** which *implemented* backend runs is pure config — `VECTOR_BACKEND` (pgvector default / in-memory dev fallback), `STORAGE_PROVIDER` (local/S3), `RERANKER_PROVIDER`, `OCR_SCANNED_ENABLED` — and scaling the LLM key fleet is a pure env change (next section). Adding a *new* provider (e.g., Anthropic) means implementing one small interface class; the orchestration pipeline doesn't change. Only Gemini is implemented today — that's a roadmap item, not a hidden gap.
 
@@ -658,7 +664,7 @@ See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy.
 │   │   │                            #   export, ocr, audio tasks
 │   │   └── automation/              # 7 Beat jobs (health, keys, digest, cleanup, …)
 │   ├── alembic/versions/            # 44 migrations (CI-enforced on clean pgvector)
-│   ├── tests/                       # 82 tests / 20+ files — each pins a real failure mode
+│   ├── tests/                       # 89 tests / 26 files — each pins a real failure mode
 │   └── load_tests/                  # Locust harness
 ├── frontend/
 │   └── src/
@@ -668,7 +674,8 @@ See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy.
 │       └── hooks/ · lib/store/      # onboarding, voice, session expiry; Zustand trial store
 ├── infrastructure/                  # Dockerfiles + docker-compose (db, pgbouncer, redis,
 │                                    #   backend, worker, beat, frontend)
-├── docs/                            # architecture map, deployment guide, screenshots
+├── docs/                            # architecture · engineering · audit history ·
+│                                    #   deployment guide · screenshots · demo documents
 └── .github/workflows/ci.yml         # blocking pip-audit · migrations · pytest · lint · build
 ```
 

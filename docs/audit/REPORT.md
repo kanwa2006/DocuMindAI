@@ -119,7 +119,7 @@ A trial-to-paid SaaS model. New users start on a **`trial` plan** capped at **10
  Observability: OpenTelemetry · Prometheus /metrics · Sentry · PostHog
 ```
 
-**Full detail in [ARCHITECTURE.md](ARCHITECTURE.md).**
+**Full detail in [ARCHITECTURE.md](../architecture/ARCHITECTURE.md).**
 
 ### The Query Pipeline (the product's core loop)
 
@@ -210,11 +210,11 @@ To keep the audit balanced, these are the parts that are production-grade or clo
 
 ## 8. How to Read the Rest of This Documentation Set
 
-- Start with **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full system model and data flows.
-- Use **[WORKSPACES.md](WORKSPACES.md)** as the per-workspace reference (features, APIs, tables, workers, limitations, improvement roadmap).
-- Use **[API_AUDIT.md](API_AUDIT.md)** and **[INTEGRATIONS.md](INTEGRATIONS.md)** for endpoint- and integration-level detail.
+- Start with **[ARCHITECTURE.md](../architecture/ARCHITECTURE.md)** for the full system model and data flows.
+- Use **[WORKSPACES.md](../architecture/WORKSPACES.md)** as the per-workspace reference (features, APIs, tables, workers, limitations, improvement roadmap).
+- Use **[API_AUDIT.md](../architecture/API_AUDIT.md)** and **[INTEGRATIONS.md](../architecture/INTEGRATIONS.md)** for endpoint- and integration-level detail.
 - **[SECURITY_AUDIT.md](SECURITY_AUDIT.md)** and **[QUALITY_AUDIT.md](QUALITY_AUDIT.md)** hold the risk analysis.
 - **[FINAL_AUDIT.md](FINAL_AUDIT.md)** is the single consolidated, severity-ranked issue list with evidence — use it as the backlog for the later debugging phase.
-- **[INTERVIEW_GUIDE.md](INTERVIEW_GUIDE.md)** translates the system into interview-ready explanations.
+- **[INTERVIEW_GUIDE.md](../engineering/INTERVIEW_GUIDE.md)** translates the system into interview-ready explanations.
 
 *Generated as read-only documentation. No fixes were applied; every issue is described, not changed.*

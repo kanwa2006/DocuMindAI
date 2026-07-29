@@ -4,8 +4,8 @@
 > Two problems this map describes were fixed long ago and are kept below only as history:
 > - **Doubled `/api/v1` prefix (A1):** resolved — all frontend calls go through `apiFetch` with no manual prefix.
 > - **Workspace-UUID crash:** resolved — `app/core/workspace.resolve_workspace_id()` (uuid5 over `NAMESPACE_DNS`, slug lowercased) is the single derivation everywhere.
-> The **"STABLE / never modify"** list at the bottom is superseded by [REPAIR_RULEBOOK.md §8a](../../REPAIR_RULEBOOK.md)'s graded extra-care process.
-> For current architecture use [ARCHITECTURE.md](../../ARCHITECTURE.md) and [DEPENDENCY_GRAPH.md](../../DEPENDENCY_GRAPH.md).
+> The **"STABLE / never modify"** list at the bottom is superseded by [REPAIR_RULEBOOK.md §8a](../engineering/REPAIR_RULEBOOK.md)'s graded extra-care process.
+> For current architecture use [ARCHITECTURE.md](ARCHITECTURE.md) and [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md).
 
 Architecture: **Next.js (App Router) frontend** ↔ **FastAPI backend** ↔ **Postgres + pgvector / FAISS** + **Redis** + **Celery workers**.
 

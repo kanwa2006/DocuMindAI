@@ -1,6 +1,6 @@
 # DocuMindAI — Dependency Graph & Engineering Handbook
 
-> **Purpose:** the permanent map of how DocuMindAI fits together — structure, call chains, data model, workers, external services, env vars, execution flows, import graph, change-impact, and a knowledge graph. Paired with [DEBUG_MASTER_PLAN.md](DEBUG_MASTER_PLAN.md) (what to fix) this lets another model repair the project without rediscovering the architecture.
+> **Purpose:** the permanent map of how DocuMindAI fits together — structure, call chains, data model, workers, external services, env vars, execution flows, import graph, change-impact, and a knowledge graph. Paired with [DEBUG_MASTER_PLAN.md](../engineering/DEBUG_MASTER_PLAN.md) (what to fix) this lets another model repair the project without rediscovering the architecture.
 > **Verification:** derived from direct source inspection and re-verified anchors. Where a relationship is inferred from usage rather than read line-by-line, it is marked *(inferred)*.
 > **Scope note:** `.agents/skills/**` is third-party design tooling checked into the repo and is **not** part of the application.
 
@@ -532,4 +532,4 @@ None fatal observed. `deep_research_agent` uses **function-local imports** (`fro
 
 ---
 
-*End of Dependency Graph. Documentation only — no code was modified. Use with [DEBUG_MASTER_PLAN.md](DEBUG_MASTER_PLAN.md) for the repair phase.*
+*End of Dependency Graph. Documentation only — no code was modified. Use with [DEBUG_MASTER_PLAN.md](../engineering/DEBUG_MASTER_PLAN.md) for the repair phase.*

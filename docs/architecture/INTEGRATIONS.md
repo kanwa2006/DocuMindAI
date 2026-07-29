@@ -80,7 +80,7 @@ Because `extra="ignore"`, several env vars in `.env.example` are **not** declare
 ### Razorpay — ⚠️ (feature-flagged, insecure default)
 - `endpoints/billing.py`: `RAZORPAY_ENABLED` (default **false**), `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` via `os.getenv`. `razorpay` in requirements.
 - **Production flow:** `/billing/create-order` → Razorpay checkout → `/billing/webhook` (HMAC-SHA256 `compare_digest` verification) → `_activate_plan`. This part is correctly implemented.
-- **Default flow:** with `RAZORPAY_ENABLED=false`, `/billing/upgrade` activates any plan (incl. enterprise) **for free** — a self-upgrade risk if deployed with the default. See [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
+- **Default flow:** with `RAZORPAY_ENABLED=false`, `/billing/upgrade` activates any plan (incl. enterprise) **for free** — a self-upgrade risk if deployed with the default. See [SECURITY_AUDIT.md](../audit/SECURITY_AUDIT.md).
 - Plan prices are in INR paise (`go` ₹799, `plus` ₹999, `pro` ₹2999).
 
 ---

@@ -1,6 +1,6 @@
 # DocuMindAI — Workspace Documentation
 
-Companion to [REPORT.md](REPORT.md) and [ARCHITECTURE.md](ARCHITECTURE.md). Each of the seven workspaces is documented individually. All seven frontend pages render the shared `components/WorkspaceUI.tsx` with a different `workspaceType`, so the **chat + upload + streaming** experience is common; what differs is the **backend router, models, Celery task, retrieval tuning, response schema, and domain panels**.
+Companion to [REPORT.md](../audit/REPORT.md) and [ARCHITECTURE.md](ARCHITECTURE.md). Each of the seven workspaces is documented individually. All seven frontend pages render the shared `components/WorkspaceUI.tsx` with a different `workspaceType`, so the **chat + upload + streaming** experience is common; what differs is the **backend router, models, Celery task, retrieval tuning, response schema, and domain panels**.
 
 ## Shared Foundations (apply to every workspace)
 
@@ -23,7 +23,7 @@ Companion to [REPORT.md](REPORT.md) and [ARCHITECTURE.md](ARCHITECTURE.md). Each
 - **Ownership/isolation:** every workspace query filters by `resolve_workspace_id(current_user["workspace_id"])` and `owner_id`.
 - **Async processing pattern:** `POST /<ws>/process?document_id=…` dispatches a Celery `process_*_batch` task; a simulated SSE `/<ws>/events/…` reports fake progress.
 
-> ⚠️ **Cross-workspace defect:** the `/<ws>/process` endpoints for **legal, finance, study, research** enqueue Celery tasks (`process_contract_batch`, `process_finance_batch`, `process_study_batch`, `process_research_batch`) whose modules are **not in the worker `include` list** (`workers/celery_app.py`). With the default Docker worker they will not execute. HR's `process_resume_batch` **is** registered. See [FINAL_AUDIT.md](FINAL_AUDIT.md).
+> ⚠️ **Cross-workspace defect:** the `/<ws>/process` endpoints for **legal, finance, study, research** enqueue Celery tasks (`process_contract_batch`, `process_finance_batch`, `process_study_batch`, `process_research_batch`) whose modules are **not in the worker `include` list** (`workers/celery_app.py`). With the default Docker worker they will not execute. HR's `process_resume_batch` **is** registered. See [FINAL_AUDIT.md](../audit/FINAL_AUDIT.md).
 
 > ⚠️ **Cross-workspace defect:** the per-workspace semantic search endpoints (`/legal/clauses/search`, `/finance/transactions/search`, `/study/search`, `/research/search`) call `llm_service.get_embedding()`, which **does not exist** → HTTP 500. The tutor/copilot chats call it too but catch the error and fall back to recency.
 

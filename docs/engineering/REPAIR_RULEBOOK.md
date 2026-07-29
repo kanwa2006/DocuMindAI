@@ -2,7 +2,7 @@
 
 > **Status:** Permanent engineering rulebook. Binding on every human and AI contributor who edits this repository.
 > **Authority:** This document governs *how* changes are made. It does not itself change code. Where it conflicts with older inline notes (e.g., the "STABLE files / never modify" list in `docs/architecture/project-map.md`), **this rulebook supersedes them** — see [§10 Architecture Preservation Rules](#10-architecture-preservation-rules).
-> **Companions:** [DEBUG_MASTER_PLAN.md](DEBUG_MASTER_PLAN.md) (what to fix), [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md) (how it connects), [FINAL_AUDIT.md](FINAL_AUDIT.md) (verified findings), [CLAUDE.md](CLAUDE.md) (session operating manual).
+> **Companions:** [DEBUG_MASTER_PLAN.md](DEBUG_MASTER_PLAN.md) (what to fix), [DEPENDENCY_GRAPH.md](../architecture/DEPENDENCY_GRAPH.md) (how it connects), [FINAL_AUDIT.md](../audit/FINAL_AUDIT.md) (verified findings), [CLAUDE.md](../../CLAUDE.md) (session operating manual).
 
 ---
 
@@ -510,4 +510,4 @@ For production incidents:
 9. **Update the docs in the same change; annotate, don’t delete, findings.**
 10. **Backwards compatible by default; breaking changes need approval + migration.**
 
-*End of Repair Rulebook. Documentation only — no code was modified. Read with [CLAUDE.md](CLAUDE.md).*
+*End of Repair Rulebook. Documentation only — no code was modified. Read with [CLAUDE.md](../../CLAUDE.md).*

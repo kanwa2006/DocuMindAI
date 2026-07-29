@@ -3,13 +3,13 @@
 > **Purpose:** A complete, dependency-ordered repair roadmap. Each issue is one self-contained implementation task with everything a repair model (Claude Fable 5) needs to fix it without rediscovering the architecture.
 > **Constraint for the repair phase:** this document does **not** modify code. It documents *what* to change and *why*. The actual edits happen later.
 > **Verification basis:** every finding below was re-verified against the live source (not trusted from prior docs). Line numbers reflect the current tree at audit time; the repair model should re-confirm exact lines before editing.
-> **Companion:** [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md) (structure, flows, import graph, change-impact matrix). Source findings: [FINAL_AUDIT.md](FINAL_AUDIT.md).
+> **Companion:** [DEPENDENCY_GRAPH.md](../architecture/DEPENDENCY_GRAPH.md) (structure, flows, import graph, change-impact matrix). Source findings: [FINAL_AUDIT.md](../audit/FINAL_AUDIT.md).
 
 ## How to use this file
 - Work **top-down by phase** (Phase 1 = Critical first). Within a phase, follow the **Safe Implementation Order** table at the end.
 - Each task lists **Dependencies** (must be done first) and **Blocks** (what waits on it).
 - "Estimated token usage" is a planning hint for the repair model's own budget (read + edit + verify for that task).
-- Legend for IDs: `C-*` Critical, `H-*` High, `M-*` Medium, `L-*` Low. IDs are stable and match [FINAL_AUDIT.md](FINAL_AUDIT.md) where possible; split/newly-discovered issues get fresh IDs (noted).
+- Legend for IDs: `C-*` Critical, `H-*` High, `M-*` Medium, `L-*` Low. IDs are stable and match [FINAL_AUDIT.md](../audit/FINAL_AUDIT.md) where possible; split/newly-discovered issues get fresh IDs (noted).
 
 ---
 
@@ -1179,4 +1179,4 @@ L-1 (docs) · L-2 (artifacts) · L-3 (exam S3 path) · L-4 (diagram stub) · L-5
 
 ---
 
-*End of Debug Master Plan. This is documentation only — no code was modified. Pair with [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md) so the repair model has both the "what/why to fix" (this file) and the "how it all connects" (that file).*
+*End of Debug Master Plan. This is documentation only — no code was modified. Pair with [DEPENDENCY_GRAPH.md](../architecture/DEPENDENCY_GRAPH.md) so the repair model has both the "what/why to fix" (this file) and the "how it all connects" (that file).*

@@ -1,6 +1,6 @@
 # DocuMindAI — System Architecture & Data Flows
 
-Companion to [REPORT.md](REPORT.md). This document describes every subsystem, the folder structure, and the end-to-end execution flows. Everything here is derived from direct source inspection.
+Companion to [REPORT.md](../audit/REPORT.md). This document describes every subsystem, the folder structure, and the end-to-end execution flows. Everything here is derived from direct source inspection.
 
 ---
 
@@ -119,7 +119,7 @@ The frontend convention (`frontend/src/lib/api.ts`): `NEXT_PUBLIC_API_URL` alrea
 
 **Device fingerprint:** `@fingerprintjs/fingerprintjs` computes a `visitorId`; sent as `X-Device-ID`. `DeviceFingerprintMiddleware` blocks a second trial registration from the same device (Redis key `device_trial:{id}`).
 
-**Tenant context:** `TenantContextMiddleware` decodes the JWT to set `request.state.collection_name = docuMind_{user_id}` (or `docuMind_org_{org_id}` when `VECTOR_ISOLATION_MODE=organization`). ⚠️ It decodes with `algorithms=["HS256","RS256"]`, unlike the hardened `auth.py` — see [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
+**Tenant context:** `TenantContextMiddleware` decodes the JWT to set `request.state.collection_name = docuMind_{user_id}` (or `docuMind_org_{org_id}` when `VECTOR_ISOLATION_MODE=organization`). ⚠️ It decodes with `algorithms=["HS256","RS256"]`, unlike the hardened `auth.py` — see [SECURITY_AUDIT.md](../audit/SECURITY_AUDIT.md).
 
 **Workspace identity** (`core/workspace.resolve_workspace_id`): `User.workspace_id` is a slug string (default `"general"`), but table columns like `ChatSession.workspace_id` are UUIDs. The resolver passes real UUID strings through unchanged and hashes slugs via `uuid.uuid5(NAMESPACE_DNS, slug.lower())` — deterministic, no `Workspace` table needed. `endpoints/documents.py` uses matching `uuid.uuid5(NAMESPACE_DNS, …)` inline fallbacks (a latent casing inconsistency: the resolver lowercases, the inline version does not).
 
@@ -184,7 +184,7 @@ Filters always applied: `Document.status == READY`, optional `workspace_id`, opt
 - `_safe_extract_text`: never crashes on empty parts / `finish_reason` 2 (MAX_TOKENS), 3 (SAFETY), 4 (RECITATION) — returns friendly messages.
 - `generate_json`: JSON-repair loop (strip fences → `json.loads` → Pydantic validate → re-prompt on failure, up to 3 attempts).
 - **`llm_service = LLMService()`** is a module-level singleton that **raises `RuntimeError` at import time** if no Gemini keys and `ENVIRONMENT != "test"` — so the backend cannot import the query stack without keys.
-- **No `get_embedding` method exists** on `LLMService`/`GeminiLLMProvider`, yet several endpoints call it (see [FINAL_AUDIT.md](FINAL_AUDIT.md)).
+- **No `get_embedding` method exists** on `LLMService`/`GeminiLLMProvider`, yet several endpoints call it (see [FINAL_AUDIT.md](../audit/FINAL_AUDIT.md)).
 
 ### 6.6 Veritas (`services/veritas_engine.py`, "never modify")
 `compute_trust_score(answer, primary_chunks, query, …)` returns a 0–100 score from five weighted factors with **hardcoded values**:
@@ -237,7 +237,7 @@ There is also a WebSocket router (`endpoints/ws.py`) mounted at the API root, de
 - `ocr_tasks` (queue `ocr_gpu_queue`), `export_tasks` (queue `export_queue`), `embedding/retrieval_tasks` (own queues) ⚠️ **not consumed** by `-Q main-queue,celery`.
 - **No Celery Beat service** exists in `docker-compose.yml`, so no scheduled automation runs by default.
 
-See [FINAL_AUDIT.md](FINAL_AUDIT.md) for severity.
+See [FINAL_AUDIT.md](../audit/FINAL_AUDIT.md) for severity.
 
 ---
 
@@ -328,4 +328,4 @@ Cloud deployment descriptor. `.env.example` documents a GitHub Student Pack stac
 - **Workers:** synchronous SQLAlchemy sessions inside Celery tasks; async services invoked via a fresh event loop where needed (proactive insights).
 - **Known blocking spots:** `GeminiKeyRotator.get_key()` calls `time.sleep()` while holding its lock; embedding/reranker model loads are heavy and lazy; the NumPy vector fallback materializes all chunk embeddings in memory.
 
-See [QUALITY_AUDIT.md](QUALITY_AUDIT.md) for the full concurrency/performance analysis.
+See [QUALITY_AUDIT.md](../audit/QUALITY_AUDIT.md) for the full concurrency/performance analysis.
