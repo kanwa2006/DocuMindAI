@@ -1,0 +1,100 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# OPTIONAL slim dependency set for free / low-tier hosting.
+#
+# requirements.txt is the canonical, full-feature set — this file changes NOTHING
+# about the application code. It exists because the full set pulls paddlepaddle +
+# docling + layoutparser (multi-GB, torch underneath), which exceeds the image
+# size and build timeout of every free hosting tier.
+#
+# USE THIS ONLY IF the full requirements.txt fails to build on your host.
+#
+# ── What is DROPPED, and exactly what degrades ───────────────────────────────
+#   paddleocr, paddlepaddle, docling, layoutparser
+#     → Scanned/image-only PDF OCR and the table extractor stop working.
+#       Both are LAZY imports (services/ocr_orchestrator.py:17,34 and
+#       services/table_extractor.py:25,110), so the app still boots and
+#       text-based PDF/DOCX/PPTX ingestion is unaffected.
+#       YOU MUST ALSO SET  OCR_SCANNED_ENABLED=false  or scanned uploads will
+#       fail loudly at ingestion time instead of falling back quietly.
+#
+#   qdrant-client
+#     → Only imported when VECTOR_BACKEND=qdrant (documents.py:570, lazy).
+#       Keep VECTOR_BACKEND=pgvector, which is the default.
+#
+# ── What is KEPT, and why it cannot be dropped ───────────────────────────────
+#   sentence-transformers / transformers
+#     → REQUIRED. reranker_service.LocalCrossEncoder.get_model() imports
+#       CrossEncoder at first query; without it every query raises ImportError.
+#       The cross-encoder model itself (~80MB) downloads on first use.
+#       NOTE: BAAI/bge-m3 (~2.2GB) will likely fail to load on a small instance;
+#       embedding_service.LocalEmbeddingProvider catches that and falls back to
+#       GeminiEmbeddingProvider (768-dim zero-padded to 1024). That fallback is
+#       self-consistent on a FRESH database because index-time and query-time
+#       embeddings go through the identical path. Do not mix it into a corpus
+#       that was already indexed with bge-m3.
+#
+#   opentelemetry-* / prometheus-client
+#     → REQUIRED at boot. core/telemetry.py imports them at module level and
+#       main.py imports setup_telemetry at module level, so they load even when
+#       OTEL_ENABLED=false and PROMETHEUS_ENABLED=false.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+passlib[bcrypt]==1.7.4
+# passlib 1.7.4's bcrypt handler is incompatible with bcrypt >= 4.1.
+bcrypt==4.0.1
+PyJWT>=2.8.0
+slowapi>=0.1.9
+
+# ── Web framework ────────────────────────────────────────────────────────────
+# PINNED for reproducibility — must match requirements.txt. See the note there
+# before bumping (FastAPI >= 0.140 changes how routes are represented
+# internally, but not what the app serves).
+fastapi==0.136.1
+starlette==1.0.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.3
+pydantic-settings>=2.1.0
+python-multipart>=0.0.9
+aiofiles>=23.2.1
+python-dotenv>=1.0.0
+
+# ── Database ─────────────────────────────────────────────────────────────────
+sqlalchemy>=2.0.25
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9
+alembic>=1.13.1
+pgvector>=0.2.5
+
+# ── Queue / cache ────────────────────────────────────────────────────────────
+celery>=5.3.6
+redis>=5.0.1
+aioredis>=2.0.0
+
+# ── Document extraction (text-based only) ────────────────────────────────────
+PyMuPDF>=1.23.8
+pymupdf4llm>=0.0.17
+python-docx>=1.1.0
+python-pptx>=0.6.23
+fpdf2>=2.7.9
+
+# ── Retrieval / ML (required — see note above) ───────────────────────────────
+sentence-transformers>=2.7.0
+transformers>=4.37.2
+numpy>=1.26.0
+
+# ── LLM ──────────────────────────────────────────────────────────────────────
+google-generativeai>=0.8.0
+
+# ── Billing / storage / errors ───────────────────────────────────────────────
+razorpay>=1.4.1
+boto3>=1.34.0
+sentry-sdk>=1.40.0
+
+# ── Observability (imported at boot — do not remove) ─────────────────────────
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+opentelemetry-instrumentation-fastapi>=0.41b0
+opentelemetry-instrumentation-celery>=0.41b0
+opentelemetry-exporter-prometheus>=0.41b0
+prometheus-client>=0.17.1

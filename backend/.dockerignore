@@ -2,4 +2,6 @@ __pycache__
 *.pyc
 .venv
 venv
-alembic/versions/*
+# NOTE: alembic/versions must NOT be excluded here. It was, which shipped an
+# image containing zero migration files — `alembic upgrade head` (the container
+# start command) then "succeeded" against a completely empty schema.

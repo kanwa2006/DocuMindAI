@@ -1,12 +1,42 @@
-FROM node:20-alpine
+# BUILD CONTEXT: the repository ROOT (see infrastructure/docker-compose.yml).
+#
+# Two targets:
+#   --target dev  → `next dev`, for the bind-mounted docker-compose workflow
+#   (default)     → `next build` + `next start`, an actual production image
+# The previous single-stage image ran `npm run dev` unconditionally; a dev
+# server must never be what gets deployed.
 
+FROM node:20-alpine AS deps
 WORKDIR /app
-
-# Install dependencies
-COPY package.json package-lock.json* ./
+COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
 
-# Copy source
-COPY . .
-
+# ── Development target (used by docker-compose) ──────────────────────────────
+FROM deps AS dev
+WORKDIR /app
+COPY frontend .
+ENV NEXT_TELEMETRY_DISABLED=1
+EXPOSE 3000
 CMD ["npm", "run", "dev"]
+
+# ── Production build ─────────────────────────────────────────────────────────
+FROM deps AS builder
+WORKDIR /app
+COPY frontend .
+# NEXT_PUBLIC_* values are inlined into the bundle at build time, so the API
+# URL has to be present here — setting it only at runtime has no effect.
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY --from=builder /app/package.json /app/package-lock.json* ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+EXPOSE 3000
+CMD ["sh", "-c", "npx next start -p ${PORT:-3000}"]

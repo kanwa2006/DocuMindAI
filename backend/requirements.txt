@@ -4,7 +4,18 @@ passlib[bcrypt]==1.7.4
 # even on short passwords). Pin to the last 4.0.x, which passlib supports.
 # Unpinned, a fresh CI install resolved to bcrypt 5.x and broke password hashing.
 bcrypt==4.0.1
-fastapi>=0.109.0
+# PINNED for reproducibility: these are the exact versions the test suite is
+# validated against, so a fresh CI/Docker install matches the local venv rather
+# than resolving to whatever is newest that day.
+#
+# Note for whoever bumps these: FastAPI >= 0.140 nests routes under a mounted
+# sub-router instead of flattening them, so `len(app.routes)` drops from 166 to
+# 7 for this app. That is an internal representation change ONLY — both versions
+# serve the same 139 OpenAPI paths and respond identically (verified over HTTP).
+# Do not treat that counter as a regression signal; tests/test_route_registration.py
+# asserts on the OpenAPI surface precisely because it is version-independent.
+fastapi==0.136.1
+starlette==1.0.0
 uvicorn[standard]>=0.27.0
 pydantic>=2.5.3
 pydantic-settings>=2.1.0

@@ -1,30 +1,50 @@
 # PHASE 11: DEPLOYMENT HARDENING
 # Multi-stage Docker build to keep production image size down, especially given ML payload
+#
+# BUILD CONTEXT: the repository ROOT (not backend/).
+#   docker build -f infrastructure/Dockerfile.backend .
+# Docker forbids `COPY ../` — a COPY source can never escape the build context —
+# so every path below is repo-root-relative. infrastructure/docker-compose.yml
+# and railway.json both pass the repo root as the context to match.
 
 # Stage 1: Builder
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 WORKDIR /app
-COPY ../backend/requirements.txt .
+COPY backend/requirements.txt .
 RUN apt-get update && apt-get install -y build-essential libpq-dev && rm -rf /var/lib/apt/lists/*
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
+# NOTE: no --no-deps here. With it, only the ~40 top-level requirements were
+# wheeled and their transitive dependencies were not; the final stage then ran
+# `pip install /wheels/*`, which pins every wheel to an exact file while
+# resolving the missing transitive deps fresh from PyPI. That combination is
+# unsatisfiable and failed the build with ResolutionImpossible. Wheeling the
+# full dependency closure and installing via the requirements file lets pip
+# resolve once, in the builder, exactly as a normal install would.
+RUN pip wheel --no-cache-dir --wheel-dir /app/wheels -r requirements.txt
 
 # Stage 2: Production Engine
 FROM python:3.11-slim
 WORKDIR /app
 
-# Install runtime dependencies (OpenCV requires libgl1)
+# Install runtime dependencies (OpenCV requires libgl1; curl for the healthcheck)
 RUN apt-get update && \
-    apt-get install -y libpq-dev libgl1 libglib2.0-0 tesseract-ocr poppler-utils && \
+    apt-get install -y libpq-dev libgl1 libglib2.0-0 tesseract-ocr poppler-utils curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy compiled wheels and install
+# Copy compiled wheels and install. --no-index keeps this hermetic: everything
+# must come from the wheels built above, so the image cannot drift from what
+# the builder resolved.
 COPY --from=builder /app/wheels /wheels
-RUN pip install --no-cache /wheels/*
+COPY backend/requirements.txt .
+RUN pip install --no-cache --no-index --find-links=/wheels -r requirements.txt
 
-# Copy Application Code
-COPY ../backend /app
+# Copy Application Code. This must include alembic/ and alembic.ini — the
+# deployment start command runs `alembic upgrade head`, which silently no-ops
+# when the versions/ directory is absent from the image.
+COPY backend /app
 
 # Ensure Python runs unbuffered
 ENV PYTHONUNBUFFERED=1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Bind to $PORT when the platform injects one (Railway/Render), else 8000.
+EXPOSE 8000
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

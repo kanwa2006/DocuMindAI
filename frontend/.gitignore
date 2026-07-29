@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but the template carries no secrets and MUST be committed, otherwise a
+# fresh clone has no record of which NEXT_PUBLIC_* vars the build needs.
+!.env.example
 
 # vercel
 .vercel

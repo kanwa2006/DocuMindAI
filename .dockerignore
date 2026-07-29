@@ -1,0 +1,44 @@
+# Build context is the REPOSITORY ROOT (see infrastructure/Dockerfile.backend
+# and railway.json). Without this file the context would include node_modules,
+# the Python venv and .next — several GB pushed to the daemon on every build.
+#
+# NOTE: do NOT exclude backend/alembic/versions — the runtime start command
+# runs `alembic upgrade head`, which is a no-op if the migrations are missing.
+
+.git
+.github
+.claude
+.agents
+
+# Dependencies / virtualenvs
+**/node_modules
+backend/venv
+backend/.venv
+**/__pycache__
+**/*.py[cod]
+
+# Build outputs
+frontend/.next
+frontend/out
+frontend/build.log
+frontend/tmp
+**/*.tsbuildinfo
+frontend/next-env.d.ts
+
+# Local caches
+**/.pytest_cache
+**/.mypy_cache
+backend/celerybeat-schedule*
+
+# Secrets — never bake env files into an image
+**/.env
+**/.env.*
+!**/.env.example
+
+# Docs & demo media (not needed at runtime)
+docs
+*.md
+!README.md
+
+# Local uploaded files
+backend/storage

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: ankane/pgvector:v0.5.1
@@ -48,8 +46,8 @@ services:
 
   backend:
     build:
-      context: ../backend
-      dockerfile: ../infrastructure/Dockerfile.backend
+      context: ..
+      dockerfile: infrastructure/Dockerfile.backend
     ports:
       - "8000:8000"
     volumes:
@@ -87,8 +85,8 @@ services:
 
   worker:
     build:
-      context: ../backend
-      dockerfile: ../infrastructure/Dockerfile.backend
+      context: ..
+      dockerfile: infrastructure/Dockerfile.backend
     volumes:
       - ../backend:/app
       - storage_data:/tmp/documind_storage
@@ -127,8 +125,8 @@ services:
   # The schedule file lives in /tmp so it never pollutes the bind mount.
   beat:
     build:
-      context: ../backend
-      dockerfile: ../infrastructure/Dockerfile.backend
+      context: ..
+      dockerfile: infrastructure/Dockerfile.backend
     volumes:
       - ../backend:/app
     # Beat needs the same env as the worker: auto_health_check probes Gemini,
@@ -153,8 +151,9 @@ services:
 
   frontend:
     build:
-      context: ../frontend
-      dockerfile: ../infrastructure/Dockerfile.frontend
+      context: ..
+      dockerfile: infrastructure/Dockerfile.frontend
+      target: dev
     ports:
       - "3000:3000"
     volumes:
