@@ -34,7 +34,7 @@ export const metadata: Metadata = {
   title: { default: 'DocuMindAI', template: '%s — DocuMindAI' },
   description: 'Trusted document intelligence with grounded answers.',
   applicationName: 'DocuMindAI',
-  icons: { icon: '/favicon.svg', apple: '/apple-touch-icon.png' },
+  icons: { icon: '/favicon.ico', apple: '/apple-touch-icon.png' },
   openGraph: {
     title: 'DocuMindAI',
     description: 'Trusted document intelligence with grounded answers.',
