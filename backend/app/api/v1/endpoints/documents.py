@@ -592,11 +592,15 @@ async def delete_document(
     try:
         import aioredis
         redis = await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
-        uid = current_user["id"]
-        keys = await redis.keys(f"retrieval:uid_{uid}:*")
-        if keys:
-            await redis.delete(*keys)
-        await redis.close()
+        # close() in a finally: keys()/delete() raising would otherwise skip it
+        # and leak the connection via the except branch below.
+        try:
+            uid = current_user["id"]
+            keys = await redis.keys(f"retrieval:uid_{uid}:*")
+            if keys:
+                await redis.delete(*keys)
+        finally:
+            await redis.close()
         cache_cleared = True
     except Exception as exc:
         logger.warning("[delete_document] Redis cache purge failed: %s", exc)

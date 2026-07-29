@@ -58,9 +58,14 @@ async def health_check():
     # Check Redis
     try:
         r = redis.from_url(settings.REDIS_URL)
-        await r.ping()
-        status["redis"] = "ok"
-        await r.close()
+        # close() in a finally: a failing ping() (the exact case this endpoint
+        # exists to detect) would otherwise skip it. Health is polled
+        # continuously, so a Redis outage leaked a connection per probe.
+        try:
+            await r.ping()
+            status["redis"] = "ok"
+        finally:
+            await r.close()
     except Exception as e:
         logger.error(f"[health] Redis check failed: {e}")
         status["redis"] = "error"
@@ -95,9 +100,14 @@ async def detailed_health_check(
 
     try:
         r = redis.from_url(settings.REDIS_URL)
-        await r.ping()
-        status["redis"] = "ok"
-        await r.close()
+        # close() in a finally: a failing ping() (the exact case this endpoint
+        # exists to detect) would otherwise skip it. Health is polled
+        # continuously, so a Redis outage leaked a connection per probe.
+        try:
+            await r.ping()
+            status["redis"] = "ok"
+        finally:
+            await r.close()
     except Exception as e:
         logger.error(f"[health] Redis check failed: {e}")
         status["redis"] = "error"

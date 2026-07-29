@@ -126,8 +126,14 @@ async def _get_cached_retrieval(cache_key: str) -> Any:
     try:
         import aioredis
         redis = await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
-        cached = await redis.get(cache_key)
-        await redis.close()
+        # close() must be in a finally: when redis.get() raises (dropped
+        # connection, timeout), the outer `except Exception: pass` swallows it
+        # and the connection is leaked. This runs on every query, so a Redis
+        # blip used to exhaust the pool. Matches auth.py/feedback.py style.
+        try:
+            cached = await redis.get(cache_key)
+        finally:
+            await redis.close()
         if cached:
             return json_module.loads(cached)
     except Exception:
@@ -139,8 +145,10 @@ async def _set_cached_retrieval(cache_key: str, payload: Any, ttl: int = 300) ->
     try:
         import aioredis
         redis = await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
-        await redis.setex(cache_key, ttl, json_module.dumps(payload, default=str))
-        await redis.close()
+        try:
+            await redis.setex(cache_key, ttl, json_module.dumps(payload, default=str))
+        finally:
+            await redis.close()
     except Exception:
         pass
 
