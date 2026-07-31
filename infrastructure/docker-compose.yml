@@ -19,6 +19,13 @@ services:
     image: edoburu/pgbouncer:latest
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-documind}
+      # LISTEN_PORT must be set explicitly. The edoburu/pgbouncer image defaults
+      # to listening on 5432, but the port mapping below, the healthcheck, and
+      # the backend/worker `POSTGRES_PORT=6432` all target 6432. Without this the
+      # healthcheck probed a closed port and stayed "unhealthy" forever, which
+      # blocked worker and beat (they depend on pgbouncer being healthy) while
+      # the backend silently could not reach the pooler over the Docker network.
+      - LISTEN_PORT=6432
       - POOL_MODE=transaction
       - MAX_CLIENT_CONN=1000
       - DEFAULT_POOL_SIZE=20
@@ -116,7 +123,35 @@ services:
       retries: 5
     # H-3: every routed queue needs a consumer — export_queue and
     # ocr_gpu_queue are consumed here until a dedicated (GPU) worker exists.
-    command: celery -A app.workers.celery_app worker -Q main-queue,celery,export_queue,ocr_gpu_queue --loglevel=info
+    # NOTE: do NOT add `--max-tasks-per-child=0` here. Billiard's prefork pool
+    # asserts `maxtasks is None or (int and > 0)`, so 0 crash-loops the worker
+    # (verified: AssertionError in billiard/pool.py:241, queue backed up to 134
+    # tasks). `--pool=solo` in scripts/run_worker_windows.ps1 does not hit this
+    # because the solo pool ignores the setting.
+    #
+    # celery_app.conf sets worker_max_tasks_per_child=50, which costs a 65.7s
+    # bge-m3 reload every 50 tasks. That is a real cost, but the recycle also
+    # bounds memory growth from the ML models — removing it is a performance
+    # trade-off that belongs in the directive's Phase 4 with measurement, not
+    # an unmeasured flag here.
+    #
+    # P0-5: --concurrency MUST be explicit. Celery's prefork default is
+    # os.cpu_count() (8 on this host), and each child owns its own SQLAlchemy
+    # pool — so the worker's share of the database connection budget silently
+    # changed with whatever machine it ran on. That is not sizable at deploy
+    # time, which is what made the Supabase ceiling impossible to respect.
+    #
+    # Budget arithmetic against Supabase SESSION mode's project-wide cap of 15:
+    #   API    DB_POOL_SIZE 3 + DB_MAX_OVERFLOW 2                      =  5
+    #   worker 2 children x (WORKER_DB_POOL_SIZE 1 + OVERFLOW 1)       =  4
+    #   beat   1 x (1 + 1)                                             =  2
+    #   /health unpooled psycopg2 ping (transient, every 10s)          =  1
+    #                                                                   ----
+    #                                                                    12 / 15
+    # Raise this together with the pool settings once the deployment moves to
+    # TRANSACTION mode, where a server connection is held only for the length
+    # of a transaction instead of the whole client session.
+    command: celery -A app.workers.celery_app worker -Q main-queue,celery,export_queue,ocr_gpu_queue --concurrency=2 --loglevel=info
 
   # H-2: Celery Beat scheduler. Without it none of the beat_schedule entries
   # (health check, key rotation, daily digest, db cleanup, subscription/GST/

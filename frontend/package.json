@@ -15,7 +15,6 @@
     "@heroicons/react": "^2.2.0",
     "@sentry/nextjs": "^10.53.1",
     "@tanstack/react-virtual": "^3.13.24",
-    "canvas": "^3.2.3",
     "next": "16.2.6",
     "posthog-js": "^1.374.2",
     "react": "19.2.4",

@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.signals import worker_process_init
 from app.core.config import settings
 from app.core.telemetry import setup_telemetry
 
@@ -102,6 +103,33 @@ celery_app.conf.update(
     enable_utc=True,
     worker_max_tasks_per_child=50,
 )
+
+
+@worker_process_init.connect
+def _dispose_inherited_db_pool(**_kwargs):
+    """
+    P0-5: drop the SQLAlchemy pool inherited from the Celery parent.
+
+    `app.db.session` builds `sync_engine` at import time, which happens in the
+    parent process. Every prefork child is fork()ed from that parent and
+    therefore inherits its pool — including any live TCP sockets in it. Two
+    processes writing to one socket interleave their traffic and corrupt the
+    wire protocol, which surfaces as spurious "server closed the connection
+    unexpectedly" / "prepared statement does not exist" errors that look like
+    database faults rather than fork faults.
+
+    `worker_max_tasks_per_child=50` makes this recurring, not one-off: every
+    child recycle forks a fresh child off the same parent.
+
+    close=False is REQUIRED, not an optimisation. The default close=True would
+    close the inherited connections — but those file descriptors are shared
+    with the parent, so closing them here severs connections the parent still
+    believes it owns. close=False abandons the pool's references without
+    touching the sockets, letting the child open its own connections lazily.
+    """
+    from app.db.session import sync_engine
+
+    sync_engine.dispose(close=False)
 
 # Initialize Distributed Tracing for Celery Worker Threads
 setup_telemetry(is_worker=True)

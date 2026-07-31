@@ -4,7 +4,7 @@ from sqlalchemy import text
 from app.db.session import get_db
 
 import psycopg2
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 import asyncio
 import redis.asyncio as redis
 
@@ -23,12 +23,26 @@ def _db_ping():
 
     u = urlparse(settings.sync_database_url)
 
+    # urlparse() does NOT percent-decode userinfo, but psycopg2's keyword
+    # arguments expect the literal credential. A password containing any
+    # character that must be encoded in a URL — '@' as %40 is the common case,
+    # and Supabase-generated passwords frequently contain one — was therefore
+    # sent verbatim ("Kanwams%4012345" instead of "Kanwams@12345") and rejected.
+    #
+    # This was not a harmless false alarm: the healthcheck re-runs every 10s, so
+    # each failure became another rejected login against the upstream. Supabase's
+    # Supavisor pooler tripped its circuit breaker after ~210 attempts
+    # (ECIRCUITBREAKER) and began refusing *all* new connections, including the
+    # correctly-authenticated ones used by the application itself.
+    #
+    # SQLAlchemy decodes this for us on the async engine path; only this direct
+    # psycopg2 call needed it.
     conn = psycopg2.connect(
         host=u.hostname,
         port=u.port or 5432,
         dbname=u.path.lstrip("/"),
-        user=u.username,
-        password=u.password or "",
+        user=unquote(u.username or ""),
+        password=unquote(u.password or ""),
         # H-9: forcing require here broke health against non-SSL local/compose
         # Postgres; prefer negotiates SSL when the server offers it.
         sslmode="prefer" if _is_local_db_host(settings.sync_database_url) else "require",

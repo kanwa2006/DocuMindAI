@@ -1,0 +1,10 @@
+# TEMPORARY, not part of the tracked project. Used only for this manual test
+# session because host port 6380 is already bound by a pre-existing
+# "documind-demo-redis" container this session did not create. Remaps only
+# the HOST-side publish port for the compose-managed redis service to 6381;
+# internal container-to-container traffic still uses redis:6379 and is
+# unaffected. Delete this file after testing — it is not meant to be committed.
+services:
+  redis:
+    ports: !override
+      - "6381:6379"

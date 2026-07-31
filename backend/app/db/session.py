@@ -45,7 +45,15 @@ def get_engine_args(url: str, is_async: bool):
 
 async_url, async_args = get_engine_args(settings.async_database_url, is_async=True)
 
-# FIX 6.5: Connection pool tuning — prevents exhaustion under concurrent SSE loads
+# P0-5: the connection budget is sized in core/config.py, NOT here, because it
+# has to be tunable per deployment tier — it must fit under the ceiling of
+# whatever pooler is in front of Postgres. See the comment on DB_POOL_SIZE.
+#
+# The previous hardcoded pool_size=10/max_overflow=20 allowed the API alone to
+# open 30 connections against Supabase session mode's project-wide cap of 15.
+# SQLAlchemy retains pooled connections after use, so this did not merely spike
+# under load — it held the ceiling permanently. Measured with worker and beat
+# stopped: 14 idle + 1 active = 15/15 consumed by the API at rest.
 _is_sqlite = "sqlite" in async_url
 engine = create_async_engine(
     async_url,
@@ -53,8 +61,11 @@ engine = create_async_engine(
     future=True,
     # SQLite doesn't support pool parameters
     **({} if _is_sqlite else {
-        "pool_size": 10,
-        "max_overflow": 20,
+        "pool_size": settings.DB_POOL_SIZE,
+        "max_overflow": settings.DB_MAX_OVERFLOW,
+        # Essential in front of a pooler: Supavisor can drop a server-side
+        # connection under us, and a stale pooled connection would otherwise
+        # surface as a request-time error rather than a transparent reconnect.
         "pool_pre_ping": True,
         "pool_recycle": 3600,
     }),
@@ -73,6 +84,31 @@ async def get_db():
 
 
 # Sync Engine for Celery Workers
+#
+# P0-5: this engine is created at IMPORT time, in the Celery parent process,
+# and every prefork child inherits it across fork(). Two consequences:
+#
+#   1. Sizing is PER CHILD, so the effective ceiling is
+#      concurrency x (pool_size + max_overflow). SQLAlchemy's unstated default
+#      is 5+10=15, which meant a single worker child could consume the entire
+#      15-connection session-mode budget, and eight of them could ask for 120.
+#   2. Inherited pooled connections are shared TCP sockets. Two processes
+#      writing to one socket corrupts the protocol stream. app/workers/
+#      celery_app.py disposes the inherited pool in worker_process_init; see
+#      the comment there for why it must use close=False.
 sync_url, sync_args = get_engine_args(settings.sync_database_url, is_async=False)
-sync_engine = create_engine(sync_url, pool_pre_ping=True, **sync_args)
+# SQLite is a supported URL here (see get_engine_args above and
+# retrieval_service.py) and its pool implementation rejects pool_size /
+# max_overflow, so apply the budget only on real pooled backends.
+_sync_is_sqlite = "sqlite" in sync_url
+sync_engine = create_engine(
+    sync_url,
+    pool_pre_ping=True,
+    **({} if _sync_is_sqlite else {
+        "pool_size": settings.WORKER_DB_POOL_SIZE,
+        "max_overflow": settings.WORKER_DB_MAX_OVERFLOW,
+        "pool_recycle": 3600,
+    }),
+    **sync_args,
+)
 SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)

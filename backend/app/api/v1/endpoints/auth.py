@@ -75,7 +75,12 @@ async def login(
         httponly=True,
         secure=IS_PRODUCTION,
         samesite="strict",
-        max_age=15 * 60,
+        # Cookie lifetime must track the JWT's own lifetime. This was hardcoded
+        # to 15 minutes while ACCESS_TOKEN_EXPIRE_MINUTES defaults to 60, so the
+        # browser discarded a still-valid token after 15 minutes; the next
+        # mutation 401'd, the refresh attempt 401'd too, and the user was
+        # silently logged out mid-session.
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         path="/"
     )
 
@@ -123,7 +128,12 @@ async def refresh_session(request: Request, response: Response):
         httponly=True,
         secure=IS_PRODUCTION,
         samesite="strict",
-        max_age=15 * 60,
+        # Cookie lifetime must track the JWT's own lifetime. This was hardcoded
+        # to 15 minutes while ACCESS_TOKEN_EXPIRE_MINUTES defaults to 60, so the
+        # browser discarded a still-valid token after 15 minutes; the next
+        # mutation 401'd, the refresh attempt 401'd too, and the user was
+        # silently logged out mid-session.
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         path="/"
     )
 

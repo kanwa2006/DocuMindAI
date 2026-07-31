@@ -16,6 +16,16 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+class ModelUnavailableError(RuntimeError):
+    """Every configured API key rejected the requested model.
+
+    Distinct from a transient failure: retrying cannot help, because the model
+    is retired or not enabled for any key in the pool. Callers should surface a
+    configuration-level message rather than a generic "please retry".
+    """
+
+
 T = TypeVar('T', bound=BaseModel)
 
 # M-8 — anti-injection guardrail. Uploaded document text is placed inside
@@ -200,8 +210,25 @@ class GeminiLLMProvider(BaseLLMProvider):
         self._rotator.report_invalid_key(key)
         self._rotate_key()
 
+    # Substrings that identify "this API key cannot use this model" rather than
+    # "this key is broken". Google returns 404 for a model that is retired, not
+    # yet enabled for the project, or restricted to existing users — and that
+    # verdict is PER KEY: "no longer available to new users" means older keys
+    # in the pool may still succeed. Verified in production: 30 consecutive
+    # failures all came from key 20 of 21 while other keys were never tried.
+    _MODEL_UNAVAILABLE_MARKERS = (
+        "404",
+        "not found for api version",
+        "no longer available",
+        "is not supported for generatecontent",
+    )
+
     async def _execute_with_rotation(self, operation, *args, **kwargs):
         max_attempts = len(self.keys) * 2
+        # Keys that rejected THIS model. Tracked per call so a model which is
+        # genuinely retired everywhere fails fast with a precise error instead
+        # of silently looping, while a per-key restriction is survivable.
+        keys_rejecting_model: set[int] = set()
         for attempt in range(max_attempts):
             key = self.keys[self.current_key_idx]
             # Check cooldown
@@ -229,10 +256,31 @@ class GeminiLLMProvider(BaseLLMProvider):
                 elif is_server_error:
                     logger.warning(f"Temporary server error on key {self.current_key_idx}.")
                     self._mark_key_failed(cooldown_seconds=30.0) # 30 sec cooldown for 500s
+                elif any(m in error_msg for m in self._MODEL_UNAVAILABLE_MARKERS):
+                    # Per-key model restriction. Rotate WITHOUT marking the key
+                    # rate-limited or invalid — both would be wrong semantics and
+                    # would poison a healthy key (300s cooldown / permanent skip)
+                    # for what is only a capability gap on one model.
+                    keys_rejecting_model.add(self.current_key_idx)
+                    logger.warning(
+                        "Key %s cannot use this model (%s). Rotating; %d/%d keys have rejected it.",
+                        self.current_key_idx, str(e)[:120],
+                        len(keys_rejecting_model), len(self.keys),
+                    )
+                    if len(keys_rejecting_model) >= len(self.keys):
+                        # Every key agrees: the model itself is unavailable. Raise a
+                        # precise, actionable error so callers/UX can say so instead
+                        # of showing a generic "internal error" and inviting a retry
+                        # that cannot succeed.
+                        raise ModelUnavailableError(
+                            f"No configured Gemini API key can access this model. "
+                            f"Last error: {e}"
+                        ) from e
+                    self._rotate_key()
                 else:
                     logger.error(f"Unrecoverable error on key {self.current_key_idx}: {e}")
                     raise e
-                    
+
         raise Exception("All Gemini API keys exhausted or on cooldown.")
 
     async def generate(self, system_prompt: str, user_prompt: str) -> str:

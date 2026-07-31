@@ -56,8 +56,17 @@ function _fetchCsrf(): Promise<void> {
   if (_csrfPromise) return _csrfPromise;
   _csrfPromise = fetch(`${API_BASE}/csrf-token`, { credentials: 'include' })
     .then(res => res.json())
-    .then(data => { csrfToken = data.csrf_token; })
-    .catch(() => { /* will retry on next mutation */ })
+    .then(data => {
+      csrfToken = data.csrf_token;
+      // A silent failure here is indistinguishable from an expired session:
+      // the mutation goes out with no X-CSRF-Token header, CSRFMiddleware
+      // rejects it, apiFetch reads the 401 as "Session expired" and logs the
+      // user out. Surface it instead of swallowing it.
+      if (!csrfToken) {
+        console.error('[csrf] /csrf-token returned no csrf_token field; mutations will be rejected.', data);
+      }
+    })
+    .catch(err => { console.error('[csrf] failed to fetch CSRF token; mutations will be rejected until this succeeds.', err); })
     .finally(() => { _csrfPromise = null; });
   return _csrfPromise;
 }

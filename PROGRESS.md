@@ -63,10 +63,14 @@ Verified earlier in this effort — treat as settled:
 | ID | Title | Status |
 |---|---|---|
 | P0-1 | LLM provider: 404 aborts request without rotating across 21 keys | ✅ **RESOLVED & VERIFIED** |
-| P0-2 | Legal Risk Report unreachable — `processContract()` never called | 🔄 Code applied, **verification incomplete** |
+| P0-2 | Legal Risk Report unreachable — `processContract()` never called | 🔄 Frontend code applied; **runtime verification blocked by P0-7/P0-8** |
 | P0-3 | Container image 18.8 GB; bge-m3 downloads 4.3 GB at import | ⬜ Open |
-| P0-4 | Supabase credential in git history + plaintext `.env` — needs rotation | ⬜ Open (**user action**) |
-| P0-5 | **NEW** — Supabase session pooler caps at 15 connections; worker backlog exhausts it (`EMAXCONNSESSION`) | ⬜ Open |
+| P0-4 | Supabase credential in git history + plaintext `.env` — needs rotation | ⬜ Open (**owner-access-required**) |
+| P0-5 | DB connection budget (30 API + 8×15 worker + 15 beat) vastly exceeded Supavisor session-mode cap of 15 | ✅ **RESOLVED & VERIFIED** |
+| P0-6 | **NEW** — All 21 Gemini keys return `429 ResourceExhausted`; no LLM generation possible | ⬜ Open (**owner-access-required**) |
+| P0-7 | **NEW** — 7 of 9 Celery task modules use the **async** engine via `asyncio.run()`; fails `got Future attached to a different loop` on ~every 2nd task | ⬜ Open |
+| P0-8 | **NEW** — `legal_tasks.py:35` analyses a **hardcoded simulated contract string**; the uploaded document's text is never read | ⬜ Open |
+| P0-9 | **NEW** — **Cross-tenant exposure.** `workspace_id` is the constant `"general"` for all users; Legal/Finance/Study/Research tables have no `owner_id`; `tenant_guard` never called; RLS bypassed | ⬜ Open (**security**) |
 
 ---
 
@@ -174,3 +178,90 @@ today and is outside this task's scope.
 
 **No product code was modified this session.** P0-2 remains code-applied / verification
 incomplete; P0-5 remains the blocker in front of it.
+
+
+### 2026-07-31 — Phase 1 continued (P0-5 RESOLVED; four new P0s found)
+
+**P0-5 RESOLVED & VERIFIED.** The earlier characterization ("worker backlog exhausts it")
+was **wrong**. The backlog was a victim, not the cause. Measured with worker and beat
+**stopped**, the API alone held **15/15** connections (14 idle, 1 active): `db/session.py`
+hardcoded `pool_size=10, max_overflow=20` — a 30-connection ceiling — against Supavisor
+**session mode**'s project-wide cap of 15, and SQLAlchemy *retains* pooled connections, so
+the ceiling was held permanently rather than spiking. The `/health` endpoint's unpooled
+`psycopg2.connect()` (every 10s) could never open its 16th connection, which is why the
+backend container sat `unhealthy` for **19 hours**.
+
+Contributing factors, all measured:
+- sync engine passed **no** pool args → SQLAlchemy defaults 5+10 = **15 per process**
+- worker `--concurrency` unset → Celery defaulted to `os.cpu_count()` = **8** children
+- no fork safety: `sync_engine` is built at import in the parent and inherited by every child
+
+Fix (repo-local): connection budget moved into `core/config.py` as four settings
+(`DB_POOL_SIZE=3`, `DB_MAX_OVERFLOW=2`, `WORKER_DB_POOL_SIZE=1`, `WORKER_DB_MAX_OVERFLOW=1`),
+`--concurrency=2` pinned in compose, and a `worker_process_init` handler calling
+`sync_engine.dispose(close=False)` (close=True would sever sockets shared with the parent).
+
+Verified: connections **15/15 → 2/15**; `/health` → `{"api":"ok","db":"ok","redis":"ok"}`
+(first time in 19h); worker healthy, `RestartCount=0`; backend suite **105 passed**
+(100 baseline + 5 new guards in `tests/test_db_connection_budget.py`). The guard bites —
+re-running with the original 10/20 fails: *"Default connection budget is 37, over 15."*
+
+**Pooler architecture decision (evidence-based).** Grep confirms the app uses **no**
+session-scoped Postgres features: no `pg_advisory*`, no `LISTEN`/`NOTIFY`, no `CREATE TEMP`,
+no `SET SESSION`/`SET LOCAL`; the only lock is a `threading.Lock` in `llm_key_rotation.py`.
+Prepared statements are already disabled for pooler hosts (`session.py:39-41`). Nothing
+requires session mode. Conversely `query.py:215` + `:568` hold the `get_db` session for the
+entire `StreamingResponse`, so in session mode every concurrent SSE stream pins a server
+connection for the full 11-12s generation. **Transaction mode (6543) is the correct
+production posture** — but switching alone would NOT have fixed this, because the ~165-
+connection demand was unbounded in either mode. Sizing the budget was the actual fix.
+The port change lives in `backend/.env` → **owner-access-required**.
+
+**NEW P0-6 — Gemini quota exhausted.** All 21 keys return `429 ResourceExhausted`. Confirmed
+with **raw `google.generativeai` calls bypassing the rotator**, so this is real upstream
+quota, not rotator cooldown bookkeeping — the rotator is behaving correctly.
+Blocks every LLM-dependent verification. **owner-access-required.**
+
+**NEW P0-7 — async engine inside sync Celery tasks.** `legal_tasks.py` (and
+`finance/hr/study/research/export/ocr_tasks`, **7 of 9**) use `AsyncSessionLocal` via
+`asyncio.run()`. Each call creates a new event loop, so a pooled asyncpg connection from a
+previous loop fails with `RuntimeError: got Future attached to a different loop`. Violates
+the CLAUDE.md invariant *"Async API / sync workers … Never mix."* The two modules that work
+(`document_tasks`, `audio_tasks`) correctly use `SyncSessionLocal` — which is exactly why
+uploads reach READY but Legal never produces a contract.
+**Proven independent of the P0-5 fix** by controlled A/B: identical failure at the new 3/2
+and the original 10/20 settings (run1 OK, run2 FAIL, run3 OK — it fails ~every other task).
+
+**NEW P0-8 — Legal analyses fabricated text.** `legal_tasks.py:35` assigns a hardcoded
+`"Simulated text. 1. Confidentiality… 2. Liability capped at $50."` and never reads the
+uploaded document; `doc` is fetched only for `doc.filename`. Every contract would yield the
+same two fake clauses. A real `_get_document_text()` helper exists at `legal.py:54` and is
+unused. Direct violation of the **Loud degradation** invariant.
+
+**NEW P0-9 — cross-tenant exposure (security-reviewer verdict: CONFIRMED P0).**
+`auth.py:51,202` set `workspace_id` to the literal `"general"` for every user, so
+`resolve_workspace_id()` yields one constant UUID
+(`33d76fbe-437c-5b72-989c-798243045681` = `uuid5(DNS,"general")`) shared by all — verified
+live: 3 users, 3 distinct document owners, **one** workspace UUID. `models/legal.py` and
+`legal.py` contain **0** occurrences of `owner_id`, so the documented
+*"filter on `owner_id` AND the workspace UUID"* invariant is unrepresentable, not merely
+omitted. `tenant_guard.validate_retrieval_scope` has **zero call sites** despite documenting
+itself as mandatory. RLS is inert (`rolbypassrls=True`; disabled on all `legal_*` tables;
+the `app.current_workspace_id` setting the policies key on is never set).
+Exploitable today: `/legal/contracts/compare` → `_get_document_text` (`legal.py:54-61`)
+filters on `document_id` **only** and returns document text to any authenticated user;
+`/legal/contracts/{id}/approvals` (`legal.py:215`) is an unscoped cross-tenant **write**.
+Systemic — Finance/Study/Research models also lack `owner_id`. `documents.py` and
+`processing_events.py:57-61` are correctly scoped and are the reference pattern.
+
+**Correction accepted:** my initial reading of the fallback path was inverted.
+`resolve_workspace_id` passes valid UUIDs through unchanged, so the
+`claims.get("workspace_id", user_id)` **fallback is the safe path**; the hardcoded **claim**
+is the defect.
+
+**Recorded, deliberately NOT fixed (out of scope):** worker cold start took **30m24s** vs the
+documented ~390s because the container healthcheck (`celery inspect ping`, every 15s) spawns
+a full process whose import chain re-loads bge-m3 — `embedding_service.py:127` constructs the
+`SentenceTransformer` singleton eagerly at import. Pre-existing; Phase 2/4 territory.
+
+**Stopped here** per the standing instruction to stop on a new verified P0 blocker.

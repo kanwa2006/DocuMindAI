@@ -9,7 +9,7 @@ import React from "react";
 import {
   uploadDocument, askQuestionStream, listDocuments, getDocument,
   Document, QueryResponse, getChats, createChat, getChatMessages,
-  createChatMessage, ChatMessage, updateChat, apiFetch,
+  createChatMessage, ChatMessage, updateChat, apiFetch, processContract,
 } from "../lib/api";
 import PaperConfigPanel from "./PaperConfigPanel";
 import EditablePaperPanel from "./EditablePaperPanel";
@@ -809,6 +809,15 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const queryRef = useRef(query);
   queryRef.current = query;
 
+  // Mirrors `response` so the stream-completion handler can read the final
+  // answer WITHOUT doing it inside a setState updater. See the onDone handler
+  // in sendMessage: performing the persist there caused every assistant reply
+  // to be saved twice, because React deliberately double-invokes updater
+  // functions to surface impure ones.
+  const responseRef = useRef<QueryResponse | null>(response);
+  responseRef.current = response;
+
+
   const mdComponents = useMemo(() => buildMarkdownComponents(workspaceType), [workspaceType]);
 
   // Misc-fix: read setTrialStatus so each SSE `trial_status` frame updates
@@ -1077,34 +1086,37 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           // screenshot the user shared). Clear `response` AS PART OF the
           // same microtask that pushes the saved message into history, so
           // the swap happens atomically.
-          setResponse((currentRes) => {
-            if (currentRes && chatId) {
-              const snapshot = currentRes;
-              queueMicrotask(() => {
-                window.dispatchEvent(new CustomEvent("autosave:saving"));
-                createChatMessage(chatId, "assistant", JSON.stringify(snapshot)).then((savedMsg) => {
-                  // Atomic swap: push into history AND null out the streaming
-                  // response in the same React batch — no overlap window.
-                  setHistory((prev) => [...prev, savedMsg]);
-                  setResponse(null);
-                  window.dispatchEvent(new CustomEvent("autosave:saved"));
-                  if (latestTrustRef.current) {
-                    setTrustDataMap((prev) => ({ ...prev, [savedMsg.id]: latestTrustRef.current! }));
-                    latestTrustRef.current = null;
-                  }
-                }).catch(() => {
-                  // Even if the save fails, hide the streaming view; the
-                  // user can regenerate.
-                  setResponse(null);
-                  window.dispatchEvent(new CustomEvent("autosave:error"));
-                });
-              });
-            } else if (!chatId) {
-              // No chatId → we never persist; just hide the streaming view.
-              setTimeout(() => setResponse(null), 0);
-            }
-            return currentRes;
-          });
+          // The persist MUST NOT happen inside a setState updater. React
+          // double-invokes updater functions on purpose (to surface impure
+          // ones), so the previous `setResponse(currentRes => { ...save... })`
+          // ran createChatMessage twice and wrote two identical assistant rows
+          // — reproducibly, with matching microsecond timestamps. Reading the
+          // final answer from a ref keeps this handler's side effect outside
+          // React's render/update cycle, where it belongs.
+          const snapshot = responseRef.current;
+          if (snapshot && chatId) {
+            window.dispatchEvent(new CustomEvent("autosave:saving"));
+            createChatMessage(chatId, "assistant", JSON.stringify(snapshot)).then((savedMsg) => {
+              // Atomic swap: push into history AND null out the streaming
+              // response in the same React batch — no overlap window, which
+              // is what the original code was trying to achieve.
+              setHistory((prev) => [...prev, savedMsg]);
+              setResponse(null);
+              window.dispatchEvent(new CustomEvent("autosave:saved"));
+              if (latestTrustRef.current) {
+                setTrustDataMap((prev) => ({ ...prev, [savedMsg.id]: latestTrustRef.current! }));
+                latestTrustRef.current = null;
+              }
+            }).catch(() => {
+              // Even if the save fails, hide the streaming view; the
+              // user can regenerate.
+              setResponse(null);
+              window.dispatchEvent(new CustomEvent("autosave:error"));
+            });
+          } else if (!chatId) {
+            // No chatId → we never persist; just hide the streaming view.
+            setResponse(null);
+          }
         },
         abortControllerRef.current.signal,
         chatId || undefined,
@@ -1142,14 +1154,16 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
     setShowThinkingLabel(false);
     toast("Generation stopped.", { icon: "🛑" });
-    setResponse((currentRes) => {
-      if (currentRes && chatId) {
-        createChatMessage(chatId, "assistant", JSON.stringify(currentRes)).then((savedMsg) => {
-          setHistory((prev) => [...prev, savedMsg]);
-        });
-      }
-      return null;
-    });
+    // Same reason as the onDone handler: a network mutation inside a setState
+    // updater gets run twice, because React double-invokes updaters to expose
+    // impure ones. Read the partial answer from the ref and persist it here.
+    const partial = responseRef.current;
+    setResponse(null);
+    if (partial && chatId) {
+      createChatMessage(chatId, "assistant", JSON.stringify(partial)).then((savedMsg) => {
+        setHistory((prev) => [...prev, savedMsg]);
+      });
+    }
   };
 
   const handleVoiceLangChange = useCallback((lang: string) => {
@@ -1168,6 +1182,35 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     window.dispatchEvent(new CustomEvent("voice_query_used", { detail: { workspace: workspaceType, lang } }));
     setTimeout(() => { sendMessage(text); }, 300);
   }, [sendMessage, workspaceType]);
+
+  /**
+   * Legal workspace only: turn a READY document into a Contract record.
+   *
+   * Uploading produces a `documents` row and nothing else. LegalRiskPanel
+   * resolves its target by looking up a contract whose `document_id` matches
+   * the active document — so with no contract row it can never find one, and
+   * `POST /legal/contracts/{id}/risk-report` was unreachable through the UI.
+   * The backend endpoint and the `processContract` client both already existed;
+   * only this call was missing.
+   *
+   * Placed here because this is the handler that already owns the READY
+   * transition. Deliberately fire-and-forget: contract extraction must never
+   * delay or fail the upload flow, and the panel re-fetches contracts when it
+   * opens, so a transient failure self-heals on the next attempt.
+   */
+  const promoteLegalDocumentToContract = useCallback(async (documentId: string) => {
+    if (workspaceType !== "legal") return;
+    try {
+      await processContract(documentId);
+      // Let an already-open panel pick the new contract up without a reload.
+      window.dispatchEvent(new CustomEvent("legal:contracts-updated", { detail: { documentId } }));
+    } catch (err) {
+      // Non-fatal: the document is still usable for chat-based legal analysis.
+      // Surfaced rather than swallowed so a persistent failure is visible.
+      console.error("[legal] contract extraction failed for", documentId, err);
+      toast("Risk Report unavailable for this document — contract extraction failed.", { icon: "⚠️" });
+    }
+  }, [workspaceType]);
 
   const handleUploadClick = () => fileInputRef.current?.click();
 
@@ -1208,7 +1251,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
             const statusDoc = await getDocument(uploadedDoc.id);
             setActiveDoc(statusDoc);
             setDocs((prev) => prev.map((d) => d.id === statusDoc.id ? statusDoc : d));
-            if (statusDoc.status === "READY") { toast.success("Extraction complete!", { id: toastId }); clearInterval(interval); { const i = pollingIntervalsRef.current.indexOf(interval); if (i >= 0) pollingIntervalsRef.current.splice(i, 1); } setLoading(false); }
+            if (statusDoc.status === "READY") { toast.success("Extraction complete!", { id: toastId }); clearInterval(interval); { const i = pollingIntervalsRef.current.indexOf(interval); if (i >= 0) pollingIntervalsRef.current.splice(i, 1); } setLoading(false); void promoteLegalDocumentToContract(statusDoc.id); }
             else if (statusDoc.status === "FAILED") { toast.error("Extraction failed.", { id: toastId }); clearInterval(interval); { const i = pollingIntervalsRef.current.indexOf(interval); if (i >= 0) pollingIntervalsRef.current.splice(i, 1); } setLoading(false); }
           } catch { /* transient */ }
         }, 2000);

@@ -29,7 +29,7 @@ async def seed():
         existing = result.scalar_one_or_none()
 
         if existing:
-            print("✓ Dev user already exists — no action needed.")
+            print("[OK] Dev user already exists — no action needed.")
             print("  Email:    dev@test.com")
             print("  Password: devpass123")
             return
@@ -56,7 +56,7 @@ async def seed():
         db.add(role)
 
         await db.commit()
-        print("✓ Dev user created successfully.")
+        print("[OK] Dev user created successfully.")
         print("  Email:    dev@test.com")
         print("  Password: devpass123")
         print("  Role:     admin")

@@ -40,6 +40,35 @@ class Settings(BaseSettings):
     POSTGRES_DB: str
     DATABASE_URL: Optional[str] = None
 
+    # ── Connection budget (P0-5) ────────────────────────────────────────────
+    # These MUST be sized against the ceiling of whatever pooler sits in front
+    # of Postgres, because SQLAlchemy pools on top of it. Supabase's Supavisor
+    # in SESSION mode (port 5432) pins one server connection per client
+    # connection for the life of that connection, and caps the whole project at
+    # `pool_size` (15 on the current tier).
+    #
+    # The previous values were hardcoded in db/session.py as pool_size=10 /
+    # max_overflow=20 — a 30-connection ceiling for the API alone, i.e. 2x the
+    # entire project budget. Measured with worker and beat stopped, the API
+    # held all 15 (14 idle, 1 active) and nothing else could connect at all:
+    # the worker could not drain its queue and the /health probe could not open
+    # its 16th connection, so the container sat "unhealthy" for 19 hours.
+    #
+    # Defaults below are deliberately sized to survive a 15-connection SESSION
+    # mode ceiling with headroom:
+    #     API 3+2=5  ·  worker 2 children x (1+1)=4  ·  beat 1+1=2  ·  health 1
+    #     total ~12 of 15
+    # In TRANSACTION mode (port 6543) a server connection is held only for the
+    # duration of a transaction, so these can be raised substantially — that is
+    # the intended production posture. Raise them via env, not by editing code.
+    DB_POOL_SIZE: int = 3
+    DB_MAX_OVERFLOW: int = 2
+    # Celery children are sync (psycopg2) and each child gets its own pool, so
+    # this is multiplied by worker concurrency. SQLAlchemy's default here is
+    # 5+10=15 PER PROCESS, which alone equals the entire session-mode budget.
+    WORKER_DB_POOL_SIZE: int = 1
+    WORKER_DB_MAX_OVERFLOW: int = 1
+
     # Redis / Celery
     REDIS_URL: str
     CELERY_BROKER_URL: str
