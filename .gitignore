@@ -40,7 +40,14 @@ backend/celerybeat-schedule*
 .ipynb_checkpoints/
 
 # ── Agentic & IDE files ──────────────────────────────────────────────────────
-.claude/
+# `.claude/*` (not `.claude/`) so the negation below can take effect — git does
+# not descend into an excluded directory, so `!.claude/agents/` would be a no-op
+# against a `.claude/` rule.
+.claude/*
+# The ten engineering subagents are project-level and shared deliberately; the
+# delegation policy that governs them lives in CLAUDE.md. Local-only files
+# (settings.local.json, skills/, worktrees/) stay ignored by the rule above.
+!.claude/agents/
 .agents/
 skills-lock.json
 .idea/
@@ -52,6 +59,10 @@ skills-lock.json
 *.swp
 build.log
 frontend/tmp/
+
+# ── Test artifacts ───────────────────────────────────────────────────────────
+# Playwright MCP writes page snapshots / console logs here during manual QA.
+.playwright-mcp/
 
 # ── OS files ─────────────────────────────────────────────────────────────────
 .DS_Store
