@@ -243,6 +243,7 @@ async def generate_quiz(
     # Persist full quiz (with correct_index) in DB
     quiz_record = StudyQuiz(
         workspace_id=workspace_id,
+        owner_id=uuid.UUID(current_user["id"]),  # P0-9 tenant key
         topic=request.topic,
         difficulty=request.difficulty,
         doc_ids=[str(d) for d in (request.doc_ids or [])],

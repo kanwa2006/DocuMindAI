@@ -52,7 +52,41 @@ async def get_current_user(request: Request) -> Dict[str, Any]:
     token = request.cookies.get("token")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return AuthProvider.verify_token(token)
+    user = AuthProvider.verify_token(token)
+
+    # P0-9: establish the tenant scope for this request. Every ORM read against
+    # a TenantScoped model is filtered by this value (app/core/tenant_scope.py),
+    # so endpoints cannot forget a filter they never write.
+    #
+    # `.set()` without a matching reset is correct here, not a leak: Starlette
+    # runs each request in its own asyncio Task, and a Task copies the ambient
+    # context at creation — so this binding is private to this request and
+    # cannot bleed into a concurrent one. A `yield`-style dependency would tie
+    # the scope's lifetime to the dependency's, which is WRONG for SSE: the
+    # streaming generator in query.py outlives the dependency and still needs
+    # the scope while it runs.
+    #
+    # NOTE: the tenant key is the USER id, not `workspace_id` — see P0-9 in
+    # PROGRESS.md. `workspace_id` is a category slug shared by all users.
+    _set_request_owner(user["id"])
+    return user
+
+
+def _set_request_owner(user_id: str) -> None:
+    """Bind the current request's owner scope. Imported lazily to keep
+    `core.auth` free of a module-level dependency on the ORM layer."""
+    import uuid as _uuid
+
+    from app.core.tenant_scope import _current_owner
+
+    try:
+        _current_owner.set(_uuid.UUID(str(user_id)))
+    except (ValueError, AttributeError, TypeError):
+        # A non-UUID `sub` means the token is malformed for tenancy purposes.
+        # Fail closed rather than leaving the scope unset (which would raise a
+        # confusing TenantScopeMissing deeper in the stack).
+        logger.error("[Auth] token 'sub' is not a UUID; refusing to establish tenant scope")
+        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
 
 
 async def get_optional_current_user(request: Request) -> Optional[Dict[str, Any]]:

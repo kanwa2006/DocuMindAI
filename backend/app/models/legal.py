@@ -1,11 +1,25 @@
+"""
+P0-9 — tenant isolation.
+
+`workspace_id` on these tables is derived from a workspace SLUG
+(`uuid5(NAMESPACE_DNS, "legal"|"finance"|...)`), so it is IDENTICAL for every
+user in the system: it partitions rows by CATEGORY, not by tenant. Queries
+filtering on `workspace_id` alone therefore returned every user's rows.
+
+The tenant key is `owner_id`, declared once by the `TenantScoped` mixin. The
+mixin also opts these tables into automatic query scoping — see
+`app/core/tenant_scope.py`. Reads are filtered by the session hook; writes must
+still set `owner_id` explicitly (it is NOT NULL, so a miss fails loudly).
+"""
 from sqlalchemy import Column, String, DateTime, func, JSON, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 from app.db.base import Base
+from app.core.tenant_scope import TenantScoped
 import uuid
 
-class Contract(Base):
+class Contract(TenantScoped, Base):
     __tablename__ = "legal_contracts"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     workspace_id = Column(UUID(as_uuid=True), nullable=False, index=True)
@@ -19,7 +33,7 @@ class Contract(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-class ComplianceRule(Base):
+class ComplianceRule(TenantScoped, Base):
     __tablename__ = "legal_compliance_rules"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     workspace_id = Column(UUID(as_uuid=True), nullable=False, index=True)
@@ -29,7 +43,7 @@ class ComplianceRule(Base):
     mandatory = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class Clause(Base):
+class Clause(TenantScoped, Base):
     __tablename__ = "legal_clauses"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     workspace_id = Column(UUID(as_uuid=True), nullable=False, index=True)
@@ -42,7 +56,7 @@ class Clause(Base):
     embedding = Column(Vector(1024), nullable=True) # C-7: matches embedding_service (bge-m3, 1024-dim); was 1536
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class RedlineSuggestion(Base):
+class RedlineSuggestion(TenantScoped, Base):
     __tablename__ = "legal_redlines"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     workspace_id = Column(UUID(as_uuid=True), nullable=False, index=True)
@@ -53,7 +67,7 @@ class RedlineSuggestion(Base):
     status = Column(String, default="PENDING") # PENDING, ACCEPTED, REJECTED
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class ApprovalWorkflow(Base):
+class ApprovalWorkflow(TenantScoped, Base):
     __tablename__ = "legal_approvals"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     workspace_id = Column(UUID(as_uuid=True), nullable=False, index=True)

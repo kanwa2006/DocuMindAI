@@ -313,7 +313,13 @@ async def create_project(
     db: AsyncSession = Depends(get_db)
 ):
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    project = ResearchProject(workspace_id=workspace_id, title=title, description=description)
+    # P0-9: owner_id is the tenant key; workspace_id is a shared category slug.
+    project = ResearchProject(
+        workspace_id=workspace_id,
+        owner_id=uuid.UUID(current_user["id"]),
+        title=title,
+        description=description,
+    )
     db.add(project)
     await db.commit()
     return {"status": "success", "project_id": project.id}
@@ -594,6 +600,7 @@ async def synthesize_project(
             })
             db.add(ContradictionReport(
                 workspace_id=workspace_id,
+                owner_id=uuid.UUID(current_user["id"]),  # P0-9 tenant key
                 finding_a_id=a[0].id,
                 finding_b_id=b[0].id,
                 description=verdict.description,

@@ -94,6 +94,7 @@ async def create_compliance_rule(
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
     rule = ComplianceRule(
         workspace_id=workspace_id,
+        owner_id=uuid.UUID(current_user["id"]),  # P0-9: workspace_id is a shared slug, not a tenant key
         name=request.name,
         category=request.category,
         rule_description=request.rule_description,
@@ -205,6 +206,7 @@ async def add_contract_approval(
     
     approval = ApprovalWorkflow(
         workspace_id=workspace_id,
+        owner_id=reviewer_id,  # P0-9: reviewer is the authenticated user
         contract_id=contract_id,
         reviewer_id=reviewer_id,
         status=status,
