@@ -70,7 +70,8 @@ Verified earlier in this effort — treat as settled:
 | P0-6 | **NEW** — All 21 Gemini keys return `429 ResourceExhausted`; no LLM generation possible | ⬜ Open (**owner-access-required**) |
 | P0-7 | **NEW** — 7 of 9 Celery task modules use the **async** engine via `asyncio.run()`; fails `got Future attached to a different loop` on ~every 2nd task | ⬜ Open |
 | P0-8 | **NEW** — `legal_tasks.py:35` analyses a **hardcoded simulated contract string**; the uploaded document's text is never read | ⬜ Open |
-| P0-9 | **NEW** — **Cross-tenant exposure.** `workspace_id` is the constant `"general"` for all users; Legal/Finance/Study/Research tables have no `owner_id`; `tenant_guard` never called; RLS bypassed | ⬜ Open (**security**) |
+| P0-9 | **Cross-tenant exposure.** `workspace_id` is a shared category slug, not a tenant key; 18 tables had no `owner_id` | 🟡 **Reads FIXED & VERIFIED** (`abf84a2`); worker writes land with P0-7 |
+| P0-10 | **NEW** — `backend/.env` `DATABASE_URL` has a **double colon** (`pooler.supabase.com::6543`); host tests fail and the stack dies on next restart | ⬜ Open (**owner-access-required**, 1 char) |
 
 ---
 
@@ -265,3 +266,48 @@ a full process whose import chain re-loads bge-m3 — `embedding_service.py:127`
 `SentenceTransformer` singleton eagerly at import. Pre-existing; Phase 2/4 territory.
 
 **Stopped here** per the standing instruction to stop on a new verified P0 blocker.
+
+
+### 2026-08-01 — P0-9 reads fixed (`abf84a2`)
+
+**Tenancy model decided (architectural, evidence-based):** per-user `owner_id`.
+`documents` already uses it correctly (11 sites — the reference pattern), billing is
+per-`User` (`plan`, `trial_queries_used`, `subscribed_at`), and `Organization` /
+`OrganizationUser` exist but have **no `User.org_id` FK**, so the org model is unwired
+aspiration. Org scoping remains additive later; `owner_id` does not block it.
+
+**Root cause, restated precisely.** `User.workspace_id` is
+`Column(String(50), default="general")` — *the user's active workspace tab*, a UI state
+slug. It was never a tenant key. Tenant filtering had been layered onto a field carrying
+no tenant identity, which is why every user resolved to the same UUID.
+
+**Fix — the session owns the decision, not the call site.** Adding `owner_id ==` to ~90
+`WHERE` clauses would duplicate one decision 90 times and the 91st query would reopen the
+hole. Instead: `TenantScoped` mixin + a `do_orm_execute` hook that injects
+`owner_id = <current owner>` into every ORM SELECT on a scoped model (incl. eager loads
+and joins). **Fails closed** — no scope raises `TenantScopeMissing` rather than returning
+unfiltered rows; trusted internal work must opt out explicitly via `system_scope()`.
+`get_current_user` binds the scope per request (ContextVar `.set()` without reset is
+deliberate — Starlette gives each request its own Task/context, and a yield-dependency
+would end the scope before the SSE generator finishes streaming).
+
+Migration `b7c1d2e3f4a5`: `owner_id` NOT NULL + indexes on all 18 tables. All were
+**empty**, so no backfill; it fails loudly rather than mis-assigning rows elsewhere.
+
+**Runtime verification (not inspection):** two users minted real JWTs and went through the
+actual `get_current_user` dependency — A saw only `ALICE-DOC`, B only `BOB-DOC`;
+`system_scope` saw both; an unscoped query raised. Backend suite **105/105**.
+
+**Deliberately NOT covered** (documented limits, in `tenant_scope.py`): raw `text()` queries
+bypass the ORM hook, and writes still set `owner_id` explicitly — `NOT NULL` makes a missed
+write fail loudly instead of storing an unowned row. The 12 worker write sites land with
+P0-7, since those modules are already broken by the async/sync defect.
+
+**NEW P0-10 — `backend/.env` typo blocks the stack.** `DATABASE_URL` reads
+`...pooler.supabase.com::6543/postgres` — **double colon**. The 5432→6543 pooler switch was
+applied but left an extra `:`. Effects: host `pytest` fails at collection with
+`ValueError: invalid literal for int() with base 10: ':6543'`, and the running containers
+still hold the pre-edit value from creation time, so **the stack dies on next restart**.
+Proven to be the sole cause: supplying a corrected URL via env override (without touching
+`.env`) gives **105/105**, which also confirms port 6543 works. One character; `.env` is
+out of scope for me to edit.
