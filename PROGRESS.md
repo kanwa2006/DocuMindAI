@@ -516,20 +516,62 @@ Suite **131 passed, 0 xfailed**.
 
 ---
 
+### 2026-08-01 (cont.) — first browser-verified frontend change (`0c3a569`)
+
+**The browser-verification policy has now actually executed.** It was written but unproven;
+this is its first real use, and it earned its place immediately — it caught a regression
+before commit rather than after.
+
+**Composer measured before any CSS was touched.** At 375×667: composer 175px of a 615px main
+= **28.5%**, reading area **400px**. Anatomy: chips 28 + textarea 44 + toolbar 36 = **108px of
+content inside 175px rendered**. The stacked toolbar cost **44px** (36px row + 8px margin) —
+as much vertical space as the textarea itself — purely for sitting on its own line.
+
+**Worth recording: the reported symptom did not reproduce.** "Composer takes roughly half the
+viewport" measured at 19.4% (desktop) to 28.5% (short mobile) — never half. The *underlying*
+defect was real (fixed-height composer, 38% chrome overhead), so the work was justified, but
+the framing was not. Measure before believing a UI report.
+
+**After — inline toolbar where there is room:**
+
+| Viewport | Composer | % of main | Reading area |
+|---|---|---|---|
+| 1440×900 | 175 → **131px** | 19.4 → **15.4%** | 673 → **677px** |
+| 768×1024 | 175 → **131px** | **13.5%** | **801px** |
+| 375×667 | **175px** (unchanged) | 28.5% | 400px |
+
+**A regression caught in verification, not shipped.** Inline at 375px squeezed the textarea to
+**33px wide** — the voice-input language select makes the left control group ~191px — so the
+layout "worked" while the input was unusable. Below 640px the row now wraps with `order: -1`
+putting the textarea first, i.e. the pre-existing layout. Recover 44px where it is safe, never
+at the cost of usability.
+
+**Second, subtler defect:** the first wrap fix appeared to do nothing because an **inline
+`flex` beats the stylesheet**, so the responsive `flex-basis: 100%` never applied. Sizing moved
+into `.chat-input` — shared-component styles belong in the shared stylesheet, not per-element
+overrides.
+
+**Recorded, not fixed:** composer buttons are 32×32 and 36×36, below the **44px minimum touch
+target** (`ui-ux-pro-max`). Pre-existing, not introduced here; correcting it changes visual
+design across the whole button system.
+
+---
+
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `c0c9370` · working tree clean
+- **Branch:** `security/redact-env-example` · **HEAD:** `0c3a569` · working tree clean
 - **Suite:** 131 passed, 0 xfailed · stack healthy (backend/worker/beat/db/redis/pgbouncer)
 - **Closed this effort:** P0-1, P0-5, P0-7, P0-8, P0-10; P0-9 read path + all worker writes;
   P0-2 backend chain; orchestration layer complete
 - **Highest-priority remaining work, in order:**
-  1. **Frontend UX** — composer occupies ~half the viewport; response must dominate. This is
-     the first real exercise of the browser-verification policy, which is **written but never
-     yet run**.
+  1. **Frontend UX (continuing)** — composer done and browser-verified. Next: the message/
+     response area itself (typography, spacing, markdown density, citation rendering), then
+     loading/empty/error states. Browser-verification loop is proven and reusable.
   2. **Response quality** — generation-time structure *and* the shared renderer (both, per
      Phase 8; presentation only, never retrieval/citations/grounding).
   3. **Per-workspace verification** using the 10-step Workspace Completion Pipeline in
-     `CLAUDE.md`. None of the 7 has been through it end to end.
+     `CLAUDE.md`. None of the 7 has been through it end to end. **Note:** a full
+     upload→READY→query pass per workspace needs working Gemini quota, which is intermittent.
   4. **Deployment verification**, then the Release Gate.
 - **Active blockers:**
   - **P0-6 Gemini quota** (owner-access) — keys rotate in and out of exhaustion; LLM-dependent
