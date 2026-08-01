@@ -550,8 +550,18 @@ const MemoizedMessage = memo(({
         )}
       </div>
 
-      {/* Follow-up suggestion chips (Task 4.10) */}
-      {!isStreaming && (
+      {/* Follow-up suggestion chips (Task 4.10) — LAST assistant message only.
+          These rendered after every response, so a 17-message thread showed the
+          same three static prompts 17 times: 51 buttons and 476px of transcript
+          (6% of total scroll height) spent repeating identical text.
+          Beyond the noise it was misleading — clicking "What are the next steps?"
+          on message 3 cannot branch the conversation there; it appends to the
+          end like any other prompt. Suggestions only mean anything on the
+          message you are actually at, which is why every major assistant shows
+          them on the latest turn only.
+          `isLastAI` already existed and was already used correctly by the
+          Regenerate button directly above; this render simply omitted it. */}
+      {isLastAI && !isStreaming && (
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
           {suggestions.slice(0, 3).map((s) => (
             <button key={s} onClick={() => onFollowUpClick(s)}
