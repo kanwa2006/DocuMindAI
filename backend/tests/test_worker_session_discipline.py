@@ -71,8 +71,6 @@ KNOWN_VIOLATIONS = {
     "export_tasks.py",
     "hr_tasks.py",
     "ocr_tasks.py",
-    "research_tasks.py",
-    "study_tasks.py",
 }
 
 
@@ -121,6 +119,57 @@ def test_repaired_module_uses_sync_session():
         for alias in node.names
     }
     assert "SyncSessionLocal" in imported
+
+
+@pytest.mark.parametrize("module", _task_modules(), ids=lambda p: p.name)
+def test_no_task_module_fabricates_source_text(module: Path):
+    """P0-8 was systemic — four workspaces shipped placeholder source text.
+
+        legal    "Simulated text. 1. Confidentiality... 2. Liability capped at $50."
+        finance  "Simulated invoice ... Vendor: AWS. Total: $5050.00 ..."
+        research "Simulated paper text ... We demonstrate that X causes Y ..."
+        study    "Simulated study material ... Mitochondria is the powerhouse ..."
+
+    Each looked like a working feature and produced confident, well-formed output
+    about a document nobody uploaded. Docstrings are excluded so a module may
+    describe the defect it fixed without tripping this guard.
+    """
+    offenders = [
+        s for s in _code_string_constants(module)
+        if "simulated" in s.lower() and len(s) > 40
+    ]
+    assert not offenders, (
+        f"{module.name} appears to fabricate source text instead of reading the "
+        f"uploaded document (P0-8): {[s[:70] for s in offenders]}"
+    )
+
+
+def test_validation_gateway_is_not_short_circuited():
+    """P0-9-adjacent: research's anti-hallucination check was `... or True`.
+
+    That accepted every evidence quote including invented ones, and made the
+    reject branch unreachable. It existed because the source text was fabricated,
+    so a real quote could never match — the two defects propped each other up.
+
+    Checked via AST, not text search: this module documents the old expression in
+    its own docstring, and a substring check reports the FIXED module as broken.
+    That mistake has now been made twice in this file — inspect code, never prose.
+    """
+    tree = ast.parse((TASKS_DIR / "research_tasks.py").read_text(encoding="utf-8"))
+    short_circuits = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.BoolOp)
+        and isinstance(node.op, ast.Or)
+        and any(
+            isinstance(v, ast.Constant) and v.value is True for v in node.values
+        )
+    ]
+    assert not short_circuits, (
+        "research_tasks.py has an `or True` short-circuit again — line(s) "
+        f"{[n.lineno for n in short_circuits]}. The Validation Gateway must be "
+        "able to reject a hallucinated evidence quote."
+    )
 
 
 def test_legal_tasks_reads_real_document_text():
