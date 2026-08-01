@@ -798,6 +798,47 @@ verification at all four breakpoints, and console/network checks — none of whi
 
 ---
 
+### 2026-08-01 (cont.) — duplicate bubble was a RENDER bug; fallback model is RETIRED (`7c59b06`)
+
+**I was wrong to call the duplicate fixed.** The re-entrancy guard did stop double
+*persistence* (verified: 3 clicks in one tick → exactly 1 DB row) — but the screen still
+showed two bubbles. **One row in the database, two bubbles on screen.** The optimistic append
+fabricated its own row (`id: Date.now().toString()`) and discarded what `createChatMessage`
+returned, so once history reloaded from the server both the fake-id entry and the real UUID
+row were in state. The assistant path already used `savedMsg` correctly; the user path did
+not. Now uses the server-returned message. **Lesson: a clean database row count does not
+prove a clean render — check both.**
+
+**Perpetual "Thinking…" fixed.** The stream error handler cleared loading, released the send
+guard and toasted, but never cleared the in-flight response block — a dead card stayed
+mounted rendering "Thinking…" forever. `setResponse(null)` added to the error path.
+
+**Provider failure classified with runtime evidence, per key AND per model** (tested directly,
+bypassing the rotator):
+
+| Model | Result across all 21 keys |
+|---|---|
+| `gemini-2.5-flash` (primary) | **0/21 — ResourceExhausted** → genuine daily quota |
+| `gemini-1.5-flash` (fallback) | **0/21 — NotFound** → **model retired by Google** |
+
+**So the fallback chain has never been able to work.** `llm_service.py:357-359` retries with
+`GEMINI_FALLBACK_MODEL` when the primary fails, but that name resolves to a model Google no
+longer serves — the retry raises NotFound every time, including on ordinary rate-limits that
+the fallback exists specifically to absorb. **This is configuration, not quota, and it is
+fixable now.**
+
+**OWNER ACTION (unblocks generation without waiting for quota reset):** in `backend/.env` set
+`GEMINI_FALLBACK_MODEL=gemini-2.0-flash`. That model was verified working earlier today in
+this very session (`Configured Gemini with key 2` → successful JSON generation). `config.py`
+already defaults to it; the `.env` override is what points at the retired name. `.env` is
+out of scope for me to edit.
+
+**Genuine external blocker (primary path only):** `gemini-2.5-flash` quota is exhausted on
+all 21 keys and resets on Google's daily schedule. Rotation behaved correctly throughout —
+it swept every key before raising.
+
+---
+
 ## Continuation state (for the next session)
 
 - **Branch:** `security/redact-env-example` · **HEAD:** `d6714a5` · working tree clean
