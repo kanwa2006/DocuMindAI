@@ -634,6 +634,36 @@ alone would have missed it; that is why the policy requires both.
 
 ---
 
+### 2026-08-01 (cont.) — layout invariants verified across 4 viewports; NO defect found
+
+Measured every mandatory layout invariant in Chromium at four independent viewports. **All
+pass. No layout defect was found, and none was manufactured.**
+
+| Viewport | Page scrolls V | Composer in viewport | Gap below | Reading area | Scroll owners |
+|---|---|---|---|---|---|
+| 1440×900 desktop | **no** | yes | — | 677px (75%) | **1** |
+| 1366×768 laptop | **no** | yes | 16px | 545px (71%) | **1** |
+| 768×1024 tablet | **no** | yes | 16px | 801px (78%) | **1** |
+| 375×667 mobile | **no** | yes | 16px | 400px (60%) | **1** |
+
+Scroll ownership is correct everywhere: the **message list** owns it
+(`flex-1 overflow-y-auto`, e.g. 677 visible / 7900 content) and the document does not
+scroll — `documentElement.scrollHeight == clientHeight` at every size. No horizontal
+overflow. Send/attach present and the textarea usable at all widths (309px at 375).
+
+**A misread I corrected.** From the laptop screenshot I judged the composer's bottom border
+clipped by the viewport edge. Measurement disproved it: the bordered box bottom sits at 752
+of 768 — a **16px gap**, consistent at every breakpoint. The layout is tight at the bottom
+(24px top padding vs 16px bottom) but not broken. Per the directive, an unmeasured
+"improvement" is not made — so it was not changed.
+
+**Standing conclusion:** the chat layout architecture (header + sidebar + flex-1 scrolling
+message list + pinned composer) is sound and satisfies every stated invariant. Future
+frontend work should target *content* presentation, not the layout shell, unless new evidence
+contradicts this table.
+
+---
+
 ## Continuation state (for the next session)
 
 - **Branch:** `security/redact-env-example` · **HEAD:** `c805b0e` · working tree clean
