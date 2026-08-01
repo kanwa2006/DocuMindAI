@@ -1599,8 +1599,18 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     return md;
   }
 
+  // Chat column width. Was `max-w-6xl` (1152px), which produced a badly
+  // unbalanced page: prose capped at 513px sat flush against the LEFT edge of a
+  // 1088px column, leaving 575px of dead space on the right — 47% column
+  // utilisation with every pixel of the gutter on one side. Tables meanwhile
+  // spanned the full 1076px, so prose and tables shared a left edge but ended
+  // 500px apart, which is what made responses read as raw markdown dropped into
+  // a container rather than a designed column.
+  // `max-w-4xl` (896px) brings the column close to the reading measure, so prose
+  // fills most of it, tables align to the same right edge, and the remaining
+  // whitespace sits symmetrically around a centred column.
   return (
-    <div className="h-full flex flex-col px-4 md:px-8 py-6 pb-0 w-full max-w-6xl mx-auto" style={{ position: "relative" }}>
+    <div className="h-full flex flex-col px-4 md:px-8 py-6 pb-0 w-full max-w-4xl mx-auto" style={{ position: "relative" }}>
       {/* Toaster is mounted globally in app/layout.tsx. Rendering a second
           one here doubled every toast (e.g. 6 stacked 'Failed to fetch'
           banners from a single failure). */}

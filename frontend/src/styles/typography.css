@@ -136,5 +136,84 @@ body {
 .text-response > h4,
 .text-response > h5,
 .text-response > h6 {
-  max-width: 57ch;
+  max-width: 63ch;
 }
+
+/* ── AI response markdown: block rhythm and heading hierarchy ──────────────
+ *
+ * Tailwind's Preflight reset strips default heading sizes, weights AND all
+ * block margins. Nothing added them back for markdown content, so measured in
+ * Chromium an <h2> computed to 15px/400 — byte-identical to <p> — and every
+ * margin was 0px. ReactMarkdown was emitting correct semantic HTML that
+ * rendered as an undifferentiated wall of text: "Overview", "Key Details" and
+ * "Key Takeaways" were indistinguishable from body copy, and paragraphs ran
+ * straight into each other with no vertical rhythm.
+ *
+ * This is the shared renderer, so these rules fix hierarchy for every workspace
+ * at once. Scoped to `.text-response` so they cannot leak into app chrome.
+ *
+ * Spacing uses a consistent rhythm: space above a heading is larger than the
+ * space below it, so a heading binds to the content it introduces instead of
+ * floating between blocks.
+ */
+.text-response > * + * { margin-top: 0.9em; }
+.text-response > :first-child { margin-top: 0; }
+.text-response > :last-child { margin-bottom: 0; }
+
+.text-response > h1,
+.text-response > h2,
+.text-response > h3,
+.text-response > h4 {
+  font-weight: 650;
+  line-height: var(--leading-snug, 1.3);
+  color: var(--text-primary);
+  margin-top: 1.6em;
+  margin-bottom: 0.5em;
+  letter-spacing: -0.01em;
+}
+.text-response > h1 { font-size: 1.4em; }
+.text-response > h2 { font-size: 1.22em; }
+.text-response > h3 { font-size: 1.08em; }
+.text-response > h4 { font-size: 1em; color: var(--text-secondary); }
+.text-response > h1:first-child,
+.text-response > h2:first-child,
+.text-response > h3:first-child,
+.text-response > h4:first-child { margin-top: 0; }
+
+.text-response > ul,
+.text-response > ol { padding-left: 1.35em; }
+.text-response > ul { list-style: disc; }
+.text-response > ol { list-style: decimal; }
+.text-response li { margin-top: 0.35em; }
+.text-response li::marker { color: var(--text-tertiary); }
+/* A nested list belongs to its parent item — no extra rhythm gap. */
+.text-response li > ul,
+.text-response li > ol { margin-top: 0.35em; }
+
+.text-response blockquote {
+  border-left: 3px solid var(--border-strong, var(--border-default));
+  padding-left: 1em;
+  color: var(--text-secondary);
+}
+
+.text-response hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 1.6em;
+  margin-bottom: 1.6em;
+}
+
+.text-response strong { font-weight: 650; color: var(--text-primary); }
+
+/* Measure note for the `max-width: 63ch` rule above.
+   63ch = ~562px = ~79 real characters at 15px in this font (1ch = 9.00px,
+   average glyph 7.13px — see the calibration comment further up).
+   Raised from 57ch after measuring the rendered page: 57ch used only 47% of the
+   content column and pushed 575px of whitespace to one side. Long-form print
+   guidance tops out near 75, but a scannable, heavily-structured AI answer
+   reads comfortably slightly wider, and the alternative here was a column that
+   looked broken. Paired with the narrower `max-w-4xl` chat column so prose fills
+   most of its line and the gutters are symmetric.
+   Tables and code blocks are deliberately NOT in that selector list — they use
+   the full column, because a comparison table squeezed to reading measure is
+   harder to read, not easier. */
