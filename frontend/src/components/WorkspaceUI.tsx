@@ -1793,7 +1793,17 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       )}
 
       {/* ── Chat area ── */}
-      <div className="flex-1 overflow-y-auto mb-4 pr-2" style={{ scrollBehavior: "smooth", display: flashcardMode ? "none" : undefined }}>
+      {/* `min-h-0` is REQUIRED, not defensive. A flex child defaults to
+          `min-height: auto`, which means it refuses to shrink below its own
+          content height — so once the transcript is tall enough, this list stops
+          scrolling and instead GROWS, pushing the composer off the bottom of the
+          viewport. It is height- and content-dependent, which is why it can look
+          fine at one window size and hide the input at another (reported on a
+          1366x768 laptop where the real viewport is ~637px after browser chrome
+          and taskbar). `min-h-0` lets it shrink so `overflow-y-auto` actually
+          takes effect, and `shrink-0` on the composer below guarantees the input
+          is never the thing that gives way. */}
+      <div className="flex-1 min-h-0 overflow-y-auto mb-4 pr-2" style={{ scrollBehavior: "smooth", display: flashcardMode ? "none" : undefined }}>
 
         {/* Welcome state (Task 5.1) */}
         {!response && !loading && history.length === 0 && (
@@ -1945,7 +1955,10 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         )}
 
         {/* Input container — refactored (C9): paperclip + clipboard live in the input bar; attached docs render as removable chips. */}
-        <form onSubmit={handleAsk}>
+        {/* shrink-0: the composer must never be what gives way when vertical
+            space runs short — the message list above shrinks instead. Paired
+            with `min-h-0` on that list; see the comment there. */}
+        <form onSubmit={handleAsk} className="shrink-0">
           <div style={{ background: "var(--surface-raised)", border: "1px solid var(--border-default)", borderRadius: "16px", boxShadow: "var(--shadow-sm)", padding: "12px 16px", transition: "border-color 100ms, box-shadow 100ms" }}
             onFocusCapture={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-strong)"; (e.currentTarget as HTMLElement).style.boxShadow = "var(--shadow-md)"; }}
             onBlurCapture={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)"; (e.currentTarget as HTMLElement).style.boxShadow = "var(--shadow-sm)"; }}
