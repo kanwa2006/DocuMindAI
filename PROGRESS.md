@@ -866,6 +866,41 @@ not run. The rule is scoped correctly but its effect on a real touch device is u
 
 ---
 
+### 2026-08-02 — workspace certification blocked at step 4; root-caused and fixed (`31c7119`)
+
+Started per-workspace certification and it could not begin. **Every document in the database
+sat in `general`** — resumes uploaded from HR, contracts from Legal, all of them. No workspace
+other than `general` held a single document, so per-workspace retrieval, grounding and
+isolation were untestable.
+
+**Two independent breaks in the same path, both required:**
+1. `WorkspaceUI.handleFileChange` called `uploadDocument(file, **undefined**, chatId)` —
+   the workspace argument was dropped, seemingly when per-workspace localStorage tracking was
+   replaced by `chat_session_id`. The component knows its own `workspaceType`; it now passes it.
+2. `VerifyUploadRequest` had **no `workspace_id` field**, so even a client that sent one would
+   have had it discarded, and `verify_upload` fell back to the JWT claim — the constant
+   `"general"` (P0-9). The presigned request already carried the workspace; only verify dropped
+   it. Field added and used, restricted to `KNOWN_WORKSPACE_SLUGS`.
+
+**Certified in Chromium, before/after on the same flow:**
+```
+before:  general  READY  chunks=2  embedded=2   meridian_vendor_msa.pdf
+after:   legal    READY  chunks=2  embedded=2   meridian_employee_handbook.pdf
+```
+The whole worker pipeline — extraction → chunking → embedding — runs correctly under the
+corrected workspace. Suite 131 passed, tsc clean.
+
+**Certification status:** step 4 (upload) and steps 5-8 (READY, indexing, chunks, embeddings)
+now pass for **legal**. Remaining workspaces need the same upload pass — now possible.
+Generation steps (11-15, 21) remain blocked: `gemini-2.5-flash` 0/21 ResourceExhausted,
+`gemini-1.5-flash` 0/21 NotFound (re-verified this session).
+
+**Note:** documents uploaded before this fix remain in `general`. They are not wrong data —
+they were correctly recorded under the workspace the system believed it was in — but they are
+not usable as per-workspace fixtures. Re-upload per workspace during certification.
+
+---
+
 ## Continuation state (for the next session)
 
 - **Branch:** `security/redact-env-example` · **HEAD:** see `git log -1` · working tree clean
