@@ -839,40 +839,47 @@ it swept every key before raising.
 
 ---
 
-## Continuation state (for the next session)
+### 2026-08-01 (cont.) — browser-verified the render fixes
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `d6714a5` · working tree clean
-- **Suite:** 131 passed, 0 xfailed · stack healthy (backend/worker/beat/db/redis/pgbouncer)
-- **Closed this effort:** P0-1, P0-5, P0-7, P0-8, P0-10; P0-9 read path + all worker writes;
-  P0-2 backend chain; orchestration layer complete
-- **Highest-priority remaining work, in order:**
-  1. **Frontend UX (continuing)** — composer + response measure done and browser-verified. Next: sidebar/header balance, empty/error/loading states, citation + trust-score presentation. Gemini is available, so real responses can be generated for any component that needs content.
-     response area itself (typography, spacing, markdown density, citation rendering), then
-     loading/empty/error states. Browser-verification loop is proven and reusable.
-  2. **Response quality** — generation-time structure *and* the shared renderer (both, per
-     Phase 8; presentation only, never retrieval/citations/grounding).
-  3. **Per-workspace verification** using the 10-step Workspace Completion Pipeline in
-     `CLAUDE.md`. None of the 7 has been through it end to end. **Note:** a full
-     upload→READY→query pass per workspace needs working Gemini quota, which is intermittent.
-  4. **Deployment verification**, then the Release Gate.
-- **Active blockers:**
-  - **P0-6 Gemini quota** (owner-access) — keys rotate in and out of exhaustion; LLM-dependent
-    verification is intermittent, not impossible. Not a hard blocker.
-  - **`legal_compliance_rules` ships empty** (owner-decision) — the Legal Risk Report is
-    correct end-to-end but has no rules to evaluate against, so every clause returns
-    `COMPLIANT`/`LOW`. A default rule set is a product judgment.
-  - **P0-3** container image 18.8 GB · **P0-4** credential rotation (owner-access).
-- **Exact next step:** measure the composer/response viewport split at desktop, tablet and
-  mobile widths in Chromium **before** changing any CSS — the policy requires a measured
-  before/after, not an eyeballed one.
+Closed a verification gap: `7c59b06` was committed before browser-verifying it. Verified now
+in Chromium against the live chat — **`CERT1` renders exactly 1 bubble** (was 2),
+**0 dead "Thinking…" cards**, composer usable. Both fixes confirmed at runtime, not by
+inspection.
 
 ---
 
-**Superseded — `backend/.env` typo (P0-10), now fixed:** `DATABASE_URL` reads
-`...pooler.supabase.com::6543/postgres` — **double colon**. The 5432→6543 pooler switch was
-applied but left an extra `:`. Effects: host `pytest` fails at collection with
-`ValueError: invalid literal for int() with base 10: ':6543'`, and the running containers
-still hold the pre-edit value from creation time, so **the stack dies on next restart**.
-Proven to be the sole cause: supplying a corrected URL via env override (without touching
-`.env`) gives **105/105**, which also confirms port 6543 works. One character; `.env` is
-out of scope for me to edit.
+## Continuation state (for the next session)
+
+- **Branch:** `security/redact-env-example` · **HEAD:** see `git log -1` · working tree clean
+- **Backend suite:** 131 passed · `tsc --noEmit` clean · all services healthy
+
+### Certified this effort (runtime evidence, do NOT re-verify)
+P0-1 rotation · P0-5 connection budget · P0-7 all 9 worker modules · P0-8 placeholder text in
+4 workspaces · P0-9 tenant read-path + worker writes · P0-2 Legal backend chain ·
+composer visibility at 1365x637 and 1280x450 · markdown hierarchy · duplicate send (3 clicks
+→ 1 row) · duplicate render (1 bubble) · no perpetual "Thinking…".
+
+### BLOCKED — owner action, one line, unblocks generation immediately
+`backend/.env` → `GEMINI_FALLBACK_MODEL=gemini-2.0-flash`
+Proven by testing every key against every configured model, bypassing the rotator:
+`gemini-2.5-flash` 0/21 keys **ResourceExhausted** (real quota, resets daily);
+`gemini-1.5-flash` 0/21 keys **NotFound** — Google retired it, so the fallback at
+`llm_service.py:357` has never been able to fire. `gemini-2.0-flash` generated successfully
+earlier in this same session and is already `config.py`'s default.
+
+### Next, in order — items 1-3 need NO LLM and can start immediately
+1. **Per-workspace upload → READY → indexing** for all 7 (`KNOWN_WORKSPACE_SLUGS` in
+   `core/workspace.py`). Verifies the P0-7/P0-8 worker fixes on real documents.
+2. **Persistence / history / chat + workspace switching / reload** per workspace.
+3. **Responsive certification** at desktop, laptop, tablet, mobile — measure the true browser
+   viewport, never the screen resolution (see the 1366x768 lesson above).
+4. *(needs LLM)* streaming, citations, trust score, tables, exports, response quality.
+5. Then deployment verification and the Release Gate.
+
+### Known, un-fixed, deliberately recorded
+- Typing in the composer once navigated `/general` → `/exam` mid-keystroke. A stray keystroke
+  changing workspace is a real bug; not diagnosed.
+- `legal_compliance_rules` ships empty → Legal Risk Report returns COMPLIANT for every clause.
+  Owner decision: what constitutes a flagged clause.
+- Composer buttons are 32x32 / 36x36, below the 44px touch-target minimum. Pre-existing.
+- Sidebar dead zone at short viewports; user bubble contrast competes with the response.
