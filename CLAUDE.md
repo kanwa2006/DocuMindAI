@@ -248,6 +248,36 @@ Verification Needed) and tag blockers **agent-actionable** / **owner-access-requ
 load-bearing claim against the repo or runtime — this is not optional politeness, it has
 caught real errors.
 
+### Specialist agent lifecycle
+
+**Inputs and outputs are uniform**, which is why they are stated once here rather than
+repeated per agent (that would be two sources of truth for one contract):
+
+- **Required inputs — every agent, every time.** Subagents start cold: nothing carries over.
+  The invoking prompt must supply the diff or changed-file list, the intent in one sentence,
+  how to run the stack, any prior decision that must not be relitigated, and any
+  known-failing baseline. An agent's own file lists anything additional it needs.
+- **Expected output — every agent.** The 10-section contract (Summary · Evidence · Findings ·
+  Root Cause · Risks · Recommendations · Confidence · Escalation · Files Reviewed ·
+  Additional Verification Needed), findings ranked most-severe first, each blocker tagged
+  **agent-actionable** / **owner-access-required** / **owner-decision-required**.
+- **Who consumes it.** Always the main engineering thread. Agents cannot invoke each other,
+  so any "follow-up agent" in the table below is a call *the thread* makes next.
+- **Implementation owner — always the main engineering thread.** No specialist writes
+  production code, tests, or docs. A specialist that proposes a diff is advising, not
+  implementing.
+
+**Handoff chains** (thread-mediated): `release-readiness-checker` → `security-reviewer`
+(detection → verdict) · `rag-pipeline-tracer` → `performance-profiler` (stage → cost) ·
+`workspace-qa` → the layer owner it names · `test-runner` → `code-reviewer` when a failure
+is architectural rather than a bad assertion.
+
+**Changing the roster.** Add an agent only for an *observed, recurring* responsibility no
+existing agent covers — not because a technology exists. Split one that has grown two
+distinct owners; merge two that answer the same question; retire one that stops earning its
+place. Any change updates the registry table above in the same commit, and takes effect only
+after a session restart.
+
 ### Skill registry and policy
 
 `.agents/skills/` is **gitignored — zero tracked files.** It is local tooling, not
@@ -271,6 +301,24 @@ skill recommends that the repo does not already use. Never migrate frameworks on
 say-so. When skills conflict, the repo's existing implementation wins and stays single.
 A newly added skill is classified by the same test — does it improve *this* stack without
 importing foreign technology — so future skills need no edit to this section.
+
+**Skill lifecycle.**
+
+1. **Discover** at session startup (`ls .agents/skills/*/SKILL.md`) — names only. Do not read
+   bodies yet; several are megabytes.
+2. **Classify** any unseen skill by reading its `SKILL.md` entry point (the skill's contract)
+   against this stack. Record the verdict in the table above.
+3. **Load** a skill's body only when its domain is the work in hand — UI/a11y/typography
+   skills for frontend and response-rendering work, nothing for backend, Celery, Redis,
+   migrations, or deployment.
+4. **Do NOT load** an unrelated skill, a skill already classified *not applicable*, or any
+   skill merely because it exists. Loading costs context and buys nothing outside its domain.
+5. **Resolve conflicts** in this order: repository architecture → the Directive's principles
+   → the more specific skill → the more recent skill. When two skills disagree, the existing
+   implementation stays single; never fork an implementation to satisfy both.
+6. **Architecture overrides guidance, always.** A skill is advice from outside this project.
+   It may not introduce a dependency the repo lacks, migrate a framework, or replace working
+   code on stylistic grounds. `ckm-ui-styling`'s shadcn/Radix rejection is the worked example.
 
 ### Implementation lifecycle
 
@@ -342,6 +390,40 @@ subsystem fail the same way. Then strengthen the shared layer and add the guard 
 **verify the guard bites** by reintroducing the defect. `tests/test_worker_session_discipline.py`
 is the reference: a ratchet whose allowlist may only shrink.
 
+### Commit lifecycle
+
+Commit at each **logically complete milestone** — a coherent unit that is verified, not a
+day's accumulation and not a half-finished refactor. Before committing: runtime verification
+done, regression green, relevant reviewers clear, `PROGRESS.md` updated in the same commit or
+the one immediately after.
+
+The message explains **why the change exists**, not what changed — the diff already says
+what. State the defect, the mechanism, the architectural decision, and the evidence that
+verified it. Working commits in this repo read like short incident notes; match that.
+
+Never bypass hooks (`--no-verify`) or signing. Never commit build artifacts (`.next/`,
+`celerybeat-schedule.*`, `.playwright-mcp/`), screenshots, or scratch scripts — delete debug
+artifacts before committing. Push and deploy are **owner-authorized**, never automatic.
+
+### Documentation lifecycle
+
+Three files, three owners, no overlap — enforced by `docs-sync-checker`:
+
+| File | Owns | Update when |
+|---|---|---|
+| `CLAUDE.md` | Stable context + this execution model | Architecture, invariants, or orchestration changes |
+| `PROGRESS.md` | All status, evidence, blockers, session log | Every completed unit of work |
+| The Directive | Permanent principles, Release Gate, definition of done | **Frozen** — only when a real failure exposes a missing rule |
+
+If information belongs elsewhere, **move it, never copy it**. When a fix invalidates a
+documented claim, correct the claim in the same commit — an invariant that has become false
+is worse than no invariant, because it is trusted (see the RLS and tenant-filter
+corrections). Prefer descriptions that cannot drift over counts that must be maintained.
+
+**Orchestration is living infrastructure.** When implementation reveals a better rule,
+amend this section immediately so the next session inherits it — but amend incrementally;
+never regenerate it wholesale.
+
 ### Workspace parity
 
 The canonical list is `KNOWN_WORKSPACE_SLUGS` in `backend/app/core/workspace.py` — read it,
@@ -349,6 +431,27 @@ don't hardcode. Every workspace meets identical standards: user/chat/retrieval/s
 isolation, history, uploads, reports, citations, and the **shared** renderer, design system,
 markdown renderer, and streaming renderer. Only prompts, templates, and business logic may
 differ. A workspace-specific UI component is an architecture violation, not a feature.
+
+**Workspace completion pipeline.** A workspace is "done" only when every step below passes
+for it. Run per workspace, in order; stop at the first failure and fix at the owning layer:
+
+1. **Upload → READY** — document reaches READY; chunks exist.
+2. **Real extraction** — the pipeline reads the *uploaded* document. Grep the owning task for
+   placeholder strings; P0-8 shipped fabricated text in two workspaces and looked correct
+   in both.
+3. **Worker path sound** — task uses `SyncSessionLocal`, is registered, routed, and its queue
+   consumed (the three-way rule).
+4. **Rows land** with `owner_id` set, and `workspace_id` set to the resolved slug UUID.
+5. **Isolation** — a second account sees none of it: documents, chats, retrieval, uploads,
+   reports, streaming, cache/Redis keys, vector namespace.
+6. **Retrieval + citations** — answers cite the right page; absent evidence is refused.
+7. **Streaming** — SSE event names in lockstep; one `done`; no duplicate persistence.
+8. **History + persistence** survive reload and workspace switch.
+9. **Rendering** via the shared renderer — no workspace-specific component.
+10. **Browser verification** at desktop/tablet/mobile.
+
+Verification is `workspace-qa`'s call; the fix is the thread's. Record the per-workspace
+result in `PROGRESS.md` — a workspace is never "done" by inference from another one passing.
 
 ### Deployment and release lifecycle
 
