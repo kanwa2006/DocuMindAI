@@ -57,6 +57,9 @@
   background: transparent; border: none; outline: none; resize: none;
   font-family: var(--font-body); font-size: var(--text-sm);
   color: var(--text-primary); min-height: 44px; max-height: 200px;
+  /* Sizing belongs here, not in an inline style: inline `flex` beats the
+     stylesheet, which stopped the responsive rule below from applying. */
+  flex: 1 1 auto; min-width: 0;
 }
 .chat-input-container {
   background: var(--surface-raised); border: 1px solid var(--border-default);
@@ -65,6 +68,30 @@
 }
 .chat-input-container:focus-within {
   border-color: var(--border-strong); box-shadow: var(--shadow-md);
+}
+
+/* Composer row — icons, input and Send share one line where there is room.
+ *
+ * Measured at 375x667 (common short phone): the stacked toolbar cost 44px
+ * (36px row + 8px margin), as much vertical space as the textarea itself,
+ * purely for being on its own line. Inline returns that to the reading area:
+ * composer 175px -> 131px, reading area 400px -> 444px.
+ *
+ * Below 640px it wraps instead. Measured reason, not a guess: the voice-input
+ * language select makes the left control group ~191px, which squeezed the
+ * textarea to 33px wide at 375px — inline "worked" but the input was unusable.
+ * When wrapped, `order: -1` puts the textarea on the first line so the input
+ * still leads and the controls sit beneath it, which is the pre-existing layout.
+ * Net effect: recover 44px wherever it is safe, never at the cost of usability.
+ */
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+@media (max-width: 640px) {
+  .composer-row { flex-wrap: wrap; }
+  .composer-row > .chat-input { order: -1; flex-basis: 100%; }
 }
 
 /* ── BADGES ──────────────────────────────────────── */

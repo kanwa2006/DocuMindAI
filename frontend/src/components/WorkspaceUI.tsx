@@ -2048,6 +2048,30 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
               </div>
             )}
 
+            {/* Composer row — icons, input and Send share ONE line.
+                Measured before this change (375x667, the common short phone):
+                composer 175px of a 615px main = 28.5%, leaving a 400px reading
+                area. The stacked toolbar cost 44px (36px row + 8px margin) —
+                as much vertical space as the textarea itself — purely for being
+                on its own line. Inline recovers that for reading, which is what
+                the viewport is for. `align-items: flex-end` keeps the controls
+                pinned to the bottom as the textarea grows toward its 200px max. */}
+            <div className="composer-row">
+              <div style={{ display: "flex", gap: "4px", alignItems: "center", flexShrink: 0 }}>
+                <button type="button" onClick={handleUploadClick} className="btn-icon btn-ghost" aria-label="Attach file" style={{ width: "32px", height: "32px" }} title="Attach file (PDF, DOCX)">
+                  <span aria-hidden="true">📎</span>
+                </button>
+                <button type="button" onClick={() => { setClipInitialText(""); setClipModalOpen(true); }} className="btn-icon btn-ghost" aria-label="Paste text as document" style={{ width: "32px", height: "32px" }} title="Paste text as document">
+                  <span aria-hidden="true">📋</span>
+                </button>
+                <VoiceInputButton
+                  voiceLang={voiceLang}
+                  onLangChange={handleVoiceLangChange}
+                  onTranscript={handleVoiceTranscript}
+                  onInterimText={handleInterimText}
+                  disabled={loading}
+                />
+              </div>
             <textarea
               id="chat-textarea"
               ref={textareaRef}
@@ -2075,25 +2099,13 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
                   : "Ask anything about your documents... (Shift+Enter for new line)"
               }
               className="chat-input"
-              style={{ width: "100%", background: "transparent", border: "none", outline: "none", resize: "none", minHeight: "44px", maxHeight: "200px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)", color: voiceInterim ? "var(--text-tertiary)" : "var(--text-primary)", fontStyle: voiceInterim ? "italic" : "normal", display: "block", overflow: "auto" }}
+              /* Flex sizing lives in `.chat-input` (styles/components.css), NOT here:
+                 an inline `flex` wins over the stylesheet, so the responsive
+                 `flex-basis: 100%` under 640px could not take effect and the
+                 textarea stayed 33px wide on a 375px screen. */
+              style={{ background: "transparent", border: "none", outline: "none", resize: "none", minHeight: "44px", maxHeight: "200px", fontFamily: "var(--font-body)", fontSize: "14px", lineHeight: "var(--leading-relaxed)", color: voiceInterim ? "var(--text-tertiary)" : "var(--text-primary)", fontStyle: voiceInterim ? "italic" : "normal", display: "block", overflow: "auto" }}
             />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
-              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                <button type="button" onClick={handleUploadClick} className="btn-icon btn-ghost" aria-label="Attach file" style={{ width: "32px", height: "32px" }} title="Attach file (PDF, DOCX)">
-                  <span aria-hidden="true">📎</span>
-                </button>
-                <button type="button" onClick={() => { setClipInitialText(""); setClipModalOpen(true); }} className="btn-icon btn-ghost" aria-label="Paste text as document" style={{ width: "32px", height: "32px" }} title="Paste text as document">
-                  <span aria-hidden="true">📋</span>
-                </button>
-                <VoiceInputButton
-                  voiceLang={voiceLang}
-                  onLangChange={handleVoiceLangChange}
-                  onTranscript={handleVoiceTranscript}
-                  onInterimText={handleInterimText}
-                  disabled={loading}
-                />
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
                 {(() => {
                   // P6: show the inline "Document processing…" pip whenever
                   // ANY attached doc is still in flight, not just the
