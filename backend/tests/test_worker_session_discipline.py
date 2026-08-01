@@ -68,9 +68,7 @@ def _code_string_constants(module: Path) -> list[str]:
 # Modules still carrying the P0-7 defect. NEVER add to this list — fix the
 # module instead. See legal_tasks.py for the repaired reference implementation.
 KNOWN_VIOLATIONS = {
-    "export_tasks.py",
     "hr_tasks.py",
-    "ocr_tasks.py",
 }
 
 
