@@ -1051,8 +1051,9 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       // only a generic error toast. The user could not retry, switch chats, or
       // type; the only way out was a reload. Observed as a 404 on
       // POST /chats/{id}/messages with the composer permanently stuck.
+      let savedUserMsg: ChatMessage | null = null;
       try {
-        await createChatMessage(chatId, "user", queryText);
+        savedUserMsg = await createChatMessage(chatId, "user", queryText);
       } catch (persistErr) {
         console.error("[chat] failed to persist user message", persistErr);
         setLoading(false);
@@ -1066,7 +1067,17 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         );
         return;
       }
-      setHistory((prev) => [...prev, { id: Date.now().toString(), role: "user", content: queryText }]);
+      // Use the SERVER's message, not a fabricated one. This previously pushed
+      // `{ id: Date.now().toString() }` and threw away what the API returned, so
+      // the optimistic entry carried a fake id while the persisted row carried a
+      // real UUID. As soon as history reloaded from the server BOTH were in
+      // state and the same user turn rendered TWICE — one row in the database,
+      // two bubbles on screen. The assistant path already did this correctly
+      // (`setHistory(prev => [...prev, savedMsg])`); the user path did not.
+      setHistory((prev) => [
+        ...prev,
+        savedUserMsg ?? { id: `local-${Date.now()}`, role: "user", content: queryText },
+      ]);
 
       // P7: auto-name the chat from the user's first message. A heuristic
       // (truncate to ~40 chars, drop trailing punctuation) is plenty for
@@ -1116,6 +1127,12 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           flushTokensSync();
           if (err !== "Request cancelled.") toast.error(err, { id: toastId });
           sendingRef.current = false;   // request over — allow the next send
+          // Clear the in-flight response block. Without this the empty card
+          // stayed mounted rendering "Thinking..." FOREVER after a failed
+          // generation — the error toast appeared, the composer unlocked, but a
+          // dead "Thinking..." bubble remained in the transcript with no way to
+          // dismiss it. A failed request must leave no in-flight UI behind.
+          setResponse(null);
           setLoading(false);
           setThinkingStage(null);
           abortControllerRef.current = null;
