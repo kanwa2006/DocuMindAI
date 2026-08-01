@@ -354,6 +354,49 @@ the box. Product decision, not a defect.
 
 ---
 
+### 2026-08-01 (cont.) — orchestration layer + finance repaired
+
+**Engineering Orchestration is now repository infrastructure (`64251ef`).** The rules for
+*using* the 10 specialists lived only in prompts, so every session re-derived them and
+drifted. `CLAUDE.md` now owns the execution model: session startup, agent + skill
+registries, delegation matrix, implementation/debugging/verification/regression lifecycles,
+mandatory browser verification, workspace parity, deployment gate. Agents and workspaces are
+**discovered** (`ls .claude/agents/*.md`, `KNOWN_WORKSPACE_SLUGS`), not hardcoded, so the
+section degrades gracefully as files change. Source-of-truth boundary held — the Release
+Gate and permanent principles stay in the Directive, status stays here, neither is restated.
+
+**Skills classified, not adopted wholesale.** `.agents/skills/` is **gitignored (0 tracked
+files)**, so no pipeline may depend on one. `ui-ux-pro-max` → applicable (stack-agnostic
+a11y/UX rules). `ckm-design-system` → applicable in principle (token methodology).
+`ckm-ui-styling` → **Tailwind guidance only; its shadcn/ui + Radix direction is rejected**,
+because this repo uses neither (0 in `package.json`) and adopting it would import a
+component library beside the existing hand-rolled design system.
+`ckm-design`/`ckm-banner-design`/`ckm-slides` → not applicable (logo/CIP, ad banners,
+Chart.js decks — no such surface here). Future skills are classified by the same test, so
+no edit is needed to add one.
+
+**Two invariants corrected in `CLAUDE.md` — they had become false documentation.**
+Tenant filtering now describes `owner_id` + `TenantScoped` rather than the old
+"filter on `workspace_id`" rule that P0-9 disproved. **Postgres RLS is marked INERT** with
+evidence (`rolbypassrls=true`, disabled on all workspace tables, the policy variable never
+set). Claiming a control that does not execute is worse than claiming none.
+Also removed three hardcoded counts (migrations, test files) that drifted on every change
+and were caught stale twice — the drift *source* is gone, not merely reset.
+
+**P0-8 was systemic (`9dc50c7`).** `finance_tasks.py` hardcoded
+`"Simulated invoice ... Vendor: AWS. Total: $5050.00 ..."`, so every uploaded invoice was
+analysed as that fake AWS bill. Repaired with the same treatment as Legal, plus
+`SyncSessionLocal` (P0-7) and derived `owner_id` (P0-9). The text loader was **extracted to
+`_document_text.load_document_text`** rather than copied — copying it would have repeated
+the duplication that let the class spread. Finance's deterministic math validation is
+preserved and now documents why: Python computes every number, never the prompt.
+
+Ratchet released `finance_tasks`: suite **114 passed / 5 xfailed** (was 112 / 6).
+
+**Remaining P0-7 + P0-8 modules:** `export`, `hr`, `ocr`, `research`, `study`.
+
+---
+
 **Superseded — `backend/.env` typo (P0-10), now fixed:** `DATABASE_URL` reads
 `...pooler.supabase.com::6543/postgres` — **double colon**. The 5432→6543 pooler switch was
 applied but left an extra `:`. Effects: host `pytest` fails at collection with
