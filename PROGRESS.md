@@ -397,6 +397,51 @@ Ratchet released `finance_tasks`: suite **114 passed / 5 xfailed** (was 112 / 6)
 
 ---
 
+### 2026-08-01 (cont.) — orchestration completed; research + study repaired
+
+**Orchestration completeness audit (`a1cbfcf`).** Five genuine gaps found and closed
+incrementally (existing decisions preserved, one canonical delegation matrix):
+commit lifecycle · documentation lifecycle · specialist agent lifecycle · skill lifecycle ·
+workspace completion pipeline. Agent **inputs/outputs are documented once, not per agent** —
+the cold-start prompt requirements and the 10-section contract are identical for all ten, so
+per-row repetition would create two sources of truth for one contract. Added handoff chains
+and an explicit statement that the implementation owner is always the main thread. The skill
+lifecycle makes load/don't-load mechanical and gives conflict resolution a fixed precedence
+with repository architecture on top. The workspace completion pipeline is ten ordered checks,
+step 2 of which greps for placeholder text.
+
+**P0-8 was in FOUR workspaces, not one (`1c39768`).** Research shipped
+`"Simulated paper text … We demonstrate that X causes Y …"` and Study shipped
+`"Simulated study material … Mitochondria is the powerhouse of the cell …"` — so every paper
+yielded findings about a fake study, and every uploaded document produced mitochondria
+flashcards regardless of subject. Both repaired: real chunk text via the shared loader,
+`SyncSessionLocal` (P0-7), derived `owner_id` (P0-9).
+
+**Validation Gateway restored.** `research_tasks.py` had
+
+```python
+if finding.evidence_quote.lower() in raw_text.lower() or True:  # Simulated pass
+```
+
+`or True` made the anti-hallucination check accept **every** evidence quote including
+invented ones, and left the reject branch unreachable. It was not arbitrary: with the source
+text fabricated, a real quote could never match, so the check had to be defeated for the
+pipeline to emit anything. **The two defects propped each other up** — which is why restoring
+real text is what makes the gateway viable, and why they had to land together. Comparison is
+whitespace-normalised because extracted PDF text wraps mid-sentence.
+
+**Guards generalised** from Legal-only to every task module (placeholder detection + gateway
+short-circuit). The gateway check is **AST-based**: the text-search version failed against
+the *fixed* module because that module documents the old expression in its own docstring —
+the **second** time that mistake was made in this file, so the lesson is now written into the
+test. Verified to bite in both directions.
+
+Suite **128 passed / 3 xfailed** (was 114 / 5).
+
+**Remaining P0-7 modules:** `export`, `hr`, `ocr` — P0-7 only; none carries placeholder text.
+
+---
+
 **Superseded — `backend/.env` typo (P0-10), now fixed:** `DATABASE_URL` reads
 `...pooler.supabase.com::6543/postgres` — **double colon**. The 5432→6543 pooler switch was
 applied but left an extra `:`. Effects: host `pytest` fails at collection with
