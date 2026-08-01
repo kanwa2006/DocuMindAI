@@ -664,9 +664,36 @@ contradicts this table.
 
 ---
 
+### 2026-08-01 (cont.) — first product-quality (not engineering) defect fixed (`d6714a5`)
+
+**Engineering invariants passing is the floor, not the target.** The layout passed every
+mandatory invariant at four viewports — and a design review of the screenshot still found a
+defect worth fixing. Both bars are needed.
+
+**Follow-up suggestions rendered after every response.** A 17-message thread showed the same
+three static prompts **17 times** — 51 buttons, 476px of transcript (6% of scroll height).
+Noise was the lesser problem: they were *misleading*, because clicking "What are the next
+steps?" on message 3 cannot branch the conversation there — it appends to the end like any
+other prompt. A suggestion only means anything on the turn you are actually at.
+
+**Root cause was a missing condition, not styling.** `isLastAI` already existed, was already
+computed via `lastAiMsgIdx`, and was already used correctly by the **Regenerate** button
+directly above. The follow-up render just omitted it. Fixed at the shared message component,
+so every workspace benefits — no viewport hack, no per-screen override.
+
+Verified: 17 sets → **1**; Regenerate also 1 (the two controls are now consistent);
+Copy still present on all 18 messages (nothing over-removed); transcript 7900px → 7292px.
+
+**Design-review observations recorded, NOT yet acted on** (each needs its own measurement
+before any change): sidebar has a large dead zone between the chat list and the bottom nav
+at short viewports; the user message bubble is high-contrast black and competes with the
+response for attention; header controls cluster at both edges with a centred workspace pill.
+
+---
+
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `c805b0e` · working tree clean
+- **Branch:** `security/redact-env-example` · **HEAD:** `d6714a5` · working tree clean
 - **Suite:** 131 passed, 0 xfailed · stack healthy (backend/worker/beat/db/redis/pgbouncer)
 - **Closed this effort:** P0-1, P0-5, P0-7, P0-8, P0-10; P0-9 read path + all worker writes;
   P0-2 backend chain; orchestration layer complete
