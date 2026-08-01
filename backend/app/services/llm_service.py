@@ -64,12 +64,56 @@ def _harden_system_prompt(system_prompt: str) -> str:
 # safe string (possibly empty, possibly a user-friendly fallback message).
 # Provider internals are NOT modified — this is a thin wrapper used at the
 # two access sites (`generate` and `generate_stream`).
+# Appended when Gemini stops early with partial text. Visible on purpose: a
+# silently truncated answer is worse than a short one, because the reader has no
+# way to know a sentence — or a citation — was cut off.
+_TRUNCATION_NOTICE = (
+    "\n\n---\n\n_⚠ This answer was cut short by the model's output limit. "
+    "Ask a narrower question, or fewer documents at once, for a complete reply._"
+)
+
+
+def _finish_reason_value(response_or_chunk):
+    """finish_reason of the first candidate, as a plain int, or None.
+
+    Tolerates the enum/int variation across google-generativeai versions and
+    never raises — this runs inside the streaming hot path.
+    """
+    try:
+        candidates = getattr(response_or_chunk, "candidates", None) or []
+        if not candidates:
+            return None
+        fr = getattr(candidates[0], "finish_reason", None)
+        return getattr(fr, "value", fr)
+    except Exception:  # pragma: no cover - defensive, must never break a stream
+        return None
+
+
 def _safe_extract_text(response_or_chunk, *, on_empty: str = "") -> str:
     """Return text from a Gemini response/chunk without crashing on no-part responses."""
     try:
         # Fast path: the property is safe to read.
         text = getattr(response_or_chunk, "text", None)
         if text:
+            # ...but do NOT return blind. Gemini returns MAX_TOKENS together
+            # WITH partial text, and this fast path used to hand that partial
+            # text back untouched — so a truncated answer was delivered,
+            # persisted and rendered as though it were complete. Observed:
+            # an answer ending mid-citation at "...within two weeks (scanned",
+            # with no indication anything was missing.
+            #
+            # The MAX_TOKENS branch further down only fires when there are NO
+            # parts at all (total failure). Partial truncation is the common
+            # case and was entirely silent — the exact "failure presented as
+            # success" pattern CLAUDE.md's loud-degradation invariant forbids.
+            if _finish_reason_value(response_or_chunk) == 2:  # MAX_TOKENS
+                logger.warning(
+                    "[Gemini] response truncated by MAX_TOKENS (%d chars kept). "
+                    "Surfacing the cut to the user rather than passing it off "
+                    "as a complete answer.",
+                    len(text),
+                )
+                return text.rstrip() + _TRUNCATION_NOTICE
             return text
     except Exception as exc:
         # response.text raises ValueError when finish_reason indicates no
@@ -448,9 +492,26 @@ state exactly: "I cannot answer this based on the provided documents."
 
 Prefer complete, accurate coverage over fast partial answers.
 
-If the user asks for a summary, structure your reply as:
-   Overview · Key Topics · Important Details · Key Insights ·
-   Limitations or Risks (if applicable) · Summary.
+RESPONSE STRUCTURE — match the question, do not use one fixed template.
+
+1. If the user asks for a specific format, USE THAT FORMAT. A request for a
+   table gets a markdown table with the requested columns; a request for steps
+   gets a numbered list. An explicit request always wins over the guidance below.
+2. Otherwise choose the shape that fits the question:
+   - Direct/factual question → answer in 1-3 sentences. Nothing more. Do NOT add
+     headings, an overview, or a summary to a short factual answer.
+   - Comparison, or anything with repeating attributes across items → markdown
+     table, one row per item.
+   - "How do I" / procedural → numbered steps.
+   - Chronology, or "what happened" → dated bullet list, oldest first.
+   - Risk, compliance or audit question → finding, severity, evidence.
+   - Broad "summarise this document" → Overview · Key Points · Important
+     Details · Risks or Limitations (only if present) · Summary.
+3. Scale depth to the question. A one-line question deserves a one-line answer.
+   Only use section headings when the answer genuinely has multiple parts —
+   headings on a two-sentence reply make it harder to read, not easier.
+4. Never repeat the same information in two places (e.g. an overview that
+   restates the summary). Say it once, in the place it belongs.
 
 EVIDENCE BLOCKS (ordered by document and page):
 {grounded_context}
