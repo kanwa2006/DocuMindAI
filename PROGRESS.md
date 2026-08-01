@@ -753,6 +753,51 @@ table 820px on the same right edge.
 
 ---
 
+### 2026-08-01 (cont.) — send-path certification (`4098ef6`); halted on Gemini quota
+
+**Duplicate user message — FIXED AND VERIFIED.** `sendMessage` had no re-entrancy guard;
+`setLoading(true)` is a state update, so `disabled={loading}` lags a render and a second
+click re-enters and persists the same turn twice. Proven: `disabled` was still `false`
+immediately after the first click. Fixed with a synchronous ref cleared on all five exit
+paths. **Certified: 3 clicks fired in ONE tick → exactly 1 user row in the database.**
+This also corrects the old baseline entry blaming doubled bubbles on the test harness —
+the harness only *exposed* the missing guard.
+
+**Composer bricking — FIXED AND VERIFIED.** `await createChatMessage(...)` was unguarded.
+When the chat session 404s (belongs to another account / deleted) the exception escaped
+`sendMessage`, so `setLoading(false)` never ran and the textarea stayed **disabled showing
+"Thinking…" permanently** behind a generic toast — no retry, no chat switch, reload only.
+Reproduced live as `POST /chats/{id}/messages → 404`. Now caught: state unwound, guard
+released, actionable message. **Certified: after a failed send the composer stays usable.**
+
+**Response measure widened** 63ch → 78ch (~98 chars, ~84% of the 832px column) on owner
+report that text wrapped while horizontal space remained. Full history recorded in the CSS
+comment so it is not "corrected" back to a round number.
+
+**RAG pipeline — partially certified.** `POST /query/stream` → **200**; retrieval and
+grounding executed; the failure is downstream at generation only.
+
+**HALTED: Gemini quota genuinely exhausted (external blocker).**
+```
+Configured Gemini with key 5 … 6 … 7 … 15     <- rotator sweeping all keys
+[query/stream] Stream failed
+Exception: All Gemini API keys exhausted or on cooldown.
+```
+Rotation behaved **correctly** — it swept all 21 keys before raising. This is the free-tier
+daily quota, consumed largely by this session's own verification runs. Per the standing stop
+conditions this is "external infrastructure unavailable": no repository change can produce
+tokens. It resets on Google's daily schedule.
+
+**Blocked behind it (cannot be certified without generation):** streaming render, citations,
+trust score, markdown/table output for NEW responses, and the full per-workspace journey for
+General / Legal / HR / Finance / Study / Research / Exam.
+
+**Not blocked, available now for the next session:** upload → READY → indexing per workspace,
+persistence, history, chat/workspace switching, exports of EXISTING content, responsive
+verification at all four breakpoints, and console/network checks — none of which need the LLM.
+
+---
+
 ## Continuation state (for the next session)
 
 - **Branch:** `security/redact-env-example` · **HEAD:** `d6714a5` · working tree clean
