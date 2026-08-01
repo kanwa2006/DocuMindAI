@@ -442,6 +442,47 @@ Suite **128 passed / 3 xfailed** (was 114 / 5).
 
 ---
 
+### 2026-08-01 (cont.) — export + ocr repaired; P0-7 down to one module
+
+Both turned out to be broken **independently of** the session mixing:
+
+**`export_tasks`** eager-loaded `selectinload(Contract.clauses).selectinload(Clause.redlines)`
+— but **neither relationship exists**; `models/legal.py` declares only the FK columns. Every
+dispatch raised `AttributeError` before touching the DB, so legal DOCX export has never run.
+Fixed with explicit queries rather than by adding relationships, keeping the change inside
+the task instead of altering shared models every workspace imports. Added the tenant scope
+the now-`TenantScoped` models require: the contract's owner is resolved once under a narrow
+`system_scope()` bootstrap (a background job has no request to inherit from), then all reads
+run under that owner.
+
+**`ocr_tasks`** looked implemented and *could not* have worked — fabricated file path
+(`"Pass a mock file path ... for prototype"`), persistence commented out and targeting
+`doc.extracted_text` / `doc.ocr_metadata` which **do not exist on the model**, then
+`db.commit()` on no-op changes plus a log line saying `"OCR Extraction successful"`. A
+dispatch would have reported success and discarded everything — the silent-degradation
+pattern CLAUDE.md forbids. It has **zero dispatch sites**, and the real OCR path
+(`document_tasks` → `storage_service` → `ocr_orchestrator`) is already verified end-to-end,
+so making this one real would duplicate a working pipeline. It now raises
+`OcrGpuTaskNotImplemented` and names the real implementation. **Wiring deliberately preserved**
+(`include` + `task_routes` + `-Q ocr_gpu_queue`) so the three-way rule holds and a dedicated
+GPU worker can take the queue over later, as `celery_app` already anticipates. Both tasks
+verified still registered.
+
+Suite **130 passed / 1 xfailed** (was 128 / 3).
+
+**P0-7 remaining: `hr_tasks.py` only.** Deliberately NOT attempted this session. It is the
+one worker module whose workspace is **verified working end-to-end** (3 resumes ranked
+95/50/15 with cited evidence + CSV export), it is the largest (191 lines) and carries
+idempotency handling and embedding error recovery. Converting it under low remaining context
+risked breaking the only proven workspace for no urgency — its defect is intermittent, not
+constant. Scope for whoever picks it up: `AsyncSessionLocal` → `SyncSessionLocal`, drop
+`asyncio.run`, use `_run_async` for the LLM/embedding calls. **No P0-8 or P0-9 work needed** —
+it carries no placeholder text and its models are not `TenantScoped`
+(`hr_job_roles` already has `owner_id`). The ratchet in
+`tests/test_worker_session_discipline.py` holds it as the single remaining entry.
+
+---
+
 **Superseded — `backend/.env` typo (P0-10), now fixed:** `DATABASE_URL` reads
 `...pooler.supabase.com::6543/postgres` — **double colon**. The 5432→6543 pooler switch was
 applied but left an extra `:`. Effects: host `pytest` fails at collection with
