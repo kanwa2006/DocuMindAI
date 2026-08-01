@@ -765,6 +765,9 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Synchronous in-flight flag for sendMessage. See the guard at the top of
+  // sendMessage for why a ref rather than the `loading` state.
+  const sendingRef = useRef(false);
   const pollingIntervalsRef = useRef<NodeJS.Timeout[]>([]);
   const thinkingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -986,6 +989,20 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   // ── Core send function ─────────────────────────────────────────────────────
   const sendMessage = useCallback(async (queryText: string) => {
     if (!queryText.trim()) return;
+
+    // Re-entrancy guard. NOT a debounce and not a workaround — it closes a real
+    // race. `setLoading(true)` below is a STATE update, so it does not take
+    // effect until React re-renders; between the first call and that re-render
+    // the Send button's `disabled={loading}` is still false. A second click (or
+    // Enter immediately followed by a click) therefore re-enters this function
+    // and runs `createChatMessage` twice, persisting the SAME user message
+    // twice — which is exactly the duplicated user bubble reported in the UI.
+    // A ref is the correct instrument because it updates synchronously; state
+    // cannot close a window that exists precisely because state is async.
+    // Cleared in the `finally` of this function's request lifecycle.
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+
     window.speechSynthesis?.cancel?.();
 
     // PART 4 — Teacher workspace: if the user types "generate paper" /
@@ -1004,6 +1021,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           { icon: "💡", duration: 5000 },
         );
         setShowPaperConfig(true);
+        sendingRef.current = false;
         return;
       }
     }
@@ -1015,6 +1033,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     const TERMINAL = new Set(["READY", "FAILED", "DEDUPLICATED"]);
     const anyProcessing = docs.some((d) => !TERMINAL.has(d.status));
     if (anyProcessing) {
+      sendingRef.current = false;
       return; // Send button is disabled + inline hint visible; no toast spam.
     }
 
@@ -1024,7 +1043,29 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
     abortControllerRef.current = new AbortController();
 
     if (chatId) {
-      await createChatMessage(chatId, "user", queryText);
+      // Persisting the user turn must not be able to brick the composer.
+      // It was unguarded: when this threw — e.g. the chat session 404s because
+      // it belongs to another account or was deleted — the exception escaped
+      // sendMessage, so `setLoading(false)` never ran, `sendingRef` was never
+      // cleared, and the input stayed disabled showing "Thinking…" FOREVER with
+      // only a generic error toast. The user could not retry, switch chats, or
+      // type; the only way out was a reload. Observed as a 404 on
+      // POST /chats/{id}/messages with the composer permanently stuck.
+      try {
+        await createChatMessage(chatId, "user", queryText);
+      } catch (persistErr) {
+        console.error("[chat] failed to persist user message", persistErr);
+        setLoading(false);
+        sendingRef.current = false;
+        if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
+        setShowThinkingLabel(false);
+        abortControllerRef.current = null;
+        toast.error(
+          "This chat could not be opened — it may have been deleted. Start a new chat to continue.",
+          { id: "chat-persist-failed" },
+        );
+        return;
+      }
       setHistory((prev) => [...prev, { id: Date.now().toString(), role: "user", content: queryText }]);
 
       // P7: auto-name the chat from the user's first message. A heuristic
@@ -1074,12 +1115,14 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
         (err) => {
           flushTokensSync();
           if (err !== "Request cancelled.") toast.error(err, { id: toastId });
+          sendingRef.current = false;   // request over — allow the next send
           setLoading(false);
           setThinkingStage(null);
           abortControllerRef.current = null;
           if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
         },
         async () => {
+          sendingRef.current = false;   // request over — allow the next send
           if (!abortControllerRef.current) return;
           flushTokensSync();
           toast.success("Response complete.", { id: toastId });
@@ -1160,6 +1203,7 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
   const handleStopGenerating = () => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    sendingRef.current = false;   // cancelled — allow the next send
     setLoading(false);
     if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
     setShowThinkingLabel(false);

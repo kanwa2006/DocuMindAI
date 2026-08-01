@@ -136,7 +136,7 @@ body {
 .text-response > h4,
 .text-response > h5,
 .text-response > h6 {
-  max-width: 63ch;
+  max-width: 78ch;
 }
 
 /* ── AI response markdown: block rhythm and heading hierarchy ──────────────
@@ -205,15 +205,24 @@ body {
 
 .text-response strong { font-weight: 650; color: var(--text-primary); }
 
-/* Measure note for the `max-width: 63ch` rule above.
-   63ch = ~562px = ~79 real characters at 15px in this font (1ch = 9.00px,
-   average glyph 7.13px — see the calibration comment further up).
-   Raised from 57ch after measuring the rendered page: 57ch used only 47% of the
-   content column and pushed 575px of whitespace to one side. Long-form print
-   guidance tops out near 75, but a scannable, heavily-structured AI answer
-   reads comfortably slightly wider, and the alternative here was a column that
-   looked broken. Paired with the narrower `max-w-4xl` chat column so prose fills
-   most of its line and the gutters are symmetric.
+/* Measure note for the `max-width: 78ch` rule above.
+   1ch = 9.00px at 15px in this font while the average glyph is 7.13px, so ch
+   OVERSTATES the character count by ~26% (see the calibration comment further
+   up). 78ch = ~702px = ~98 real characters.
+
+   History, so this is not "corrected" back on aesthetic grounds:
+     72ch -> rendered 91 chars (unintended; ch miscalibration)
+     57ch -> 72 chars, but used only 47% of the column and dumped 575px of
+             whitespace on one side
+     63ch -> 79 chars, 68% utilisation
+     78ch -> ~98 chars, ~84% of the 832px column  <- current
+   The last step was an explicit product decision by the owner: text was
+   wrapping to a new line while horizontal space remained, which reads as broken
+   even though the line length was textbook. Classic print guidance (45-75) is
+   for continuous prose; these answers are short, heavily structured blocks with
+   bold lead-ins and lists, which tolerate — and here benefit from — a wider
+   measure. The cap still exists so an ultra-wide monitor cannot produce
+   150-character lines.
    Tables and code blocks are deliberately NOT in that selector list — they use
    the full column, because a comparison table squeezed to reading measure is
    harder to read, not easier. */
