@@ -721,6 +721,38 @@ in it.
 
 ---
 
+### 2026-08-01 (cont.) — response presentation: hierarchy + column balance (`a15b382`)
+
+Owner supplied a ChatGPT screenshot as the target and a critique: *"response column uses
+only part of the reading width, excessive empty space; mostly plain paragraphs; headings,
+bullets, tables, spacing and hierarchy inconsistent; feels like raw markdown in a container."*
+Both root causes found by measurement, both fixed in the **shared** renderer.
+
+**1. Markdown had NO hierarchy — the big one.** Measured: `<h2>` computed to
+**15px / weight 400**, byte-identical to `<p>`, and **every block margin was 0px**.
+Tailwind Preflight strips default heading sizes, weights and margins; nothing added them
+back for markdown. ReactMarkdown was emitting correct semantic HTML that rendered as an
+undifferentiated wall of text. Added a scoped heading scale + block rhythm to
+`.text-response` (space above a heading > space below, list markers/indent restored,
+blockquote, hr, `:first-child` reset). Verified: h2 **18.3px/650** with 29.3px top margin,
+paragraphs 13.5px, list items 5.25px, disc markers present.
+
+**2. Column badly unbalanced.** Prose 513px flush LEFT in a 1088px column — **47%
+utilisation, all 575px of gutter on one side** — while tables spanned 1076px, so prose and
+tables shared a left edge but ended 500px apart. `max-w-6xl` → `max-w-4xl`, prose 57ch →
+63ch. Result: column **832px**, prose **567px (68%, was 47%)**, gutter **265px (was 575)**,
+table 820px on the same right edge.
+
+**Two self-inflicted breakages, recorded because the class matters more than the instance:**
+- A JSX comment between `return (` and the root element created two adjacent root nodes
+  (TS1109). It shipped because my check ran `npx tsc | tail` and echoed `$?` — **the exit
+  code of `tail`, not tsc**. Always `PIPESTATUS` (or don't pipe) when gating on a compiler.
+- Inserting a new CSS block **into an existing multi-line selector list** orphaned
+  `max-width: 63ch` onto `h5,h6` only, silently removing the measure from all prose. Caught
+  by re-measuring after the edit rather than trusting it. Never insert into a selector list.
+
+---
+
 ## Continuation state (for the next session)
 
 - **Branch:** `security/redact-env-example` · **HEAD:** `d6714a5` · working tree clean
