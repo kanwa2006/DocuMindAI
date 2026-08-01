@@ -1306,7 +1306,14 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
       // localStorage shadow list — the backend is the source of truth.
       const uploadedDoc = await uploadDocument(
         selectedFile,
-        undefined,
+        // Was `undefined`, so no workspace was ever sent and the backend fell
+        // back to the JWT claim — the constant "general" (P0-9). Every upload
+        // therefore landed in `general` regardless of the page it came from:
+        // verified in the database, resumes uploaded from HR and contracts from
+        // Legal all sat in `general`. That made per-workspace retrieval and
+        // isolation impossible to certify. The component already knows which
+        // workspace it is; pass it.
+        workspaceType,
         chatId || undefined,
       );
       setDocs((prev) => [uploadedDoc, ...prev]);

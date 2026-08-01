@@ -225,6 +225,11 @@ export const uploadDocument = async (
       mime_type: uploadMeta.mime_type,
       size_bytes: uploadMeta.size_bytes,
       chat_session_id: chatSessionId ?? null,
+      // The workspace this upload belongs to. Without it the backend fell back
+      // to the JWT claim (the constant "general"), so documents uploaded from
+      // Legal/HR/Finance all landed in `general`. The presigned request already
+      // sent this; verify silently dropped it.
+      workspace_id: workspaceId,
     })
   });
   if (!verRes.ok) throw new Error("Failed to verify upload");

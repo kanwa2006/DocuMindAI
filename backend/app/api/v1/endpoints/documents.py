@@ -16,7 +16,7 @@ from app.schemas.document import DocumentResponse
 from app.services.document_service import DocumentService
 from app.models.document import Document, DocumentStatus
 from app.core.auth import get_current_user
-from app.core.workspace import resolve_workspace_id
+from app.core.workspace import KNOWN_WORKSPACE_SLUGS, resolve_workspace_id
 from app.core.config import settings
 from app.core.rate_limiter import limiter
 from app.workers.tasks.document_tasks import process_document, process_clip_document
@@ -68,6 +68,14 @@ class VerifyUploadRequest(BaseModel):
     # P1: per-chat isolation. When set, retrieval will only see this doc for
     # queries made in this specific chat session.
     chat_session_id: Optional[str] = None
+    # The workspace the user is actually uploading into. Without this the
+    # endpoint fell back to the JWT `workspace_id` claim, which is the constant
+    # "general" for every user (see P0-9) — so EVERY document landed in
+    # `general` no matter which workspace page it was uploaded from. Verified in
+    # the database: resumes uploaded from HR, contracts from Legal, all sat in
+    # `general`, which made per-workspace retrieval and isolation untestable.
+    # The presigned-URL request already carried this value; only verify dropped it.
+    workspace_id: Optional[str] = None
 
 
 @router.post("/clip")
@@ -173,7 +181,15 @@ async def verify_upload(
     """
     doc_id = uuid.UUID(request.document_id)
     owner_id = uuid.UUID(current_user["id"])
-    ws_uuid = resolve_workspace_id(current_user.get("workspace_id"))
+    # Prefer the workspace the upload actually happened in; fall back to the
+    # token claim only when the client did not supply one (older clients).
+    # Restricted to KNOWN_WORKSPACE_SLUGS so a caller cannot invent a workspace;
+    # `owner_id` still scopes the row either way.
+    requested_ws = (request.workspace_id or "").strip().lower()
+    ws_uuid = resolve_workspace_id(
+        requested_ws if requested_ws in KNOWN_WORKSPACE_SLUGS
+        else current_user.get("workspace_id")
+    )
 
     storage_path = request.object_key
 
