@@ -590,14 +590,58 @@ but never created. Recorded rather than invented; the canonical set remains `CLA
 
 ---
 
+### 2026-08-01 (cont.) — Gemini is NOT blocked; two response defects fixed (`c805b0e`)
+
+**Correction: Gemini quota was never the blocker.** Verified the rotation implementation and
+then tested it: **21 keys loaded, 0 cooling, 0 invalid, generation succeeded.** The rotator is
+correct — dynamic `while True` discovery of `GEMINI_API_KEY_N` (unlimited, no code change to
+add keys), 403 → permanent skip, 429 → cooldown **with expiry**, and it waits for the soonest
+cooldown rather than failing. Earlier cooldowns had simply expired. My "quota blocker" framing
+was wrong and cost a session of verification.
+
+With real generation available, two defects surfaced by **reading actual responses**:
+
+**1. One fixed template for every question.** The prompt said *"If the user asks for a summary,
+structure your reply as: Overview · Key Topics · Important Details · Key Insights · Limitations
+or Risks · Summary"* — and the model applied it regardless. A request for *"a markdown table
+with columns Clause, Obligation, Risk"* returned those six headings and **no table**.
+Replaced with intent-adaptive guidance (explicit format wins; else table / steps / timeline /
+finding-severity-evidence / 1-3 sentences; scale depth to the question; never repeat).
+**Verified at runtime:** same request now returns a real table with exactly the requested
+columns and zero generic headings.
+
+**2. Truncated answers presented as complete — loud-degradation violation.**
+`_safe_extract_text` had a fast path `if text: return text` that returned **before ever reading
+`finish_reason`**. Gemini returns `MAX_TOKENS` *together with* partial text, so a cut-off answer
+was returned, persisted and rendered as whole. Found in the database: an answer ending
+mid-citation at `"...within two weeks (scanned"` — no closing paren, no indication. The existing
+MAX_TOKENS branch only fired when there were **no parts at all**; partial truncation — the
+common case — was entirely silent. The fast path now checks `finish_reason`, logs, and appends
+a visible notice while preserving every character produced.
+**Confirmed pre-existing**, not caused by the prompt change: a response generated *before* it
+was also truncated (2000 chars, ending `"...set for 12"`).
+
+**Ruled out along the way** (recorded so nobody re-derives them): `GEMINI_MAX_OUTPUT_TOKENS`
+8192 *is* correctly passed (not inert); `LLM_TIMEOUT_SECONDS` 120 vs a 28s call; no CSS
+clipping; no table/cell overflow; no failed network requests.
+
+**Visual inspection earned its place.** A screenshot showed text ending mid-sentence that
+every numeric check called clean — `tableOverflows: false`, `clippedCells: []`. Measurement
+alone would have missed it; that is why the policy requires both.
+
+**Table exemption now observed, not just reasoned:** with a real table rendered, prose measures
+513px while the table spans 1076px — the prose-only `max-width` behaves as intended.
+
+---
+
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `62532f0` · working tree clean
+- **Branch:** `security/redact-env-example` · **HEAD:** `c805b0e` · working tree clean
 - **Suite:** 131 passed, 0 xfailed · stack healthy (backend/worker/beat/db/redis/pgbouncer)
 - **Closed this effort:** P0-1, P0-5, P0-7, P0-8, P0-10; P0-9 read path + all worker writes;
   P0-2 backend chain; orchestration layer complete
 - **Highest-priority remaining work, in order:**
-  1. **Frontend UX (continuing)** — composer done and browser-verified. Next: the message/
+  1. **Frontend UX (continuing)** — composer + response measure done and browser-verified. Next: sidebar/header balance, empty/error/loading states, citation + trust-score presentation. Gemini is available, so real responses can be generated for any component that needs content.
      response area itself (typography, spacing, markdown density, citation rendering), then
      loading/empty/error states. Browser-verification loop is proven and reusable.
   2. **Response quality** — generation-time structure *and* the shared renderer (both, per
