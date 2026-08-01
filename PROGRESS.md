@@ -848,6 +848,24 @@ inspection.
 
 ---
 
+### 2026-08-01 (cont.) — touch targets (non-blocked queue, per Partial Blocker Policy)
+
+With generation blocked, took the next non-blocked item rather than idling. Composer controls
+measured **32x32** (attach, paste) and **36x36** (voice, send) — below the 44px touch minimum.
+
+Fixed pointer-aware rather than globally: the 44px floor exists for fingers, and forcing it on
+desktop would add ~8px to the composer, undoing part of the 44px of reading space recovered
+earlier. Scoped to `@media (pointer: coarse)`, and expands the TAP AREA via `::after` so the
+visual button keeps its size — hit area grows, design does not change. One rule, shared
+stylesheet, every workspace.
+
+**Verified desktop unchanged** (`pointer: coarse` = false): buttons still 32/32/36/36 and the
+`::after` min-height resolves to `0px`, i.e. the rule correctly does not apply.
+**NOT verified: the coarse-pointer path itself** — that needs device emulation, which I did
+not run. The rule is scoped correctly but its effect on a real touch device is unconfirmed.
+
+---
+
 ## Continuation state (for the next session)
 
 - **Branch:** `security/redact-env-example` · **HEAD:** see `git log -1` · working tree clean
