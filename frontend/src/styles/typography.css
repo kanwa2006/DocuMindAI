@@ -107,5 +107,34 @@ body {
   font-size: var(--text-base);
   line-height: var(--leading-loose);
   color: var(--text-primary);
-  max-width: 72ch;
+}
+
+/* Measure (characters per line) for AI response prose.
+ *
+ * 45-75 characters is the readable range; past ~90 comprehension measurably
+ * drops. The container previously carried `max-width: 72ch` and did NOT deliver
+ * 72 characters: `ch` is the advance width of "0", and in this font stack "0"
+ * is ~26% wider than the average letter. Measured in Chromium at 15px,
+ * 1ch = 9.00px while the real average glyph is 7.13px — so 72ch resolved to
+ * 648px and rendered 91 actual characters per line, past the threshold and 26%
+ * wider than intended. 57ch = 513px = ~72 real characters, which is what the
+ * original 72ch was reaching for.
+ *
+ * Applied to prose elements rather than the container so tables, code blocks
+ * and other wide media keep the full column — a comparison table squeezed to
+ * reading measure is harder to read, not easier. If the body font changes,
+ * RE-MEASURE: this is calibrated to the current font's glyph ratio, not a
+ * universal constant.
+ */
+.text-response > p,
+.text-response > ul,
+.text-response > ol,
+.text-response > blockquote,
+.text-response > h1,
+.text-response > h2,
+.text-response > h3,
+.text-response > h4,
+.text-response > h5,
+.text-response > h6 {
+  max-width: 57ch;
 }
