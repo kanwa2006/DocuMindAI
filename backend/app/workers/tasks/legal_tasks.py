@@ -35,21 +35,14 @@ from sqlalchemy.future import select
 from app.core.tenant_scope import tenant_scope
 from app.db.session import SyncSessionLocal
 from app.models.document import Document
-from app.models.document_chunk import DocumentChunk
+from app.models.document_chunk import DocumentChunk  # noqa: F401 - see _document_text
 from app.models.legal import Contract, Clause, ComplianceRule, RedlineSuggestion
 from app.schemas.legal import ContractSegmentationSchema, ClauseComplianceSchema
 from app.services.llm_service import llm_service
 from app.workers.celery_app import celery_app
+from app.workers.tasks._document_text import DocumentTextUnavailable, load_document_text
 
 logger = logging.getLogger(__name__)
-
-
-class ContractTextUnavailable(RuntimeError):
-    """The document produced no extractable text.
-
-    Raised instead of falling back to placeholder text: a Risk Report built on
-    text we do not have is worse than no Risk Report, because it looks correct.
-    """
 
 
 def _run_async(coro):
@@ -66,26 +59,6 @@ def _run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
-
-
-def _load_contract_text(db, document_id: uuid.UUID) -> str:
-    """The document's real extracted text, in chunk order."""
-    chunks = (
-        db.execute(
-            select(DocumentChunk)
-            .where(DocumentChunk.document_id == document_id)
-            .order_by(DocumentChunk.chunk_index)
-        )
-        .scalars()
-        .all()
-    )
-    text = "\n".join(c.text_content for c in chunks if c.text_content)
-    if not text.strip():
-        raise ContractTextUnavailable(
-            f"Document {document_id} has no extracted text — cannot analyse a "
-            "contract whose contents are unknown. Check extraction/OCR first."
-        )
-    return text
 
 
 def _process_contract_logic(document_id: uuid.UUID, workspace_id: uuid.UUID) -> None:
@@ -113,7 +86,7 @@ def _process_contract_logic(document_id: uuid.UUID, workspace_id: uuid.UUID) -> 
             )
 
             # P0-8: the real document, not a placeholder. Raises if empty.
-            contract_text = _load_contract_text(db, document_id)
+            contract_text = load_document_text(db, document_id)
 
             contract = Contract(
                 workspace_id=workspace_id,
@@ -203,7 +176,7 @@ def process_contract_batch(self, document_id: str, workspace_id: str):
     """PHASE 1: ASYNC LEGAL PROCESSING — offloads compliance work to Celery."""
     try:
         _process_contract_logic(uuid.UUID(document_id), uuid.UUID(workspace_id))
-    except ContractTextUnavailable:
+    except DocumentTextUnavailable:
         # Retrying cannot conjure text that extraction never produced. Fail
         # visibly instead of burning the retry budget on a permanent condition.
         logger.error("Contract %s has no extractable text; not retrying.", document_id)

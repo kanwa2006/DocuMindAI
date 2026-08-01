@@ -69,7 +69,6 @@ def _code_string_constants(module: Path) -> list[str]:
 # module instead. See legal_tasks.py for the repaired reference implementation.
 KNOWN_VIOLATIONS = {
     "export_tasks.py",
-    "finance_tasks.py",
     "hr_tasks.py",
     "ocr_tasks.py",
     "research_tasks.py",
