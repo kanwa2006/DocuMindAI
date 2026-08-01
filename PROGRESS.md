@@ -68,8 +68,8 @@ Verified earlier in this effort — treat as settled:
 | P0-4 | Supabase credential in git history + plaintext `.env` — needs rotation | ⬜ Open (**owner-access-required**) |
 | P0-5 | DB connection budget (30 API + 8×15 worker + 15 beat) vastly exceeded Supavisor session-mode cap of 15 | ✅ **RESOLVED & VERIFIED** |
 | P0-6 | Gemini quota — **downgraded**. Some keys are exhausted, but rotation finds a live one and generation succeeds. Not a blocker | ✅ **Not a P0** (see log 2026-08-01) |
-| P0-7 | 7 of 9 Celery task modules use the **async** engine via `asyncio.run()` | 🟡 `legal_tasks` **FIXED & VERIFIED** (`a214012`); 6 modules remain, ratcheted by `test_worker_session_discipline.py` |
-| P0-8 | `legal_tasks.py:35` analysed a **hardcoded simulated contract string** | ✅ **RESOLVED & VERIFIED** (`a214012`) |
+| P0-7 | Celery task modules used the **async** engine inside sync tasks | ✅ **RESOLVED — all 9 modules** (`c0c9370`); ratchet retired at zero |
+| P0-8 | Four workspaces analysed **hardcoded placeholder text** instead of the upload | ✅ **RESOLVED & VERIFIED** (legal, finance, research, study) |
 | P0-9 | **Cross-tenant exposure.** `workspace_id` is a shared category slug, not a tenant key; 18 tables had no `owner_id` | 🟡 **Reads FIXED & VERIFIED** (`abf84a2`); worker writes land with P0-7 |
 | P0-10 | **NEW** — `backend/.env` `DATABASE_URL` has a **double colon** (`pooler.supabase.com::6543`); host tests fail and the stack dies on next restart | ⬜ Open (**owner-access-required**, 1 char) |
 
@@ -480,6 +480,67 @@ constant. Scope for whoever picks it up: `AsyncSessionLocal` → `SyncSessionLoc
 it carries no placeholder text and its models are not `TenantScoped`
 (`hr_job_roles` already has `owner_id`). The ratchet in
 `tests/test_worker_session_discipline.py` holds it as the single remaining entry.
+
+---
+
+### 2026-08-01 (cont.) — P0-7 CLOSED; ratchet retired at zero (`c0c9370`)
+
+**`hr_tasks` repaired — the last module.** It hid the defect better than the rest, and why
+matters: it used `asyncio.get_event_loop()` + `run_until_complete`, which **reuses** one loop
+per worker process instead of building and destroying one per task. Pooled asyncpg
+connections therefore stayed bound to a *live* loop, so HR kept working — the one workspace
+verified end-to-end — while `legal_tasks`, creating a fresh loop per call, failed on roughly
+every second task. **Same architectural violation, opposite symptom.** That is precisely why
+the guard tests for the async *session* rather than for one spelling of the bug.
+
+Behaviour preserved deliberately: `MAX_RESUME_CHARS` chunk assembly, prompt-injection
+sanitisation, idempotent candidate reuse, and the non-fatal embedding fallback (L-13).
+No P0-8 work (it always read real `DocumentChunk` text); no P0-9 work (HR models are not
+`TenantScoped`; `hr_job_roles` already carries `owner_id`).
+
+**`flag_stale_reviews` now admits it is unimplemented.** Beat runs it daily at 08:00 and its
+body was a single INFO log — in the logs, indistinguishable from a sweep that ran and found
+nothing. Now WARNING, stated plainly. Not raising: a daily exception for a capability nobody
+has requested is noise, not signal.
+
+**The ratchet is retired.** `KNOWN_VIOLATIONS` and its xfail branch are deleted exactly as
+the file always specified. There is no "known violation" state any more — a task module
+importing the async session simply fails.
+
+**Runtime verification:** the sync path executes fully — document read, chunks assembled,
+reaching the LLM call with **no loop error and no session error**. The LLM step itself could
+not complete because all 21 Gemini keys were rate-limited at that moment; it failed
+gracefully through the existing handler. Test fixture created for the run was removed.
+
+Suite **131 passed, 0 xfailed**.
+
+---
+
+## Continuation state (for the next session)
+
+- **Branch:** `security/redact-env-example` · **HEAD:** `c0c9370` · working tree clean
+- **Suite:** 131 passed, 0 xfailed · stack healthy (backend/worker/beat/db/redis/pgbouncer)
+- **Closed this effort:** P0-1, P0-5, P0-7, P0-8, P0-10; P0-9 read path + all worker writes;
+  P0-2 backend chain; orchestration layer complete
+- **Highest-priority remaining work, in order:**
+  1. **Frontend UX** — composer occupies ~half the viewport; response must dominate. This is
+     the first real exercise of the browser-verification policy, which is **written but never
+     yet run**.
+  2. **Response quality** — generation-time structure *and* the shared renderer (both, per
+     Phase 8; presentation only, never retrieval/citations/grounding).
+  3. **Per-workspace verification** using the 10-step Workspace Completion Pipeline in
+     `CLAUDE.md`. None of the 7 has been through it end to end.
+  4. **Deployment verification**, then the Release Gate.
+- **Active blockers:**
+  - **P0-6 Gemini quota** (owner-access) — keys rotate in and out of exhaustion; LLM-dependent
+    verification is intermittent, not impossible. Not a hard blocker.
+  - **`legal_compliance_rules` ships empty** (owner-decision) — the Legal Risk Report is
+    correct end-to-end but has no rules to evaluate against, so every clause returns
+    `COMPLIANT`/`LOW`. A default rule set is a product judgment.
+  - **P0-3** container image 18.8 GB · **P0-4** credential rotation (owner-access).
+- **Exact next step:** measure the composer/response viewport split at desktop, tablet and
+  mobile widths in Chromium **before** changing any CSS — the policy requires a measured
+  before/after, not an eyeballed one.
 
 ---
 
