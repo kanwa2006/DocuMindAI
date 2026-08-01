@@ -63,13 +63,13 @@ Verified earlier in this effort — treat as settled:
 | ID | Title | Status |
 |---|---|---|
 | P0-1 | LLM provider: 404 aborts request without rotating across 21 keys | ✅ **RESOLVED & VERIFIED** |
-| P0-2 | Legal Risk Report unreachable — `processContract()` never called | 🔄 Frontend code applied; **runtime verification blocked by P0-7/P0-8** |
+| P0-2 | Legal Risk Report unreachable — `processContract()` never called | 🟡 **Backend chain VERIFIED** (`a214012`); frontend trigger still unverified in-browser |
 | P0-3 | Container image 18.8 GB; bge-m3 downloads 4.3 GB at import | ⬜ Open |
 | P0-4 | Supabase credential in git history + plaintext `.env` — needs rotation | ⬜ Open (**owner-access-required**) |
 | P0-5 | DB connection budget (30 API + 8×15 worker + 15 beat) vastly exceeded Supavisor session-mode cap of 15 | ✅ **RESOLVED & VERIFIED** |
-| P0-6 | **NEW** — All 21 Gemini keys return `429 ResourceExhausted`; no LLM generation possible | ⬜ Open (**owner-access-required**) |
-| P0-7 | **NEW** — 7 of 9 Celery task modules use the **async** engine via `asyncio.run()`; fails `got Future attached to a different loop` on ~every 2nd task | ⬜ Open |
-| P0-8 | **NEW** — `legal_tasks.py:35` analyses a **hardcoded simulated contract string**; the uploaded document's text is never read | ⬜ Open |
+| P0-6 | Gemini quota — **downgraded**. Some keys are exhausted, but rotation finds a live one and generation succeeds. Not a blocker | ✅ **Not a P0** (see log 2026-08-01) |
+| P0-7 | 7 of 9 Celery task modules use the **async** engine via `asyncio.run()` | 🟡 `legal_tasks` **FIXED & VERIFIED** (`a214012`); 6 modules remain, ratcheted by `test_worker_session_discipline.py` |
+| P0-8 | `legal_tasks.py:35` analysed a **hardcoded simulated contract string** | ✅ **RESOLVED & VERIFIED** (`a214012`) |
 | P0-9 | **Cross-tenant exposure.** `workspace_id` is a shared category slug, not a tenant key; 18 tables had no `owner_id` | 🟡 **Reads FIXED & VERIFIED** (`abf84a2`); worker writes land with P0-7 |
 | P0-10 | **NEW** — `backend/.env` `DATABASE_URL` has a **double colon** (`pooler.supabase.com::6543`); host tests fail and the stack dies on next restart | ⬜ Open (**owner-access-required**, 1 char) |
 
@@ -303,7 +303,58 @@ bypass the ORM hook, and writes still set `owner_id` explicitly — `NOT NULL` m
 write fail loudly instead of storing an unowned row. The 12 worker write sites land with
 P0-7, since those modules are already broken by the async/sync defect.
 
-**NEW P0-10 — `backend/.env` typo blocks the stack.** `DATABASE_URL` reads
+**P0-10 RESOLVED (owner).** `DATABASE_URL` now reads `pooler.supabase.com:6543` —
+single colon, transaction mode. Host `pytest` works again; all services healthy.
+
+---
+
+### 2026-08-01 — P0-8 resolved, P0-7 (Legal) resolved, P0-2 backend chain verified
+
+**P0-6 downgraded — it was never a full outage.** My earlier "all 21 keys exhausted"
+came from sampling keys 1–3 with raw `google.generativeai` calls. Wrong generalisation.
+Through the real service, keys 0 and 1 returned 429 and the rotator moved on:
+`Configured Gemini with key 2` → `JSON generated and validated successfully on attempt 1`.
+**The P0-1 rotation fix did exactly its job.** Some keys are exhausted; generation works.
+Not a blocker, and it should not have been recorded as one.
+
+**P0-7 + P0-8 + P0-9-writes fixed together in `legal_tasks.py` (`a214012`)** — they were
+literally the same lines. The module now uses `SyncSessionLocal` (matching
+`document_tasks.py`, the module that was already correct), reads real `DocumentChunk`
+text, and derives `owner_id` from the document being processed — the document's owner IS
+the tenant, so a caller cannot pass a mismatched one and the task signature is unchanged.
+`ContractTextUnavailable` is raised instead of falling back to placeholder text, and
+deliberately does NOT consume the retry budget: retrying cannot conjure text that
+extraction never produced.
+
+**P0-2 backend chain VERIFIED at runtime** against the real uploaded MSA:
+- `Segmenting contract … (2173 chars)` — real text, not the 90-char stub
+- `legal_contracts` **0 → 1**, `legal_clauses` **7**
+- `party_name` **"Meridian Labs Pvt. Ltd."**, `contract_type` **"Master Service Agreement"**
+- clauses `1. Parties and Term` / `2. Services and Service Levels` / `3. Fees and Payment`
+- `owner_id` = the document's real owner
+Backend suite **112 passed, 6 xfailed**.
+
+**Class-level regression guard (`97592ba`).** `tests/test_worker_session_discipline.py`
+ratchets the P0-7 class: any task module importing `AsyncSessionLocal` fails, and
+`KNOWN_VIOLATIONS` (the 6 remaining modules) may only shrink. Checks are **AST-based** —
+the first draft grepped file text and failed against the repaired module because that
+module documents the defect in its own docstring. A guard that greps its own
+documentation is a false signal. Verified to bite: reintroducing the import fails 2 tests.
+
+**Why P0-7 escaped for so long:** it fails ~50% of the time (task 1 succeeds on a fresh
+connection, task 2 dies on a pooled one from a dead loop), and no test exercised a second
+task in the same process. The ratchet closes that permanently.
+
+**New gap recorded, not fixed:** `legal_compliance_rules` is empty, so every clause came
+back `COMPLIANT` and `risk_score` `LOW`. Correct behaviour with no rules configured, but
+the product ships **no default rule set** — the Risk Report is therefore vacuous out of
+the box. Product decision, not a defect.
+
+**Remaining P0-7 modules:** `export`, `finance`, `hr`, `ocr`, `research`, `study`.
+
+---
+
+**Superseded — `backend/.env` typo (P0-10), now fixed:** `DATABASE_URL` reads
 `...pooler.supabase.com::6543/postgres` — **double colon**. The 5432→6543 pooler switch was
 applied but left an extra `:`. Effects: host `pytest` fails at collection with
 `ValueError: invalid literal for int() with base 10: ':6543'`, and the running containers
