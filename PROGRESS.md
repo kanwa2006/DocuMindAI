@@ -557,9 +557,42 @@ design across the whole button system.
 
 ---
 
+### 2026-08-01 (cont.) — response measure corrected (`62532f0`)
+
+**A cap that existed, looked correct, and was wrong by 26%.** `.text-response` already had
+`max-width: 72ch`. `ch` is the advance width of **"0"**, and in this font stack "0" is ~26%
+wider than the average letter — measured in Chromium at 15px, **1ch = 9.00px** while the real
+average glyph is **7.13px**. So `72ch` resolved to 648px and rendered **91 actual characters
+per line**, past the ~90 threshold where comprehension measurably drops.
+
+Nobody catches this by reading the CSS: the number says 72, the browser renders 91. It needed
+a calibrated measurement — glyph width sampled from the rendered text via canvas
+`measureText`, not assumed from a rule of thumb.
+
+`57ch = 513px = ~72 real characters`, which is what the original was reaching for.
+
+| Viewport | Before | After |
+|---|---|---|
+| 1920×1080 | 91 cpl (648px) | **72 cpl (513px)** |
+| 1440×900 | 86 cpl (648px) | **72 cpl (513px)** |
+| 375×667 | 46 cpl | **46 cpl** — cap correctly does not bind |
+
+Applied to prose elements rather than the container so tables and code blocks keep the full
+column. **Honest gap:** no table or `<pre>` appeared in the sampled responses, so that
+exemption is reasoned, not yet observed rendering.
+
+A comment records the calibration and instructs a RE-MEASURE if the body font changes, so it
+does not get "corrected" back to a round 72.
+
+**`CLARITY.md` does not exist** anywhere in the repository — referenced by the session brief
+but never created. Recorded rather than invented; the canonical set remains `CLAUDE.md`,
+`PROGRESS.md`, and the Directive.
+
+---
+
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `0c3a569` · working tree clean
+- **Branch:** `security/redact-env-example` · **HEAD:** `62532f0` · working tree clean
 - **Suite:** 131 passed, 0 xfailed · stack healthy (backend/worker/beat/db/redis/pgbouncer)
 - **Closed this effort:** P0-1, P0-5, P0-7, P0-8, P0-10; P0-9 read path + all worker writes;
   P0-2 backend chain; orchestration layer complete
