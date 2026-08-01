@@ -691,6 +691,36 @@ response for attention; header controls cluster at both edges with a centred wor
 
 ---
 
+### 2026-08-01 (cont.) — composer hidden on a real laptop (`f0a0619`) — MY TEST WAS WRONG
+
+**Reported by the owner: the "Ask anything..." input was not visible on a 1366x768 laptop.**
+My earlier entry claimed 1366x768 passed. **That number was wrong.** On a real 1366x768
+laptop the PAGE viewport is ~1365x637 after browser chrome (~90px) and the Windows taskbar
+(~48px). I measured a window that does not exist on that machine and recorded it as a pass.
+The testing was the defect, not only the code.
+
+**Code root cause — a latent flexbox bug.** The message list was `flex-1 overflow-y-auto`
+with **no `min-height: 0`**. A flex child defaults to `min-height: auto`: it refuses to
+shrink below its own content height, so past a content/height threshold it stops scrolling
+and **grows**, pushing the composer off the bottom. That is precisely the reported shape —
+fine at one window size, input gone at another, depending on transcript length. It is why
+every measurement I took "passed" while the owner's screen did not.
+
+**Fix:** `min-h-0` on the list so `overflow-y-auto` actually engages, and `shrink-0` on the
+composer form so the input is never what gives way — the transcript yields instead.
+
+**Verified at heights the earlier pass never covered:** computed `min-height: 0px`,
+form `flex-shrink: 0`; composer, textarea and action button fully inside the viewport at
+**1365x637** (real laptop) and **1280x450**; page still does not scroll; reading area
+shrinks to 414px and 227px respectively.
+
+**Standing lesson for viewport testing:** a device resolution is NOT a viewport. Subtract
+browser chrome and OS taskbar, and test a short-viewport case (<=500px tall) explicitly.
+The invariant table recorded earlier is only valid for the viewport sizes actually listed
+in it.
+
+---
+
 ## Continuation state (for the next session)
 
 - **Branch:** `security/redact-env-example` · **HEAD:** `d6714a5` · working tree clean
