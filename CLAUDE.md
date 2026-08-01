@@ -22,7 +22,7 @@ Users upload PDFs/DOCX/PPTX or paste text "clips." Documents are extracted (PyMu
 ## Stack
 
 **Backend** — Python 3.11
-FastAPI `==0.136.1` · Starlette `==1.0.0` (both **pinned**; read the note in `requirements.txt` before bumping) · SQLAlchemy 2 (async `asyncpg` + sync `psycopg2`) · Alembic (44 migrations) · Celery ≥5.3 + Redis 7 · pgvector · sentence-transformers (bge-m3 + `ms-marco-MiniLM-L-6-v2` cross-encoder) · google-generativeai · PyMuPDF · PaddleOCR/PaddlePaddle/Docling/LayoutParser · passlib + `bcrypt==4.0.1` (pinned — passlib breaks on ≥4.1) · PyJWT · SlowAPI · Razorpay · boto3 · Sentry · OpenTelemetry + prometheus-client
+FastAPI `==0.136.1` · Starlette `==1.0.0` (both **pinned**; read the note in `requirements.txt` before bumping) · SQLAlchemy 2 (async `asyncpg` + sync `psycopg2`) · Alembic · Celery ≥5.3 + Redis 7 · pgvector · sentence-transformers (bge-m3 + `ms-marco-MiniLM-L-6-v2` cross-encoder) · google-generativeai · PyMuPDF · PaddleOCR/PaddlePaddle/Docling/LayoutParser · passlib + `bcrypt==4.0.1` (pinned — passlib breaks on ≥4.1) · PyJWT · SlowAPI · Razorpay · boto3 · Sentry · OpenTelemetry + prometheus-client
 
 **Frontend** — Node 20
 Next.js `16.2.6` (App Router) · React `19.2.4` · TypeScript 5 · Tailwind 4 · @sentry/nextjs · posthog-js · react-pdf · recharts · FingerprintJS
@@ -49,8 +49,8 @@ backend/app/
   workers/tasks/*          # document/hr/legal/finance/study/research/export/ocr/audio
   tasks/*                  # async report/eval helpers (NOT Celery tasks — see Pitfalls)
   automation/auto_*        # Beat-scheduled jobs
-  alembic/versions/*       # 44 migrations
-  tests/                   # 27 test files
+  alembic/versions/*       # migrations (count drifts; `alembic heads` is truth)
+  tests/                   # pytest suite (see backend/pytest.ini)
 frontend/src/
   app/*                    # pages; each workspace page = <WorkspaceUI workspaceType=.../>
   components/*             # WorkspaceUI + panels + shared UI
@@ -114,10 +114,10 @@ Do not break these accidentally.
 - **RAG pipeline.** `grounding_service` → `retrieval_service` (pgvector ANN **or** in-memory NumPy per `VECTOR_BACKEND`) + lexical FTS → RRF → `reranker_service` → token budget → `llm_service` (Gemini, key rotation) → SSE.
 - **Extract-then-compute.** The LLM extracts fields; **Python computes every number** — all 15 finance ratios, legal escalation, citation formatting. Preserve this; it is why figures cannot be hallucinated.
 - **Async API / sync workers.** FastAPI + `asyncpg` on the request path; Celery uses `SyncSessionLocal` (psycopg2). Never mix. Blocking model/LLM calls are offloaded via `run_in_executor`.
-- **Tenant filters.** Every workspace query filters on `owner_id` **and** the workspace UUID.
+- **Tenant key is `owner_id`, never `workspace_id`.** `workspace_id` is a *category* slug (`uuid5` of "legal"/"finance"/…) and is identical for every user — it is not a tenant discriminator. Owner-scoped models inherit `TenantScoped` (`core/tenant_scope.py`) and a `do_orm_execute` hook injects `owner_id = <current owner>` into every ORM SELECT; with no scope established it **raises** rather than returning unfiltered rows. Writes still set `owner_id` explicitly (`NOT NULL` makes a miss fail loudly). Raw `text()` queries bypass the hook — scope them by hand.
 - **SSE event names** must stay in lockstep between client and server: `trial_status`, `thinking_stage`, `status`, `metadata`, `token`, `error`, `done`, `trust_report`.
 - **Worker three-way rule.** A task must be in `celery_app.include` **and** routed in `task_routes` **and** have its queue consumed by a running `-Q`.
-- **Auth.** HS256-only JWT decoding, httponly + `samesite=strict` cookies, CSRF double-submit, device fingerprint, per-tenant vector namespaces, Postgres RLS.
+- **Auth.** HS256-only JWT decoding, httponly + `samesite=strict` cookies, CSRF double-submit, device fingerprint. **Postgres RLS is present but inert** — the app connects as `postgres` with `rolbypassrls=true`, RLS is disabled on the `legal_*`/`finance_*`/`study_*`/`research_*` tables, and the `app.current_workspace_id` setting its policies key on is never set. Do not count it as a control; `TenantScoped` is the enforcement.
 - **Loud degradation.** Never introduce a silent fallback (zero vectors, fabricated rerank scores, mock answers presented as real). Failures must be visible.
 
 ---
@@ -180,48 +180,183 @@ Settings load via pydantic-settings in `core/config.py` from `$ENV_FILE` (defaul
 
 ---
 
-## Engineering Organization
+## Engineering Orchestration
 
-Ten specialists live in [`.claude/agents/`](.claude/agents/). Each carries this project's
-real failure history, not generic advice. They **verify, review, and diagnose — they do not
-implement.** Root-causing a bug, choosing an ownership boundary, and writing the fix stay in
-the main engineering thread.
+The repository's execution model. **This section is the only source of truth for how work
+flows.** Permanent principles and the Release Gate live in
+[the Directive](docs/engineering/PRODUCTION_READINESS_DIRECTIVE.md); status and evidence
+live in [PROGRESS.md](PROGRESS.md). Never duplicate across the three — move, don't copy.
 
-There is no orchestrator and **no agent can invoke another** — each runs in an isolated
-context and reports back to the thread that called it. This table is the delegation policy.
+### Responsibility hierarchy
 
-| Situation | Delegate to |
+**The main engineering thread owns** planning, implementation, debugging, architectural
+decisions, prioritization, integration, and commits. **It is the only writer of production
+code.**
+
+**Specialist agents own** verification, review, diagnosis, measurement, and quality gates.
+**No specialist implements.** They run in isolated contexts, cannot invoke each other, and
+report back to the thread that called them.
+
+### Session startup
+
+Read exactly three documents — `CLAUDE.md`, `PROGRESS.md`, the Directive. Then **discover**
+the organization rather than trusting a hardcoded list (files change; this section may lag):
+
+```bash
+ls .claude/agents/*.md          # specialists — tracked, shared, authoritative
+ls .agents/skills/*/SKILL.md    # skills — UNTRACKED local tooling, see policy below
+```
+
+Build the map once. **Do not reload agents or skills before every task** — load a
+specialist's file only when delegating to it, and a skill only when its domain is in play.
+
+### Agent registry
+
+Discovered from `.claude/agents/`. Each carries this project's real failure history, not
+generic advice. Full trigger/scope/inputs/escalation live in the agent's own file — read it
+when delegating, not before.
+
+| Agent | Owns (exclusively) | Invoke when | Do NOT invoke when |
+|---|---|---|---|
+| `docs-sync-checker` | Drift between the 3 governing docs and the repo | Session/phase start; after updating docs | Judging whether code is *correct* |
+| `test-runner` | Suite execution + failure-path coverage verdict | A fix is ready; before any "tests pass" claim | Asking whether a service is healthy |
+| `code-reviewer` | Whether a fix sits in the layer owning the decision; duplication; silenced failure | Before committing a non-trivial diff | Security severity; perf ranking |
+| `security-reviewer` | **The verdict** on exposure severity | Auth, tenancy, uploads, secrets, prompt injection | General code quality |
+| `infra-health-checker` | Runtime health **now**; pool/queue state after a drain | Changed a start command, flags, or env | Judging the shippable artifact |
+| `release-readiness-checker` | The **artifact before deploy** (image, CI, healthchecks, secret hygiene) | Before any deployment claim | Adjudicating a secret's severity |
+| `rag-pipeline-tracer` | **Which stage** produced a bad/slow answer | Answer wrong, ungrounded, uncited, or unfindable | Deciding whether to optimize it |
+| `performance-profiler` | **How much it costs** and whether it's worth fixing | Before any performance claim | Correctness attribution |
+| `workspace-qa` | Does an advertised workspace feature actually work | Before claiming a workspace works | Fixing what it finds |
+| `response-quality-reviewer` | Presentation, and the Phase-8 substance boundary | Changing how answers render | Anything touching retrieval/prompts/citations |
+
+**Exclusive-ownership tie-breaks** (where two could plausibly answer the same question):
+
+- `rag-pipeline-tracer` says *which stage*; `performance-profiler` says *what it costs*.
+- `infra-health-checker` = **runtime, now**; `release-readiness-checker` = **artifact, pre-deploy**.
+- `release-readiness-checker` **detects** an exposed secret; `security-reviewer` **adjudicates** it.
+- `test-runner` reports suite results; **suite-green is not process-healthy** → `infra-health-checker`.
+- `response-quality-reviewer` owns presentation only; retrieval, prompts, citation derivation,
+  and trust-score computation are substance.
+
+**Subagents start cold.** The invoking prompt must carry every file path, diff, error, and
+prior decision. All return the same 10-section contract (Summary · Evidence · Findings ·
+Root Cause · Risks · Recommendations · Confidence · Escalation · Files Reviewed · Additional
+Verification Needed) and tag blockers **agent-actionable** / **owner-access-required** /
+**owner-decision-required**. Editing an agent file needs a session restart to take effect.
+
+**Verify agent output before acting on it.** Agents have been wrong here. Re-check any
+load-bearing claim against the repo or runtime — this is not optional politeness, it has
+caught real errors.
+
+### Skill registry and policy
+
+`.agents/skills/` is **gitignored — zero tracked files.** It is local tooling, not
+repository content. Therefore: **no pipeline may depend on a skill**, and no skill may be
+cited as a requirement other contributors must satisfy. Skills are optional guidance,
+consulted only when their domain is in play.
+
+Classified by reading each `SKILL.md` against this stack (Next.js 16 + React 19 + Tailwind 4,
+hand-rolled components — **no shadcn/ui, no Radix**, verified 0 in `package.json`):
+
+| Skill | Verdict | Use for |
+|---|---|---|
+| `ui-ux-pro-max` | **Applicable** | Stack-agnostic a11y/UX rules: contrast ≥4.5:1, focus states, 44px touch targets, tab order, responsive/typography guidance |
+| `ckm-design-system` | **Applicable in principle** | Three-layer token methodology (primitive→semantic→component); maps onto Tailwind 4 CSS variables |
+| `ckm-ui-styling` | **Partially — Tailwind only** | Its shadcn/ui + Radix guidance is **rejected**: adopting it would add a component library this repo does not use and duplicate the existing design system |
+| `ckm-brand` | **Marginal** | Only for `docs/marketing/` and landing-page copy. Not for product UI |
+| `ckm-design`, `ckm-banner-design`, `ckm-slides` | **Not applicable** | Logo/CIP generation, ad and social banners, Chart.js decks — DocuMindAI has no such surface |
+
+**Binding rules.** Repository architecture outranks any skill. Never adopt a technology a
+skill recommends that the repo does not already use. Never migrate frameworks on a skill's
+say-so. When skills conflict, the repo's existing implementation wins and stays single.
+A newly added skill is classified by the same test — does it improve *this* stack without
+importing foreign technology — so future skills need no edit to this section.
+
+### Implementation lifecycle
+
+```
+Startup (3 docs + discovery)
+  → Pick highest-priority unresolved item from PROGRESS.md
+  → Read the smallest sufficient subsystem  (see Repository Scan Policy below)
+  → Implement at the layer that OWNS the decision
+  → Runtime verification (never compilation alone)
+  → Targeted specialist review (matrix below — only the relevant ones)
+  → Regression suite
+  → Update PROGRESS.md
+  → Commit
+  → Next item
+```
+
+**Repository scan policy.** Exact file → related module → feature folder → workspace →
+shared libraries → whole repo. Each widening needs a reason. Cache understanding for the
+session; don't re-derive verified conclusions.
+
+### Delegation matrix
+
+Invoke **only** the reviewers a change actually touches. Running every reviewer on every
+change is waste, not rigor.
+
+| Work touches | Reviewers, in order |
 |---|---|
-| Starting a new session or phase | `docs-sync-checker` |
-| A fix is ready for verification | `test-runner` |
-| Reviewing a diff generally | `code-reviewer` |
-| About to commit a change touching auth, uploads, or cross-tenant data | `security-reviewer` |
-| Changed a service's start command, flags, or env | `infra-health-checker` |
-| A RAG answer is wrong or slow, cause unclear | `rag-pipeline-tracer` |
-| Before claiming a workspace feature works | `workspace-qa` |
-| Before claiming a performance win | `performance-profiler` |
-| Before claiming deployment-ready | `release-readiness-checker` |
-| Redesigning response formatting | `response-quality-reviewer` |
+| Auth, tenancy, uploads, secrets, prompt injection | `security-reviewer` → `test-runner` |
+| Database schema / migration | `code-reviewer` → `test-runner` → `infra-health-checker` |
+| Celery, Redis, queues, background jobs | `code-reviewer` → `infra-health-checker` → `test-runner` |
+| Service start command, flags, env, Docker | `infra-health-checker` → `release-readiness-checker` |
+| Retrieval, embedding, vector search, RRF, rerank | `rag-pipeline-tracer` → `performance-profiler` |
+| Prompt construction, LLM provider, streaming | `code-reviewer` → `rag-pipeline-tracer` |
+| API contract / endpoint shape | `code-reviewer` → `test-runner` |
+| Response rendering, markdown, citations display | `response-quality-reviewer` → browser verification |
+| Frontend layout, composer, responsive, a11y | browser verification → `response-quality-reviewer` |
+| Any workspace feature claim | `workspace-qa` |
+| Performance claim | `performance-profiler` |
+| Deployment claim | `release-readiness-checker` → `security-reviewer` |
+| Documentation | `docs-sync-checker` |
 
-**Ownership is exclusive.** Where two could plausibly answer the same question, the boundary is:
+### Runtime verification lifecycle
 
-- `rag-pipeline-tracer` says *which stage*; `performance-profiler` says *how much it costs and whether it's worth fixing*.
-- `infra-health-checker` verifies **runtime, now**; `release-readiness-checker` verifies the **artifact, before deploy**.
-- `release-readiness-checker` **detects** an exposed secret; `security-reviewer` **adjudicates** its severity.
-- `test-runner` reports suite results; **suite-green is not process-healthy** — that's `infra-health-checker`.
-- `response-quality-reviewer` owns presentation; anything touching retrieval, prompts, citation derivation, or trust-score computation is substance, not presentation.
+**Compilation is never verification. Code inspection is never verification.** A change is
+verified only by real execution: real DB rows, real streaming, real UI, real regression.
+When a fix targets a failure path, **force that failure** — a fix that passes because the
+happy path never exercises it is unverified.
 
-**Subagents start cold.** Nothing carries over — the invoking prompt must include every file
-path, diff, error message, and prior decision the agent needs. Each agent file lists its
-required inputs.
+**Browser verification (frontend — mandatory).** No frontend change is committed until
+exercised in a real browser. `docker compose restart frontend` **first** — Turbopack does
+not recompile across the Windows→Docker bind mount, and this has already produced one
+multi-hour false negative. Cover: desktop / tablet / mobile widths, workspace switching,
+chat switching, streaming, markdown, citations, upload, history, scroll, composer, loading
+and error states. Screenshots are evidence; delete them once findings are recorded.
 
-Every agent returns the same 10-section contract (Summary · Evidence · Findings · Root Cause ·
-Risks · Recommendations · Confidence · Escalation · Files Reviewed · Additional Verification
-Needed), and tags each blocker **agent-actionable** / **owner-access-required** /
-**owner-decision-required**.
+### Debugging lifecycle
 
-Editing an agent file requires a session restart to take effect. Don't add an eleventh agent
-without an observed recurring responsibility that none of these ten covers.
+Reproduce → localize to the owning layer → **rule out false signals first** → fix the
+architecture, not the symptom → force the failure path → verify shared state was not left
+bad. Known false signals in this repo: stale Turbopack bundles, the cached Next.js error
+overlay, a test harness double-submitting, and any conclusion drawn from a proxy metric
+instead of the observable behaviour.
+
+### Regression lifecycle
+
+Every fix must make its **class** of bug impossible, not just its instance. After each fix
+ask: why did this escape, what review missed it, which test was absent, could another
+subsystem fail the same way. Then strengthen the shared layer and add the guard —
+**verify the guard bites** by reintroducing the defect. `tests/test_worker_session_discipline.py`
+is the reference: a ratchet whose allowlist may only shrink.
+
+### Workspace parity
+
+The canonical list is `KNOWN_WORKSPACE_SLUGS` in `backend/app/core/workspace.py` — read it,
+don't hardcode. Every workspace meets identical standards: user/chat/retrieval/streaming
+isolation, history, uploads, reports, citations, and the **shared** renderer, design system,
+markdown renderer, and streaming renderer. Only prompts, templates, and business logic may
+differ. A workspace-specific UI component is an architecture violation, not a feature.
+
+### Deployment and release lifecycle
+
+Deployment requires, in order: implementation verified at runtime → regression green →
+`security-reviewer` clear → `performance-profiler` clear (if perf is claimed) →
+`release-readiness-checker` clear → every Release Gate box in `PROGRESS.md` independently
+verified. The Gate is defined in the Directive and tracked in `PROGRESS.md`; it is never
+restated here.
 
 ---
 
