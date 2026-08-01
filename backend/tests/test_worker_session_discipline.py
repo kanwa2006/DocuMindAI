@@ -65,11 +65,11 @@ def _code_string_constants(module: Path) -> list[str]:
         and n.value not in docstrings
     ]
 
-# Modules still carrying the P0-7 defect. NEVER add to this list — fix the
-# module instead. See legal_tasks.py for the repaired reference implementation.
-KNOWN_VIOLATIONS = {
-    "hr_tasks.py",
-}
+# The ratchet reached zero on 2026-08-01: every task module is repaired, so the
+# allowlist and its xfail branch were deleted as the file always specified.
+# There is now no "known violation" state — a task module importing the async
+# session simply fails. Do not reintroduce an allowlist to make a new violation
+# pass; fix the module. legal_tasks.py is the reference implementation.
 
 
 def _task_modules() -> list[Path]:
@@ -85,18 +85,7 @@ def test_task_modules_exist():
 
 @pytest.mark.parametrize("module", _task_modules(), ids=lambda p: p.name)
 def test_celery_task_module_does_not_use_async_session(module: Path):
-    uses_async_session = _imports_async_session(module)
-
-    if module.name in KNOWN_VIOLATIONS:
-        # Ratchet: if this fires, the module was fixed — remove it from
-        # KNOWN_VIOLATIONS so the guard starts protecting it.
-        assert uses_async_session, (
-            f"{module.name} no longer uses AsyncSessionLocal — remove it from "
-            "KNOWN_VIOLATIONS so this test protects it from regressing."
-        )
-        pytest.xfail(f"{module.name} still has the known P0-7 defect")
-
-    assert not uses_async_session, (
+    assert not _imports_async_session(module), (
         f"{module.name} uses AsyncSessionLocal inside a Celery task. Celery is "
         "sync and must use SyncSessionLocal (psycopg2); asyncio.run() creates a "
         "new event loop per call and pooled asyncpg connections from a previous "
