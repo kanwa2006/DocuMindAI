@@ -986,18 +986,53 @@ in this session did exactly that and produced a misleading 404.
 
 ---
 
+### 2026-08-02 (cont.) — Tier 1 closed (`12c46da`, `8638c9c`, `1c02c6b`)
+
+**S13 — web search never ran, and reported success (`12c46da`).**
+`settings.TAVILY_API_KEY` was never declared in `core/config.py`, so reading it
+raised AttributeError into an over-broad `except Exception` and the client was
+None forever. The damaging part was step 3 still emitting `status="done",
+"Found 0 current source(s)"` — a step that never executed reporting success —
+while the synthesis prompt told the model "No web sources found", which asserts
+a search ran. Field declared, `except` narrowed to `ImportError` with the
+missing-key case logged separately at ERROR, step 3 now reports `skipped`, and
+the prompt placeholder distinguishes "found nothing" from "did not run".
+**The key was already in `.env` the whole time** — undeclared, so
+pydantic-settings ignored it. This did not merely make a broken feature honest;
+it turned the feature on.
+
+**F1 — HR batch upload sent every resume to `general` (`8638c9c`).** Fixed at
+the type, not the call site: `uploadDocument`'s `workspaceId` is now REQUIRED in
+`lib/api.ts`. `tsc --noEmit` clean is itself the proof no third call site
+exists. Guard is the compiler — reintroducing `undefined` fails with TS2345.
+Browser-verified after `docker compose restart frontend`: HR renders, 0 console
+errors, no horizontal overflow at 1280 / 768 / 375.
+
+**P-3 — `time.sleep` in an `async def` (`1c02c6b`).** Blocked the whole event
+loop whenever `DummyLLMProvider` served. Checked the sibling rather than
+assuming: the only other `time.sleep` in `backend/app/` is
+`llm_key_rotation.py:114`, which is correct — a sync method, and the M-9
+out-of-lock cooldown wait the audit says to preserve.
+
+---
+
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `0df7df9` · working tree clean
-- **Backend suite:** **144 passed / 0 failed** · all services healthy · real Gemini generation working
+- **Branch:** `security/redact-env-example` · **HEAD:** `1c02c6b` · working tree clean
+- **Backend suite:** **148 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
+  `npm run build` succeeds · all services healthy · real Gemini generation working
 
 ### Defect-register run — state
 
-**Closed and struck in `final_audit.md`:** H1, S3, S4, H5, H4, B-1.
-**Next finding:** Tier 1 continues — **S13** (`TAVILY_API_KEY` missing from
-`Settings`; emit `status="skipped"` when unset and narrow the bare `except` to
-`ImportError`), then **F1** (`WorkspaceUI.tsx:1614`), then **P-3**
-(`await asyncio.sleep`). Then Tier 2 (S1, S2, P-1, P-2).
+**Closed and struck in `final_audit.md`:** H1, S3, S4, H5, H4, B-1 (Tier 0) ·
+S13, F1, P-3 (Tier 1). **Nine findings closed, each with a guard watched going RED.**
+
+**Next finding: Tier 2** — **S1 + S2** (stream consumption and the two
+per-query model calls into `run_in_executor`; the correct pattern already exists
+at `llm_service.get_embedding:573`), then **P-1 + P-2** (the two N+1 fixes,
+~20 lines each). Then Tier 3: S6/S7 are **parked** (below), S12 (`aioredis` →
+`redis.asyncio`, six sites), S10 (remove ratio arithmetic from the Finance
+schema).
 
 **Do NOT re-derive these — established this session:**
 - The app's database is Supabase, not the local `db` container (see above).

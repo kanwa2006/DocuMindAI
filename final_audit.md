@@ -198,7 +198,7 @@ round trips before any work starts.
 Self-contained inside the endpoint; the response shape is unchanged, so no frontend
 impact.
 
-### P-3 · Blocking `time.sleep` inside an async function — MEDIUM (conditional)
+### ~~P-3 · Blocking `time.sleep` inside an async function — MEDIUM (conditional)~~ — STRUCK
 
 **Where:** `backend/app/services/llm_service.py:179`, in `DummyLLMProvider.generate`
 
@@ -674,7 +674,7 @@ a proven line from three functions away rather than inventing an approach.
 
 ---
 
-## F1 · HR batch upload still sends resumes to `general` — MY FIX WAS INCOMPLETE
+## ~~F1 · HR batch upload still sends resumes to `general` — MY FIX WAS INCOMPLETE~~ — STRUCK
 
 **File:** `frontend/src/components/WorkspaceUI.tsx:1614`
 
@@ -1155,7 +1155,7 @@ me against source before recording.** This section independently corroborates §
 
 ---
 
-## S13 · Web search has never worked — HIGH
+## ~~S13 · Web search has never worked — HIGH~~ — STRUCK
 
 **File:** `backend/app/services/deep_research_agent.py:58`
 
