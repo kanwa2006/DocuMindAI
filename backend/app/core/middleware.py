@@ -7,11 +7,11 @@ from app.core.config import settings
 
 
 async def _middleware_get_redis():
-    try:
-        import aioredis
-        return await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
-    except Exception:
-        return None
+    """S12: was `import aioredis` inside a bare except returning None. aioredis
+    is not installed, so DeviceFingerprintMiddleware silently stopped blocking
+    repeat trial registrations with no log evidence at all."""
+    from app.core.redis_client import get_redis
+    return await get_redis()
 
 logger = logging.getLogger(__name__)
 

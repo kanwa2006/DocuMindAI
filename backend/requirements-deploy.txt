@@ -69,7 +69,10 @@ pgvector>=0.2.5
 # ── Queue / cache ────────────────────────────────────────────────────────────
 celery>=5.3.6
 redis>=5.0.1
-aioredis>=2.0.0
+# aioredis REMOVED (S12): never installed here, and 2.0.1 is broken on
+# Python 3.11 with "duplicate base class TimeoutError". Deprecated since
+# 2022 in favour of redis.asyncio, which ships inside the `redis` package
+# already pinned above. See app/core/redis_client.py.
 
 # ── Document extraction (text-based only) ────────────────────────────────────
 PyMuPDF>=1.23.8

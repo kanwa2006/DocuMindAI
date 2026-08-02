@@ -124,8 +124,12 @@ def _retrieval_cache_key(user_id: str, workspace_type: str, query: str, attached
 
 async def _get_cached_retrieval(cache_key: str) -> Any:
     try:
-        import aioredis
-        redis = await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+        # S12: was `import aioredis`, which is not installed — so this cache
+        # never cached and every query silently paid full retrieval cost.
+        from app.core.redis_client import get_redis
+        redis = await get_redis()
+        if redis is None:
+            return None
         # close() must be in a finally: when redis.get() raises (dropped
         # connection, timeout), the outer `except Exception: pass` swallows it
         # and the connection is leaked. This runs on every query, so a Redis
@@ -143,8 +147,11 @@ async def _get_cached_retrieval(cache_key: str) -> Any:
 
 async def _set_cached_retrieval(cache_key: str, payload: Any, ttl: int = 300) -> None:
     try:
-        import aioredis
-        redis = await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+        # S12: see _get_cached_retrieval.
+        from app.core.redis_client import get_redis
+        redis = await get_redis()
+        if redis is None:
+            return
         try:
             await redis.setex(cache_key, ttl, json_module.dumps(payload, default=str))
         finally:

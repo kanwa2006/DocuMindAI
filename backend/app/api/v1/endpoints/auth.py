@@ -261,11 +261,10 @@ IP_REG_WINDOW = 3600   # seconds
 
 
 async def _get_redis():
-    try:
-        import aioredis
-        return await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
-    except Exception:
-        return None
+    """S12: see core/redis_client — aioredis was never installed, so the IP
+    registration rate limit failed open silently."""
+    from app.core.redis_client import get_redis
+    return await get_redis()
 
 
 async def _check_ip_rate_limit(ip: str) -> None:

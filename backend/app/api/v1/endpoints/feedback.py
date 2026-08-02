@@ -39,15 +39,10 @@ class FeedbackRequest(BaseModel):
 
 
 async def _get_redis():
-    try:
-        import aioredis
-        return await aioredis.from_url(
-            __import__("app.core.config", fromlist=["settings"]).settings.REDIS_URL,
-            encoding="utf-8",
-            decode_responses=True,
-        )
-    except Exception:
-        return None
+    """S12: see core/redis_client — aioredis was never installed, so the
+    feedback rate limit failed open silently."""
+    from app.core.redis_client import get_redis
+    return await get_redis()
 
 
 async def _check_feedback_rate_limit(rate_key: str) -> None:

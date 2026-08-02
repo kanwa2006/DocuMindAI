@@ -624,8 +624,13 @@ async def delete_document(
 
     # 5. Purge Redis cache entries
     try:
-        import aioredis
-        redis = await aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+        # S12: was `import aioredis`, not installed — so the post-delete cache
+        # purge never ran and deleted-document content could still be served
+        # from a cache the code believed it had cleared.
+        from app.core.redis_client import get_redis
+        redis = await get_redis()
+        if redis is None:
+            raise RuntimeError("Redis unavailable; cache not purged")
         # close() in a finally: keys()/delete() raising would otherwise skip it
         # and leak the connection via the except branch below.
         try:
