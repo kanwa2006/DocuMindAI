@@ -177,7 +177,14 @@ export const logout = async () => {
 
 export const uploadDocument = async (
   file: File,
-  workspaceId?: string,
+  // F1: REQUIRED, not optional. When this was `workspaceId?: string` a caller
+  // could omit it and the backend fell back to the JWT claim — the constant
+  // "general" — so the document landed in the wrong workspace and became
+  // invisible to that workspace's retrieval. That happened twice: once in
+  // handleFileChange, and again on the HR batch path, which was missed when
+  // the first was fixed. Requiring it makes the compiler reject a third
+  // instance instead of leaving it to be found in an audit.
+  workspaceId: string,
   chatSessionId?: string,  // P1: bind upload to a specific chat session
 ): Promise<Document> => {
   // 1. Get Presigned URL (or local upload info)

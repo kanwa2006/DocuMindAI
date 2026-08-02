@@ -1611,7 +1611,10 @@ export default function WorkspaceUI({ workspaceType = "general" }: { workspaceTy
           setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 30, status: "uploading" } }));
           // P1: bind every batch-uploaded doc to the current chat session so
           // HR rankings don't leak across chats.
-          const uploadedDoc = await uploadDocument(file, undefined, chatId || undefined);
+          // F1: pass the workspace. This was `undefined`, so every batch-
+          // uploaded resume landed in `general` via the JWT fallback and was
+          // invisible to HR retrieval and rankings — HR's headline feature.
+          const uploadedDoc = await uploadDocument(file, workspaceType, chatId || undefined);
           setBatchProgress((prev) => ({ ...prev, [file.name]: { progress: 60, status: "uploading" } }));
 
           // P1: backend is now source of truth for per-chat docs — no
