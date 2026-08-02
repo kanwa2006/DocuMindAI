@@ -176,7 +176,12 @@ class BaseLLMProvider(ABC):
 class DummyLLMProvider(BaseLLMProvider):
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
         logger.info("[Tracing] Mocking LLM generation for isolated testing.")
-        time.sleep(0.5) # Simulate generation latency
+        # P-3: `time.sleep` here blocked the whole event loop, not just this
+        # caller — every concurrent request on the worker stalled 500 ms.
+        # DummyLLMProvider only serves when no Gemini key is configured, so
+        # this turned an already-degraded deployment into a fully serialized
+        # one, at exactly the moment throughput matters most.
+        await asyncio.sleep(0.5)  # Simulate generation latency
         
         # Phase 1: Support dummy JSON generation for schema tests
         if "matching this schema" in system_prompt:
