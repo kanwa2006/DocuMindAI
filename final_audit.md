@@ -1,7 +1,10 @@
 # DocuMindAI — Final Audit
 
-**Date:** 2026-08-02 · **Branch:** `security/redact-env-example` · **HEAD:** `4b0af91`
-**Type:** Read-only audit. **No code was changed to produce this document.**
+**Date:** 2026-08-02 · **Branch:** `security/redact-env-example` · **HEAD:** `0c3e766`
+**Type:** Read-only audit and debug report. **No code was changed to produce this document.**
+**Coverage:** all 425 tracked files. The backend endpoints (24 modules), the frontend
+(91 files under `src/`), and the backend services + core (44 modules) were each read in
+full, line by line — §9, §11 and §12 respectively.
 
 ---
 
@@ -9,15 +12,50 @@
 
 **No.** Not yet, and I want to be precise rather than reassuring.
 
-- **Deploy-blocking defects remaining: 3** (two need you, one needs code).
-- **Performance defects found in this audit: 4** (one of which I introduced).
-- **Frontend↔backend contract: clean** — 56/56 paths resolve.
-- **Backend regression suite: 131 passed.**
+The first pass (§3–§7) found 9 defects from targeted reading. Reading every file then found
+**74 more**, and they change the picture: the earlier pass measured the parts that were being
+actively worked on, so it saw a healthier system than actually exists.
+
+| Area | Findings | Of which HIGH |
+|---|---|---|
+| §9 · backend endpoints (24 modules) | 22 | 11 |
+| §11 · frontend (91 files) | 20 | 5 |
+| §12 · backend services + core (44 modules) | 32 | 13 |
+| §3, §5 · first-pass performance + functional | 9 | 3 |
+| **Total** | **83** | **32** |
+
+- **Deploy-blocking: more than 3.** The original three stand, and the deep read added
+  **tenant isolation on the retrieval path** (§9 H1, §12 S3) — a live cross-tenant exposure,
+  not a latent one.
+- **Frontend↔backend contract: clean** — 56/56 paths resolve. Confirmed.
+- **Backend regression suite: 131 passed.** Still true, and it is the point: **the suite is
+  green while 32 HIGH findings are open.** That measures the tests, not the system.
 - **End-to-end workspace certification: 0 of 7 complete.**
 
+Three claims deserve to be stated plainly, because they are the ones most likely to be
+believed and are false:
+
+1. **The Trust Score does not measure trust.** 65% of its weight is hardcoded (§12 S6), and
+   the rerank scores feeding the rest are renormalised so the top result always scores 1.0
+   (§12 S7). It reports ~66/MEDIUM regardless of input.
+2. **Two advertised features have never run once.** Web search (§12 S13 — the setting does not
+   exist) and every Redis path including trial abuse prevention (§12 S12 — the package is not
+   installed). Both report success.
+3. **A security control that lies is in the tree.** `validate_retrieval_scope` documents
+   itself as called before every retrieval and has zero callers (§12 S4).
+
 The system is materially healthier than a week ago — a large class of real defects is
-gone — but "no known bugs" would be false. The honest status is **not deployable today**;
-see §6.
+genuinely gone, and §10, §11 and §12 each close with the strengths worth preserving. But
+"no known bugs" would be false. The honest status is **not deployable today**; see §6, and
+§7 for the order to fix in.
+
+### How to read the findings sections
+
+§9, §11 and §12 use one format per finding: **Bug** (what is wrong) → **Root cause** (why the
+code is shaped that way) → **Why it happens** (the trigger and its frequency) → **What
+breaks** (user-visible consequence) → **Debug — blast radius** (what else must change, tagged
+*self-contained*, *NOT self-contained*, or *owner-decision-required*). Claims marked ✅ were
+re-verified against source before recording.
 
 ---
 
@@ -327,33 +365,87 @@ not a blocker for *deploying* but is a blocker for *claiming the product works*.
 
 ## 7. Recommended order
 
-1. **`GEMINI_FALLBACK_MODEL=gemini-2.0-flash`** — one line, unblocks generation (B-1).
-2. **P-1 and P-2** — the two N+1 fixes. Self-contained, no contract change, ~20 lines each.
-3. **P-3** — `await asyncio.sleep`. One line.
-4. **Per-workspace certification** — now possible after `31c7119`. Re-upload per workspace.
-5. **P0-3 image size** — bake vs. download is a tradeoff decision.
-6. **P0-4 credential rotation** — yours; redaction does not un-leak git history.
+Revised after the deep read. Ordered by *exposure × cost to fix*, not by severity alone.
+
+**Tier 0 — before anyone else's data is in the system**
+
+1. **Tenant isolation on the retrieval path** (§9 H1, §12 S3, §9 H3, §9 H4). One choke point,
+   not ninety WHERE clauses — `tenant_scope.py` already establishes the right shape; extend it
+   rather than working around it. Resolve `validate_retrieval_scope` (§12 S4) in the same
+   commit: wire it up or delete it, but do not leave a control that lies.
+2. **H5 — the regression I introduced in `31c7119`.** Five single-document endpoints; six of
+   seven workspaces currently cannot GET/HEAD/DELETE their own documents. My defect, smallest
+   diff on this list.
+
+**Tier 1 — one-liners with disproportionate payoff**
+
+3. **`GEMINI_FALLBACK_MODEL=gemini-2.0-flash`** — unblocks generation entirely (B-1). Yours.
+4. **`TAVILY_API_KEY` added to `Settings`** (§12 S13) — or emit `status="skipped"` so the UI
+   stops reporting a step that never ran.
+5. **`WorkspaceUI.tsx:1614`** (§11 F1) — the one `workspaceType` I missed in `31c7119`.
+6. **P-3** — `await asyncio.sleep`. One line.
+
+**Tier 2 — event-loop blocking (do these together; they share a fix shape)**
+
+7. **§12 S1, S2** — stream consumption and the two per-query model calls, into
+   `run_in_executor`. Correct pattern already exists in `llm_service.get_embedding:573`.
+8. **P-1 and P-2** — the two N+1 fixes. Self-contained, ~20 lines each.
+
+**Tier 3 — stop reporting numbers the system does not compute**
+
+9. **§12 S6, S7** — the Trust Score and rerank normalisation. Decide: implement, or reduce the
+   report to what is actually measured. Either is honest; the current state is not.
+10. **§12 S12** — migrate the six `aioredis` sites to `redis.asyncio`. Restores trial abuse
+    prevention and the retrieval cache, both currently silent no-ops.
+11. **§12 S10** — remove the ratio arithmetic from the Finance schema. Extract-then-compute is
+    violated in the one workspace the invariant exists to protect.
+
+**Tier 4 — after the above**
+
+12. **Per-workspace certification** — blocked until Tier 0 and step 3 land.
+13. **P0-3 image size** — bake vs. download is a tradeoff decision.
+14. **P0-4 credential rotation** — yours; redaction does not un-leak git history.
 
 **Not recommended:** adding the 100 missing indexes (write cost, no measured gain), and
 backfilling historical `workspace_id` values (asserts a choice the user never made).
+
+**Do not fix in bulk.** §12 S5 and §12 S8 each require two files changed *together* or the fix
+is not a fix; §12 S19 implies a re-index. Those are marked *NOT self-contained* at the finding.
 
 ---
 
 ## 8. Method and limits
 
-**What this audit did:** AST analysis over 208 Python files for query-in-loop and
-blocking-call patterns; static route extraction from 24 endpoint modules compared against
-56 frontend bindings; index-coverage analysis over ~50 ORM models; component size analysis;
-live provider testing against every key and model.
+**What this audit did — first pass (§3–§7):** AST analysis over 208 Python files for
+query-in-loop and blocking-call patterns; static route extraction from 24 endpoint modules
+compared against 56 frontend bindings; index-coverage analysis over ~50 ORM models; component
+size analysis; live provider testing against every key and model.
+
+**What this audit did — deep read (§9, §11, §12):** every one of the 425 tracked files read
+line by line, in three passes scoped by subsystem. Nothing was sampled or skimmed.
+
+**How the deep-read findings were checked.** Read-every-file at this volume produces confident
+wrong answers, so no finding was recorded on assertion alone. Load-bearing claims were
+re-verified against source before entering this document, and that check has already caught
+errors in this audit: four "contract mismatches" that were my regex failing on a multi-line
+decorator (all 56 resolve), and a "0 Celery routes" reading that was a parser bug (23 includes,
+7 routes, 3 queues, all consumed). Findings marked ✅ carry a specific verification. **Where a
+claim is inferred rather than confirmed, it says so at the finding** — treat those as leads.
 
 **What it did not do — and you should not read as passing:**
-- **No load testing.** Impact on P-1/P-2 is reasoned from query counts, not measured under
-  concurrency.
+- **No load testing.** Impact on P-1/P-2 and the §12 S1/S2 blocking findings is reasoned from
+  query counts and call shape, **not measured under concurrency.** §12 S1 and S2 assert *that*
+  the event loop blocks — which the code shows — not *by how much*. `performance-profiler`
+  owns the magnitude.
 - **No profiler run.** No flame graph, no per-endpoint latency distribution.
 - **No end-to-end workspace certification.** 0 of 7 complete; generation is blocked.
+- **No runtime execution of any finding.** This is a static read. §12 S11 (the fpdf latin-1
+  crash) is the single exception — reproduced against the installed library.
 - **Frontend runtime performance unmeasured** — no re-render counts, no bundle analysis.
   `WorkspaceUI.tsx` at **2,357 lines** is the shared shell for all 7 workspaces and is the
   obvious candidate for a render audit, but that claim is unmeasured and stated as such.
+- **Severity is my judgement, not a verdict.** `security-reviewer` adjudicates §9 H1/H3/H4 and
+  §12 S3/S4/S9; `release-readiness-checker` owns the deployment-facing items.
 
 Every finding above is either a code reference you can open, or a command output. Where I
 inferred rather than measured, I said so.
@@ -558,3 +650,589 @@ in nearly every case the *correct* implementation already exists **in the same f
 defective one. `exams.py` has both. `export.py` has both. `documents.py` has both. The
 knowledge is present; it was applied unevenly. That makes these fixes **low-risk**: you copy
 a proven line from three functions away rather than inventing an approach.
+
+---
+
+# 11. DEEP-READ FINDINGS — frontend (all 91 files under `src/` read in full)
+
+43 findings. **Load-bearing claims re-verified by me against source before recording.**
+
+---
+
+## F1 · HR batch upload still sends resumes to `general` — MY FIX WAS INCOMPLETE
+
+**File:** `frontend/src/components/WorkspaceUI.tsx:1614`
+
+- **Bug:** `uploadDocument(file, undefined, chatId || undefined)` — the workspace argument is
+  still `undefined` on the **batch** upload path.
+- **Verified:** two call sites exist. Line 1307 (single upload) passes `workspaceType` —
+  that is my commit `31c7119`. **Line 1614 (HR batch upload) still passes `undefined`.**
+- **Root cause:** I fixed `handleFileChange` and did not check for other callers. There were
+  two.
+- **Why it happens:** every time an HR user clicks "Batch Upload". The backend falls back to
+  the JWT claim (`general`) — exactly the defect `31c7119` was written to fix.
+- **What breaks:** HR's headline feature is bulk resume ingest. Those documents land in
+  `general` and are invisible to HR retrieval and rankings. Per-workspace isolation cannot
+  be certified while this exists.
+- **Debug — blast radius: self-contained.** `uploadDocument(file, workspaceType, chatId || undefined)`.
+  **Better:** make `workspaceId` a **required** parameter in `lib/api.ts:180` so the compiler
+  catches any third call site. That is the fix that makes the class impossible rather than
+  the instance.
+- **Severity: HIGH**
+
+---
+
+## F2 · Trial exhaustion locks the composer forever and writes a blank message
+
+**File:** `frontend/src/lib/api.ts:335-343`
+
+- **Bug:** the `402 / trial_exhausted` branch dispatches an event and does a bare `return` —
+  it calls **neither `onError` nor `onDone`**. Every other exit path calls one of them.
+- **Verified:** confirmed by reading the branch; the `return` is unguarded.
+- **Root cause:** the trial-modal path was added as an early exit without considering that
+  the caller's state machine is driven entirely by those two callbacks.
+- **Why it happens:** on the query immediately after the trial limit. `WorkspaceUI` awaits
+  and resolves normally, so its outer `catch` never fires: `loading` stays `true`,
+  `sendingRef.current` stays `true`, and the empty response stub remains mounted.
+- **What breaks:** composer permanently disabled, dead "Thinking…" bubble, and the only
+  escape (`Stop`) persists an assistant row with `answer: ""` into the user's history. Only
+  a reload clears it.
+- **Debug — blast radius: self-contained in `api.ts`** — call `onError("Free trial limit reached.")`
+  before the `return`. **Independently** harden `WorkspaceUI.tsx:1202-1205` so the outer
+  catch also resets `sendingRef`, clears the thinking timer, and calls `setResponse(null)`.
+- **Severity: HIGH**
+
+---
+
+## F3 · `React.memo` on messages never prevents a re-render
+
+**File:** `frontend/src/components/WorkspaceUI.tsx:1906-1926`
+
+- **Bug:** three props are new identities every parent render — `followUps={[]}` (fresh array
+  literal), `onTrustToggle={() => …}` (fresh closure), `onRegenerate` (`useCallback` keyed on
+  `history`). The shallow compare fails unconditionally.
+- **Root cause:** memoisation was added without stabilising the props it depends on.
+- **Why it happens:** the rAF token buffer correctly caps `setResponse` to one call per frame
+  — but each of those re-renders the parent, rebuilds every `history.map` element, fails
+  memo, and re-runs `<ReactMarkdown>` over **every prior message's full text**.
+- **What breaks:** the O(n²) heap growth the rAF fix was written to solve still happens, once
+  per frame instead of once per token. Long threads stutter during streaming.
+- **Debug — blast radius: self-contained.** Hoist `const NO_FOLLOWUPS: string[] = []` to
+  module scope; make `onTrustToggle` a stable `useCallback` taking `msg.id`; give
+  `regenerateLastResponse` a `historyRef` instead of a `history` dependency.
+- **Severity: HIGH**
+
+---
+
+## F4 · Cannot scroll up while a response streams
+
+**File:** `frontend/src/components/WorkspaceUI.tsx:864-866`
+
+- **Bug:** `scrollIntoView({behavior:"smooth"})` in an effect keyed on `response?.answer`,
+  with no "is the user near the bottom?" check.
+- **Why it happens:** `answer` changes every rAF flush. Each smooth scroll cancels and
+  restarts the previous one, so it never settles — and any manual scroll-up is yanked back
+  within ~16ms.
+- **What breaks:** reading anything above the fold during generation is impossible.
+- **Debug — blast radius: self-contained.** Track `isPinnedToBottom` from
+  `scrollHeight - scrollTop - clientHeight < 80` and only auto-scroll when true; use
+  `behavior:"auto"` while streaming. Needs a ref on the scroll container.
+- **Severity: HIGH**
+
+---
+
+## F5 · Ctrl/Cmd+B does nothing — two listeners cancel each other
+
+**Files:** `LayoutWrapper.tsx:191-198` + `Sidebar.tsx:364`
+
+- **Bug:** two independent global `keydown` listeners both handle Ctrl+B and both call the
+  same setter. Sidebar enqueues a **value** (`setIsOpen(!isOpenRef.current)`); LayoutWrapper
+  enqueues an **updater** (`setIsSidebarOpen(o => !o)`).
+- **Why it happens:** child effects run before parent effects, so React resolves the queue as
+  `state = !isOpen` then `fn(!isOpen) = isOpen`. **Net result: unchanged.** Ctrl+K is
+  likewise double-bound and both handlers `preventDefault()`.
+- **What breaks:** a shortcut documented in the app's own `KeyboardShortcutsModal` is
+  silently inert.
+- **Debug — blast radius: `Sidebar.tsx` + `LayoutWrapper.tsx` together** — they share state.
+  Delete the Sidebar shortcut block; LayoutWrapper already owns both concerns.
+- **Severity: HIGH**
+
+---
+
+## F6 · "All Sessions" opens the wrong chat
+
+**File:** `frontend/src/app/sessions/page.tsx:79`
+
+- **Bug:** the link is `?session=${s.id}` but `WorkspaceUI.tsx:845` reads `?chat=`.
+- **Verified:** confirmed. Every other producer of this URL (5 sites) uses `?chat=`.
+- **What breaks:** `chatId` resolves to `null`, so the page loads an arbitrary recent chat —
+  or silently **creates a new one** on an empty workspace.
+- **Debug — blast radius: self-contained.** Same class at `app/bookmarks/page.tsx:150`, which
+  builds `/` for the general workspace instead of `/general` and lands on the marketing page.
+  **Fix both together, and add a `chatUrl(workspace, chatId)` helper** — these strings are
+  constructed ad hoc in five files.
+- **Severity: HIGH**
+
+---
+
+## F7 · Shared links render assistant replies as raw JSON
+
+**File:** `frontend/src/app/shared/[token]/page.tsx:290`
+
+- **Bug:** assistant messages are persisted as `JSON.stringify({query, answer, evidence, …})`.
+  `MemoizedMessage` parses that; this page feeds `message.content` straight into `<ReactMarkdown>`.
+- **What breaks:** the **one public, unauthenticated surface of the product** displays
+  `{"query":"…","answer":"…","diagnostics":{…}}` — no citations, no trust badge.
+- **Debug — blast radius: this is a duplicated-renderer bug, not a parsing bug.** A one-line
+  `JSON.parse` here would re-create the duplication the architecture forbids and would still
+  miss `SafeParagraph`. Correct fix: extract `MemoizedMessage`'s parse/render body into a
+  shared `AssistantMessage` component and adopt it in both places.
+- **Severity: HIGH**
+
+---
+
+## F8 · First visit to a workspace creates two chat sessions
+
+**File:** `frontend/src/components/WorkspaceUI.tsx:869-893`
+
+- **Bug:** `initChat` has no in-flight guard. `reactStrictMode: true` runs mount effects
+  twice; both passes see `chats.length === 0` and both call `createChat`.
+- **Why it happens:** first visit to any of the seven workspaces, and whenever the last chat
+  is deleted. StrictMode surfaces it in dev, but the underlying race is real in production —
+  nothing prevents re-entry while the first round trip is outstanding.
+- **Debug — blast radius: self-contained.** An `initChatRef` guard keyed on
+  `${workspaceType}:${chatId}`. **Related, same effect:** the `catch` only logs, so a failed
+  `getChatMessages` leaves the *previous* chat's messages rendered under the new chat id.
+- **Severity: HIGH**
+
+---
+
+## F9 · Paid users are treated as trial users
+
+**File:** `frontend/src/lib/store/trialStore.tsx:46`
+
+- **Bug:** the store's `setPlan` is **never called** from anywhere.
+- **Verified:** confirmed — the only `setPlan` references are a *local* `useState` in
+  `Sidebar.tsx:278`, which is a different variable. `LayoutWrapper` fetches billing status
+  and calls only `setTrialStatus`, discarding `status.plan`.
+- **What breaks:** the "Free trial — N left" pill renders to **paying customers**;
+  `ShareSessionModal` resolves `PLAN_CONFIG["trial"]`, permanently disabling "View and ask"
+  sharing and capping collaborators at 1 regardless of plan.
+- **Debug — blast radius: `LayoutWrapper.tsx` only** — call `setPlan(status.plan)` in the
+  existing billing effect. Then delete `Sidebar.tsx:281-283`, a second independent
+  `getBillingStatus()` fetch that exists only to gate one menu item.
+- **Severity: HIGH**
+
+---
+
+## Selected MEDIUM findings
+
+| # | File | Bug |
+|---|---|---|
+| F10 | `hooks/useSelectionClip.ts:46` | Unstable callback identity tears down and re-adds a `document` mouseup listener **every render**; any re-render inside the 500ms window cancels selection detection. Dead during streaming |
+| F11 | `DocumentPreviewPanel.tsx:54` | Styled as a 380px side panel but mounted as a **column flex child** with no `position: fixed` — it pushes the transcript and composer out of view. Every sibling panel uses `fixed` |
+| F12 | `PomodoroTimer.tsx:75` | `toast()` and `localStorage` write **inside a `setState` updater** — a new instance of the canonical impure-updater bug. Duplicate toasts under StrictMode |
+| F13 | `LayoutWrapper.tsx:130` | Redirects `/` to `lastActiveWorkspace` for **logged-out visitors too** — the marketing landing page becomes unreachable after one workspace visit |
+| F15 | `CommandPalette.tsx:42,47,52` | "New Chat", "Upload Document", "Export Chat" dispatch events with **zero listeners**. 3 of 7 palette commands are dead |
+| F16 | `WorkspaceUI.tsx:1277` | `legal:contracts-updated` is dispatched with a comment claiming an open panel self-heals. **Nothing listens.** A silenced failure by documentation |
+| F21 | `WorkspaceUI.tsx:1301` | `loading` conflates "streaming" and "uploading". Attaching a file mid-stream clears it, hiding Stop and re-enabling Send — the next message is then swallowed silently by the `sendingRef` guard |
+| F23 | `WorkspaceUI.tsx:1640` | Generated exam papers are pushed into `history` with a fabricated `Date.now()` id and **never persisted** — the paper vanishes on reload. Same pattern already fixed for user messages |
+| F25/27/28 | `Sidebar.tsx:233`, `WorkspaceUI.tsx:1899, 2055` | Delete dialog has `aria-hidden` on an **ancestor of the dialog it exposes**; `aria-live` wraps the whole transcript so screen readers re-announce everything each frame; document chips nest `<button>` inside `role="button"` |
+| F31 | `lib/analytics.ts` | The entire typed `Analytics` helper is **never imported anywhere**, PostHog runs with autocapture off, and two other dead conventions coexist. Zero telemetry while shipping the bundle |
+| F32 | `FeedbackBar.tsx`, `VoiceInput.tsx` | Dead components. `FeedbackBar` is never rendered, so the 561-line admin corrections queue **can never be populated**. `VoiceInput` duplicates the live `voice/VoiceInputButton` |
+
+---
+
+## Frontend strengths — preserve these
+
+- **`WorkspaceUI.tsx:781-817` — the rAF token buffer.** Tokens accumulate in a ref and flush
+  once per frame, with `flushTokensSync` for done/error and a cleanup cancelling both the rAF
+  and its timeout fallback. The design is right; only the memo defeat (F3) blunts it.
+- **`WorkspaceUI.tsx:990-1004` — the `sendingRef` guard.** A ref, not state, with an accurate
+  comment on why state cannot close a window that exists *because* state is async.
+- **`WorkspaceUI.tsx:1054-1069` — guarded user-turn persistence.** Resets *every* piece of
+  in-flight state before returning and gives a specific, actionable message. **This is the
+  template the other error paths should copy** — F2 exists precisely because it wasn't.
+- **`WorkspaceUI.tsx:940-982` — the in-flight document poller.** Keyed on the *set of
+  in-flight ids* rather than on `docs`; cleanup removes its own interval from the shared
+  registry rather than clearing all of them. A genuinely subtle correctness fix.
+- **`WorkspaceUI.tsx:312-341` — `SafeParagraph`.** Fixes invalid `<p><pre>` nesting at the
+  renderer rather than at each call site.
+- **`components.css:87-125` — the composer row.** The wrap-below-640px rule and the
+  `pointer: coarse`-scoped 44px tap-target expansion (visual size unchanged, hit area grown
+  via `::after`) are measured, minimal and shared across all seven workspaces.
+- **`lib/api.ts:55-72` — CSRF bootstrapping.** Single-flight `_csrfPromise`, pre-mutation
+  await, `/auth/*` exemption, and an explicit error when the token returns empty rather than
+  letting it read as an expired session.
+- **`voice/VoiceInputButton.tsx:43-46` — the `mounted` gate.** Renders nothing on SSR *and*
+  the first client render — the correct way to kill a hydration mismatch.
+- **`Sidebar.tsx:317-343` — `loadChats` error classification.** Offline / 401 / 5xx / timeout
+  each get an appropriate recovery affordance. The mutation handlers (F18) should be raised
+  to this standard.
+- **`ErrorBoundary.tsx`**, **`lib/pricing.ts`** — a real class boundary with two recovery
+  paths, and a genuine single source of truth with named lookups.
+
+---
+
+## The cross-cutting pattern — most important planning insight
+
+**Three of the highest findings are the same architectural mistake: a defect fixed at one
+call site and not at its siblings.**
+
+- F1 — upload workspace fixed at one of two call sites (mine)
+- F7 — the message renderer duplicated instead of shared
+- F16/F23 — persistence fixed for user messages, not for exam papers or contract events
+
+Each is **cheaper to fix by consolidating the call sites than by patching each one.** The
+same applies to navigation: F6 and F14 both come from route strings built ad hoc in five
+files, and a single `chatUrl(workspace, chatId)` helper makes both impossible rather than
+merely fixed.
+
+`reactStrictMode: true` in `next.config.ts` is why F8 and F12 reproduce in dev. **Do not
+disable it** — it is surfacing real impurity.
+
+---
+
+# 12. DEEP-READ FINDINGS — backend services + core (44 modules read in full)
+
+29 service modules and 15 core modules. 59 findings. **Load-bearing claims re-verified by
+me against source before recording.** This section independently corroborates §9's H1.
+
+---
+
+## S1 · Streaming blocks the entire event loop — HIGH
+
+**File:** `backend/app/services/llm_service.py:391`
+
+- **Bug:** the Gemini stream is consumed with a **synchronous `for` loop inside an
+  `async def`**: `for chunk in stream_response:`. Only the call that *obtains* the stream is
+  wrapped in `run_in_executor` (line 375); the iteration that performs the network I/O was
+  left on the event loop thread.
+- **Verified:** ✅ confirmed by reading lines 388-397.
+- **Root cause:** the returned object is a blocking generator whose `__next__` does network
+  I/O. Wrapping only the constructor looks correct and is not.
+- **Why it happens:** every `/query/stream` request. Each `next()` blocks until the next
+  Gemini chunk arrives — tens to hundreds of ms each, seconds in aggregate.
+- **What breaks:** **one streaming user stalls the whole API worker.** Other requests, health
+  checks and other SSE streams all freeze. Directly violates the documented invariant
+  "blocking model/LLM calls are offloaded via `run_in_executor`". Will be misdiagnosed as
+  "Gemini is slow." `generate_stream` also has **no timeout at all**, while
+  `_provider_generate` correctly enforces `LLM_TIMEOUT_SECONDS` — a hung stream is unbounded.
+- **Debug — blast radius: self-contained** in `GeminiLLMProvider.generate_stream`. Pump the
+  sync iterator through a thread: `await loop.run_in_executor(None, lambda: next(it, SENTINEL))`
+  and yield until the sentinel. Consumers already `async for` and need no change. Extra-care
+  file — full regression required.
+
+---
+
+## S2 · Every query blocks the event loop twice more — HIGH
+
+**Files:** `retrieval_service.py:45` (bge-m3 query embedding) · `grounding_service.py:87`
+(cross-encoder rerank of up to 30 candidates)
+
+- **Bug:** two CPU-bound model inferences run synchronously from `async def` functions.
+- **Root cause:** `embedding_service.generate_embeddings` and `reranker_service.rerank_results`
+  are sync APIs called directly. `llm_service.get_embedding:573` shows the team knows the
+  correct pattern — it was applied there and not here.
+- **Why it happens:** **every single query**, both `/ask` and `/stream` — not only streaming
+  ones. The cross-encoder on 30×512-token pairs on CPU is the dominant cost.
+- **What breaks:** combined with S1, the API serializes all work onto one thread.
+- **Debug — blast radius: self-contained.** Both functions are already `async`, so signatures
+  do not change: wrap each call in `run_in_executor`. Both are extra-care files.
+  `performance-profiler` owns the magnitude; this finding asserts only that it blocks.
+
+---
+
+## S3 · Deep Research scans the entire database — HIGH
+
+**File:** `backend/app/services/deep_research_agent.py:89`
+
+- **Bug:** `retrieve_chunks` is called with **no `workspace_id` and no owner filter**, and
+  line 88 (`doc_uuid_ids = [...] if document_ids else None`) converts an **empty list** into
+  `None` — "the user attached no documents" becomes "no filter at all".
+- **Why it happens:** any Deep Research request with no attached documents.
+- **What breaks:** unlike §9's H1 this has not even a workspace narrowing — it scans every
+  READY chunk **in the entire database**, then feeds it to the LLM as cited evidence.
+- **Debug — blast radius:** distinguish empty from absent, as `grounding_service.py:44`
+  already does correctly. The calling endpoint must supply `owner_id` (see §9 H1).
+
+---
+
+## S4 · `validate_retrieval_scope` has zero callers — HIGH
+
+**File:** `backend/app/services/tenant_guard.py:45`
+
+- **Bug:** the guard's own docstring reads *"Hard blocking guard called before EVERY retrieval
+  operation… CRITICAL: Never remove or bypass this call."* It is **never called**.
+- **Verified:** ✅ zero call sites (confirmed independently in §9 and by my own grep).
+- **What breaks:** it compounds H1 by an order of magnitude — an auditor reading this file
+  concludes retrieval is tenant-guarded and stops looking. **A security control that lies is
+  worse than an absent one.** The only other reference is a stale comment at `admin.py:79`
+  claiming violations are logged; that log line can never execute.
+- **Debug — blast radius:** either delete the module **and** the `admin.py:79` comment in the
+  same commit, or call it from the single retrieval choke point created by H1. Do not leave
+  it as-is.
+
+---
+
+## S5 · Key rotation attributes failures to the wrong key — HIGH
+
+**File:** `backend/app/services/llm_service.py:224, 343, 375`
+
+- **Bug:** rotation mutates **process-global** SDK state (`genai.configure(api_key=key)`)
+  while requests execute concurrently in a thread pool.
+- **Root cause:** `google.generativeai` resolves its client from a module-level default **at
+  call time**, not at `GenerativeModel` construction. Nothing serializes the window between
+  configure and dispatch.
+- **Why it happens:** any concurrency ≥2. Request A configures key 3 and dispatches to the
+  executor; request B configures key 7 before A's thread issues its HTTP call; **A's call
+  goes out on key 7**. If it 429s, `_mark_key_failed` cools **key 3** — a healthy key — for
+  300s while key 7 keeps being handed out.
+- **What breaks:** under load the pool degrades progressively — healthy keys get cooled, hot
+  keys never do. Presents as intermittent quota errors no log explains. Also makes the P0-1
+  `keys_rejecting_model` accounting unreliable.
+- **Debug — blast radius: NOT self-contained.** `embedding_service.py:59` calls
+  `genai.configure` on the **same global** and will clobber whatever the rotator set — both
+  must be fixed together or neither is fixed. Preferred fix: a per-call client so the key
+  travels with the request rather than the process. Extra-care, concurrency-sensitive.
+
+---
+
+## S6 · The Trust Score is a near-constant — HIGH
+
+**File:** `backend/app/services/veritas_engine.py:73-116`
+
+- **Bug:** three of five factors (**65% of the weight**) are hardcoded literals.
+- **Verified:** ✅ `scores["dual_retrieval"] = 70.0` whenever any chunk exists — **no second
+  retrieval is performed** despite the class documenting "dual retrieval consensus".
+  `has_contradictions = False` is initialised and **never reassigned**; the contradiction
+  score is 80.0 or 100.0 purely from `len(document_ids) > 1` — **no contradiction detection
+  exists**.
+- **Why it happens:** always. Factor 2 asks whether a chunk's first 50 characters appear
+  *verbatim* in the answer — an LLM answer essentially never does, so that factor is a
+  constant 30.0 too. The arithmetic lands at **66-70, always graded MEDIUM**.
+- **What breaks:** a **fabricated confidence metric presented as a measured one**, and
+  re-exported into audit PDFs that carry the disclaimer "Trust scores indicate retrieval
+  confidence." They indicate nothing. A more serious loud-degradation violation than
+  `DummyLocalReranker`, because that one at least logs ERROR and refuses in production.
+- **Debug — blast radius: owner-decision-required.** Either implement the three factors, or
+  reduce the report to what is actually computed and stop advertising the rest. Touches
+  `query.py::_compute_trust_event`, the SSE `trust_report` event, `audit_export.py:41`, and
+  the frontend TrustScore component.
+
+---
+
+## S7 · Rerank scores are min-max normalised — the confidence number is meaningless — HIGH
+
+**File:** `backend/app/services/reranker_service.py:32`
+
+- **Bug:** scores are min-max normalised **within each candidate set**, so the best candidate
+  always scores exactly 1.0 and the worst exactly 0.0 — regardless of whether any are relevant.
+- **What breaks:** two concrete failures. `grounding_service.py:91` filters
+  `rerank_score >= rerank_threshold` as a low-confidence gate — it can now **never** exclude
+  the top result and **always** excludes the bottom one. And `grounding_service.py:138`
+  averages these into `confidence_score`, which is streamed to the UI and feeds
+  `audit_export._trust_score`. A set of 30 irrelevant chunks produces an identical
+  distribution to 30 perfect ones.
+- **Debug — blast radius:** return `sigmoid(logit)` instead, preserving the raw logit so
+  ranking is unchanged and only the reported confidence becomes truthful. `rerank_threshold`
+  must be re-tuned since its meaning changes. Extra-care file.
+
+---
+
+## S8 · Silent corpus corruption across containers — HIGH
+
+**File:** `backend/app/services/embedding_service.py:78`
+
+- **Bug:** when bge-m3 is unavailable the provider emits 768-dim Gemini vectors **zero-padded
+  to 1024**. The code justifies this as safe because "the query embedding goes through the
+  same fallback chain and gets padded identically."
+- **Root cause:** that holds only if the API container and the Celery worker are in the
+  **same mode**. They are separate containers with independent model loads, and **nothing
+  detects or enforces agreement**.
+- **What breaks:** a worker that fails to download bge-m3 while the API succeeds produces a
+  corpus where document vectors are padded-Gemini and query vectors are bge-m3. Cosine
+  similarity between them is not zero — it is **plausible garbage**. Retrieval returns
+  confidently ranked irrelevant chunks; S7 rescales them to look decisive; S6 reports MEDIUM.
+  **Every layer that could have caught it has been neutered.**
+- **Debug — blast radius: owner-decision-required.** Record the producing model on the chunk
+  and refuse at query time on mismatch; minimum viable is to assert `self._dim == EMBEDDING_DIM`
+  and fail startup. Chunking/embedding changes imply a re-index.
+
+---
+
+## S9 · Three call sites bypass the prompt-injection guard and the timeout — HIGH
+
+**Files:** `summary_service.py:284, 313` · `proactive_insights.py:124`
+
+- **Bug:** these reach through to `llm_service.provider.generate(...)` directly, skipping both
+  `_harden_system_prompt` (the M-8 anti-injection guard) and the `LLM_TIMEOUT_SECONDS` cap
+  that `LLMService.generate` applies.
+- **Why it matters here specifically:** `summary_service` exists to feed the **entire
+  document** to the LLM, and its `_MAP_SYSTEM` prompt contains no injection guard of its own.
+  These are the worst possible paths to bypass on.
+- **What breaks:** a crafted uploaded document can smuggle instructions into the map step
+  across up to 40 windows; the reduce step then treats the poisoned summaries as trusted
+  input. None of these calls can time out, so a hung upstream pins the SSE stream indefinitely.
+- **Debug — blast radius:** change the three sites to `llm_service.generate(...)`; add an
+  `LLMService.generate_stream` that hardens and delegates. Then make the leak impossible —
+  rename `provider` to `_provider_impl`. `security-reviewer` owns severity.
+
+---
+
+## S10 · The Finance schema tells the model to do the arithmetic — HIGH
+
+**File:** `backend/app/services/response_schemas.py:98`
+
+- **Bug:** the schema instructs the LLM to compute ratios in the prompt:
+  `**Current Ratio** = Current Assets / Current Liabilities = ₹X / ₹Y = **2.4x**`.
+- **What breaks:** **direct violation of extract-then-compute, in the exact workspace the
+  invariant exists to protect.** The invariant's stated purpose is "why figures cannot be
+  hallucinated"; a model computing `₹X / ₹Y` in-context will produce authoritative-looking
+  wrong numbers carrying a page citation. Live on every finance chat query.
+- **Debug — blast radius: self-contained** to `_FINANCE`. Rewrite the rule to formatting only:
+  present a ratio when supplied, never compute one. The 15 Python-computed ratios on the
+  finance endpoints are unaffected.
+
+---
+
+## S11 · Audit PDF export crashes on any non-latin-1 character — HIGH
+
+**File:** `backend/app/services/audit_export.py:210`
+
+- **Bug:** `_build_pdf` uses the fpdf core font Helvetica (latin-1 only) with no
+  `add_font(..., uni=True)`. **Verified empirically by the agent** against the installed
+  fpdf 2.8.7: `FPDFUnicodeEncodingException: Character "⚠" … outside the range of
+  characters supported by the font`.
+- **Why it happens deterministically, not occasionally:** line 210 emits `f"⚠ {w}"` for every
+  trust warning, and `veritas_engine.py:110` produces one whenever fewer than 3 chunks are
+  retrieved. Also fires on `…` truncation, curly quotes, em-dashes, **`₹` (which the Finance
+  schema mandates)**, and any Hindi/Tamil/Telugu answer — which `language_detector.py` exists
+  to produce.
+- **What breaks:** the audit report — the compliance artifact for legal and finance users —
+  500s for a large fraction of real sessions. DOCX is unaffected, so it presents as "PDF is
+  broken, Word works."
+- **Debug — blast radius:** register a Unicode TTF (DejaVuSans ships with fpdf2). The font
+  file must be present in the backend image — `release-readiness-checker` should confirm
+  `Dockerfile.backend` before deploy.
+
+---
+
+## S12 · `aioredis` is not installed — every Redis path is a silent no-op — HIGH
+
+**Files:** `core/middleware.py:9` · `query.py:127, 146` · `auth.py:265` · `documents.py:609` ·
+`feedback.py:43`
+
+- **Bug:** every Redis access imports `aioredis` inside a bare `try/except` returning `None`
+  with **no log line**. The agent verified `aioredis` is **not installed in `backend/venv`**
+  (`ModuleNotFoundError`), and that `aioredis` 2.0.1 is known-broken on Python 3.11 — this
+  stack's pinned version — via `TypeError: duplicate base class TimeoutError`. The package has
+  been deprecated in favour of `redis.asyncio` since 2022.
+- **What breaks:** `DeviceFingerprintMiddleware` silently stops blocking repeat trial
+  registrations — an advertised abuse control, inert, with zero log evidence. The retrieval
+  cache never caches, so every query pays full retrieval cost while the code presents a cache
+  path. `except Exception: return None` is the mechanism — it makes a **missing dependency
+  indistinguishable from a cache miss**.
+- **Debug — blast radius:** migrate all six sites to `redis.asyncio` (already a transitive
+  dependency), drop `aioredis` from `requirements.txt` and `requirements-deploy.txt`, and
+  **log at ERROR** when the client cannot be constructed. Changes startup behaviour →
+  `infra-health-checker` before merge.
+
+---
+
+## S13 · Web search has never worked — HIGH
+
+**File:** `backend/app/services/deep_research_agent.py:58`
+
+- **Bug:** `settings.TAVILY_API_KEY` **does not exist** in `core/config.py`.
+- **Verified:** ✅ the only occurrence of `TAVILY` in the entire backend is this line. The
+  resulting `AttributeError` is swallowed by an over-broad `except Exception` and returns
+  `None` forever.
+- **What breaks:** the advertised "hybrid RAG + web intelligence" pipeline is permanently
+  document-only. Step 3 still emits `status="done", message="Found 0 current source(s)"`, so
+  the UI reports a **successful web-search step that never ran**, and the synthesis prompt
+  then tells the LLM "No web sources found" — inviting it to describe an absence as a finding.
+- **Debug — blast radius:** add `TAVILY_API_KEY: Optional[str] = None` to `Settings`
+  (extra-care file), emit `status="skipped"` when unset, and narrow the `except` to
+  `ImportError`. Config change → `infra-health-checker`.
+
+---
+
+## Selected MEDIUM findings
+
+| # | File | Bug |
+|---|---|---|
+| S14 | `core/trial_enforcement.py:32` | Docstring claims check-and-increment is atomic; they are **two statements**. Two concurrent requests both read `used = 9`, both pass, both increment → **11 queries on a 10-query trial**. Trivially exploitable with parallel requests |
+| S15 | `grounding_service.py:98` | Candidates are re-sorted into **document order before** the token budget is spent, with a hard `break` — so the **rank-1 chunk is dropped** whenever it appears late in the document. The comment calls it "purely a presentation reorder"; it changes which evidence survives |
+| S16 | `llm_key_rotation.py:142` | `available_keys`/`key_status` iterate `_cooling_keys` **outside the lock** while `report_rate_limit` writes it under the lock → `RuntimeError: dictionary changed size during iteration` on a `/health` poll concurrent with any 429. A failing health probe can get the container restarted |
+| S17 | `llm_service.py:212` vs `llm_key_rotation.py:23` | **Two independent cooldown stores.** The provider writes to the rotator but reads only its own dict; `rotator.get_key()` is never called. The rotator's careful lock-free-wait logic is **dead code on the real path**, and `/health` reports the rotator's view while the provider acts on a different one |
+| S18 | `llm_service.py:290` | Error classification is **substring matching** — `"500" in error_msg`, `"503"`, `"404"` — tested *before* structured checks. A token count like "503 tokens" misclassifies a capability gap as a transient server error, undoing P0-1 in the exact case it was written for |
+| S19 | `chunking_service.py:28` | Length accounting ignores the `"\n\n"` separators it later joins with, and a block larger than `CHUNK_SIZE` is emitted **whole with no cap**. With no blank lines — common in OCR output — **the entire page becomes one chunk**, silently truncated by the embedder and scored on only its first 512 chars by the reranker. Extra-care: implies a re-index |
+| S20 | `retrieval_service.py:105` | Lexical branch computes `to_tsvector(...)` at query time with **no matching GIN index** — verified absent across all 45 migrations. Vector side is O(log n) via HNSW; the hybrid pipeline is only as fast as its slowest half |
+| S21 | `audit_export.py:192, 353` | Evidence read as `ev.get("text")` / `ev.get("chunk_text")`, but retrieval emits **`text_content`**. Every audit export renders bare "filename, p.4" with the **quoted passage always missing** — the one thing the report exists to show. Same key-drift as documented BUG-001, reintroduced |
+| S22 | `table_extractor.py:110` | `PPStructure` + `show_log` — **both removed in PaddleOCR 3.x**. The C-3 fix documented this exact API break and updated one call site; this second one was missed. Table extraction silently returns `[]` |
+| S23 | `table_extractor.py:117` | PDF fallback processes **only page 1** yet labels every table `"page": 1` — a **wrong citation**, the one thing the citation system must never produce. Also uses `BGRA2BGR` on RGBA data |
+| S24 | `sm2_service.py:19` | A card whose interval reaches exactly 6 **never graduates** — `elif interval <= 6: new_interval = 6` is a fixed point. SM-2 keys off *repetition count*, not interval value. **Spaced repetition does not space** |
+| S25 | `summary_service.py:293` | On a failed window the sentinel tells the reducer "the document continues normally after this point" — **actively instructing the model to conceal the gap**. The user gets a summary presented as complete that is missing a slice |
+| S26 | `core/tenant_scope.py:126` | The hook returns early for non-SELECT, so ORM **UPDATE and DELETE** against scoped models are unfiltered. Genuinely unavoidable for `with_loader_criteria` — but the "Limits" docstring documents only `text()` and INSERT, **not this**. A reader who internalised "the session owns tenancy" will write an unfiltered DELETE in good faith |
+| S27 | `core/config.py:27` | `CSRF_SECRET_KEY` is a **required, no-default** setting that is **never read**. ✅ Verified: single occurrence, its own declaration. `CSRFMiddleware` does unsigned double-submit — plain `!=` equality. Deployment is blocked on a secret that does nothing, and a reader concludes tokens are cryptographically bound when they are not |
+| S28 | `ocr_orchestrator.py:194` | `OCRValidationGateway` hardcodes `0.80`/`0.60`; `settings.OCR_CONFIDENCE_THRESHOLD` is ✅ **verified read only by its own range check**. An inert knob that appears functional — and unlike other inert settings it is **not marked `# INERT`** |
+| S29 | `email_service.py:44` | Every trial email hardcodes **5 queries** while `TRIAL_QUERY_LIMIT = 10` is annotated "single source of truth". ✅ Verified: 5 occurrences of the literal. Users are told they are on their last query at #4 while the system grants 10 |
+| S30 | `email_service.py:42` | `{name}` interpolated into HTML email bodies **unescaped** — an HTML/link injection primitive in outbound mail carrying the product's sender reputation |
+| S31 | `core/storage.py:45, 73` | Whole-file reads into memory (`dst.write(src.read())`) with `MAX_UPLOAD_MB = 200` — 200 MB resident per concurrent operation, in a worker whose DB pool was sized to 1+1 |
+| S32 | `ocr_service.py:194` | `fitz.open()` never closed on the exception path — `doc.close()` is inside the `try`, not a `finally`. Leaks a handle and an mmap per failed document; on Windows the temp file then cannot be deleted |
+
+---
+
+## Notable LOW findings
+
+`ocr_service.py:126` — `UnboundLocalError` on an empty `.pptx` · `ocr_service.py:32` — a
+**fresh event loop per page** (200 loops for a 200-page scan) · `ocr_orchestrator.py:143` —
+bounding boxes normalised against **text extent, not page size**, so every highlight overlay
+is offset · `language_detector.py:5` — Marathi and Hindi share an identical Devanagari regex,
+so **Marathi is never detected** · `core/auth.py:35` — `workspace_id` defaults to the **user
+id**, producing a per-user "category" matching no real workspace · `config.py:226` —
+`sync_database_url` does not normalise `postgres://`, the form **Railway hands out**, so the
+Celery worker fails at startup with an obscure dialect error on the stated deploy target ·
+`financial_table_extractor.py` — 4 of 6 public symbols dead, one of which (`detect_statement_unit`)
+would **double-apply a 10⁷ scale factor** if wired · `telemetry.py:12` — ignores both
+`OTEL_ENABLED` and `PROMETHEUS_ENABLED` and hardcodes `ConsoleSpanExporter`, flooding logs.
+
+---
+
+## Services/core strengths — preserve these
+
+- **`core/tenant_scope.py`** — corroborated independently by both deep reads as the strongest
+  engineering reasoning in the repo. It names the obvious fix (add `owner_id` to ninety WHERE
+  clauses), explains why that is the wrong *shape*, and relocates the decision to the layer
+  that owns it. Its "Limits — read before relying on this" section is the rare case of a
+  control documenting its own gaps. **Extend it (H1, H3, S26); do not replace it.**
+- **`llm_service.py:257-328` — the P0-1 branch.** Correctly identifies that a per-key
+  capability gap is neither a rate limit nor an invalid key, and **refuses to reuse**
+  `_mark_key_failed`/`_mark_key_invalid` whose semantics would poison healthy keys. Cites the
+  production evidence (30 failures all from key 20 of 21). The model for how a fix should be
+  reasoned about and recorded.
+- **`llm_service.py:92-163` — `_safe_extract_text`.** The sharpest catch in the file: it
+  recognised that MAX_TOKENS arrives *together with* partial text, so the naive fast path was
+  delivering truncated answers as complete ones.
+- **`llm_key_rotation.py:71-114` — the M-9 out-of-lock cooldown wait.** Compute under the
+  lock, release, sleep, re-check — textbook correct, with a comment naming the bug it replaced.
+- **`core/gemini_env.py`** — anchors the env file to `__file__` not CWD, is called from
+  `get_key_rotator()` so web/worker/scripts load keys identically, and never overrides an
+  existing `os.environ` value so real container env always wins.
+- **`embedding_service.py:86` and `reranker_service.py:40` — the M-4/M-10 refusals.** Both
+  refuse to emit fabricated data in production, with comments explaining why a zero vector is
+  worse than an outage. **S6, S7 and the summary-service placeholder scores are failures to
+  apply this same standard elsewhere — not failures of this code.**
+- **`core/config.py:43-70` — the connection budget.** Shows the arithmetic
+  (`API 5 · worker 4 · beat 2 · health 1 = ~12 of 15`), records the measured incident that
+  motivated it (19 hours unhealthy), and says to raise via env rather than by editing code.
+- **`core/config.py:210-238` — `sync_database_url`.** One place normalising every psycopg2 DSN
+  quirk; the H-9 local-host exemption is genuinely subtle — an unconditional SSL append had
+  broken the project's own compose stack.
+- **`processing_events.py`** — derives progress from real persisted status transitions and
+  states outright that these are "monotonic stage markers, not fabricated percentages." The
+  honest choice over a smoother-looking lie.
+- **`response_schemas.py:1-19`** — records that the dict was previously keyed
+  `student`/`teacher` so Study and Exam silently fell back to the general schema. Documenting
+  a silent-fallback bug at the point of fix is what prevents its recurrence.
