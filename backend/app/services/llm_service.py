@@ -393,7 +393,44 @@ class GeminiLLMProvider(BaseLLMProvider):
             else:
                 raise
 
-        for chunk in stream_response:
+        # S1 — this was `for chunk in stream_response:`. Only the call that
+        # OBTAINS the stream was offloaded (above); the iteration that performs
+        # the actual network I/O ran on the event loop thread. The returned
+        # object is a blocking generator whose `__next__` waits on the network,
+        # so every chunk froze the whole worker — other requests, other SSE
+        # streams and the health check alike. Wrapping only the constructor
+        # looks correct and is not.
+        #
+        # Pump the sync iterator through the executor one step at a time. The
+        # sentinel distinguishes "generator exhausted" from a falsy chunk;
+        # StopIteration cannot cross an executor boundary, so `next(it, default)`
+        # is used rather than letting it raise.
+        loop = asyncio.get_event_loop()
+        iterator = iter(stream_response)
+        exhausted = object()
+
+        while True:
+            try:
+                # Bound each STEP, not the whole stream: total generation time
+                # is legitimately long, but an individual chunk that never
+                # arrives previously hung forever — generate_stream had no
+                # timeout at all, while _provider_generate enforces this same
+                # setting.
+                chunk = await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda it=iterator: next(it, exhausted)),
+                    timeout=settings.LLM_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "[Gemini] stream stalled — no chunk within %ss. Ending the "
+                    "stream rather than hanging the request indefinitely.",
+                    settings.LLM_TIMEOUT_SECONDS,
+                )
+                return
+
+            if chunk is exhausted:
+                break
+
             # P3 — safe accessor: a stream chunk can have finish_reason set
             # on the last frame with no parts; reading chunk.text would
             # raise ValueError and kill the entire SSE stream mid-response.
