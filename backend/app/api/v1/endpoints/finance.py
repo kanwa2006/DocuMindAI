@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
-from app.core.document_access import get_owned_document
+from app.core.document_access import get_owned_document, get_owned_document_text
 from app.core.workspace import resolve_workspace_id
 from app.models.finance import FinancialDocument, Transaction, AuditFinding, FinancialRule
 from app.models.document import Document
@@ -298,17 +298,16 @@ def _validate_values(response_text: str, source_chunks: list) -> list:
 
 # ── Helper: fetch and concatenate document chunks ─────────────────────────────
 
-async def _get_document_text(db: AsyncSession, document_id: uuid.UUID) -> tuple:
-    """Returns (full_text, chunks_list) for a document."""
-    result = await db.execute(
-        select(DocumentChunk)
-        .where(DocumentChunk.document_id == document_id)
-        .order_by(DocumentChunk.chunk_index)
-    )
-    chunks = result.scalars().all()
-    text = "\n".join(c.text_content for c in chunks)
-    chunks_data = [{"text_content": c.text_content, "chunk_index": c.chunk_index} for c in chunks]
-    return text, chunks_data
+async def _get_document_text(
+    db: AsyncSession, document_id: uuid.UUID, current_user: dict
+) -> tuple:
+    """Returns (full_text, chunks_list) for a document the caller OWNS.
+
+    H7: this was a byte-for-byte sibling of the same helper in `legal.py`, and
+    both selected chunks by `document_id` alone. Now one shared implementation
+    that enforces ownership — see `core/document_access`.
+    """
+    return await get_owned_document_text(db, document_id, current_user)
 
 
 # ── Helper: LLM extraction prompt for financial line items ────────────────────
@@ -480,15 +479,12 @@ async def compute_financial_ratios(
 
     doc_id = uuid.UUID(request.document_ids[0])
 
-    # Verify document ownership
-    doc = (await db.execute(
-        select(Document).where(Document.id == doc_id)
-    )).scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found.")
-
-    # Fetch document chunks
-    doc_text, chunks_data = await _get_document_text(db, doc_id)
+    # H6: the comment here read "# Verify document ownership" above a query
+    # with NO ownership predicate — `select(Document).where(Document.id ==
+    # doc_id)` and nothing else. The comment described a control that did not
+    # exist, which is worse than no comment: it stops the next reader looking.
+    # Ownership is now enforced inside the shared helper below.
+    doc_text, chunks_data = await _get_document_text(db, doc_id, current_user)
     if not doc_text.strip():
         raise HTTPException(status_code=422, detail="Document has no extractable text.")
 
@@ -604,7 +600,7 @@ async def compare_financial_periods(
     for period_label, doc_id_str in request.period_doc_ids.items():
         try:
             doc_id = uuid.UUID(doc_id_str)
-            doc_text, _ = await _get_document_text(db, doc_id)
+            doc_text, _ = await _get_document_text(db, doc_id, current_user)
             if not doc_text.strip():
                 period_ratios[period_label] = {}
                 continue

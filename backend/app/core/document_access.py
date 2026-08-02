@@ -26,11 +26,14 @@ from __future__ import annotations
 
 import uuid
 
+from typing import Any
+
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.models.document import Document
+from app.models.document_chunk import DocumentChunk
 
 
 async def get_owned_document(
@@ -69,3 +72,44 @@ async def get_owned_document(
         raise HTTPException(status_code=404, detail="Document not found")
 
     return doc
+
+
+async def get_owned_document_text(
+    db: AsyncSession,
+    document_id: uuid.UUID | str,
+    current_user: dict,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Return `(full_text, chunks)` for a document the caller owns.
+
+    H6 / H7 — `legal.py` and `finance.py` each had their own
+    `_get_document_text` that selected chunks by `document_id` ALONE, with no
+    ownership check anywhere in the call chain:
+
+      • `/legal/contracts/compare` fed it two caller-supplied ids
+      • `/finance/analyze` had a comment reading "# Verify document ownership"
+        directly above a query with no ownership predicate at all
+
+    So either endpoint returned the full text of any document in the database
+    to any authenticated user. Two copies of the same helper, both missing the
+    same check — which is precisely why the register prescribes consolidating
+    them instead of adding a predicate twice.
+
+    Ownership is resolved through `get_owned_document`, so there is exactly one
+    definition of "may this caller read this document" in the codebase.
+    """
+    doc = await get_owned_document(db, document_id, current_user)
+
+    chunks = (
+        await db.execute(
+            select(DocumentChunk)
+            .where(DocumentChunk.document_id == doc.id)
+            .order_by(DocumentChunk.chunk_index)
+        )
+    ).scalars().all()
+
+    text = "\n".join(c.text_content for c in chunks if c.text_content)
+    chunks_data = [
+        {"text_content": c.text_content, "chunk_index": c.chunk_index}
+        for c in chunks
+    ]
+    return text, chunks_data

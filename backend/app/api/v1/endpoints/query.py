@@ -19,7 +19,7 @@ from app.services.summary_service import (
     is_summary_intent,
     generate_full_document_summary_stream,
 )
-from app.models.chat import ChatMessage
+from app.models.chat import ChatMessage, ChatSession
 from app.models.document import Document, DocumentStatus
 from app.models.org import User
 from app.core.auth import get_current_user
@@ -291,9 +291,24 @@ async def ask_question_stream(
             if body.session_id:
                 try:
                     sess_uuid = uuid.UUID(body.session_id)
+                    # H10: this selected ChatMessage by session_id ALONE, so a
+                    # caller could pass another user's session_id and have that
+                    # transcript loaded into `conversation_history` — which is
+                    # fed straight into the LLM prompt and paraphrased back in
+                    # the answer. A read of someone else's conversation, laundered
+                    # through the model.
+                    #
+                    # ChatMessage has no owner column; ownership lives on the
+                    # session, so the join is the filter. Note H4 (chats.py) did
+                    # NOT fix this — that finding covered the /chats routes, and
+                    # this is a separate reader of the same data.
                     stmt = (
                         select(ChatMessage)
-                        .where(ChatMessage.session_id == sess_uuid)
+                        .join(ChatSession, ChatMessage.session_id == ChatSession.id)
+                        .where(
+                            ChatMessage.session_id == sess_uuid,
+                            ChatSession.owner_id == owner_uuid,
+                        )
                         .order_by(ChatMessage.created_at.desc())
                         .limit(8)
                     )

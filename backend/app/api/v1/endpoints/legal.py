@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
-from app.core.document_access import get_owned_document
+from app.core.document_access import get_owned_document, get_owned_document_text
 from app.core.workspace import resolve_workspace_id
 from app.models.legal import Contract, Clause, ComplianceRule, RedlineSuggestion, ApprovalWorkflow
 from app.models.legal_analysis import LegalAnalysis, LegalAuditLog
@@ -52,14 +52,17 @@ class ContractCompareRequest(BaseModel):
 
 # ── Helper: fetch and join document chunks ────────────────────────────────────
 
-async def _get_document_text(db: AsyncSession, document_id: uuid.UUID) -> str:
-    result = await db.execute(
-        select(DocumentChunk)
-        .where(DocumentChunk.document_id == document_id)
-        .order_by(DocumentChunk.chunk_index)
-    )
-    chunks = result.scalars().all()
-    return "\n".join(c.text_content for c in chunks)
+async def _get_document_text(
+    db: AsyncSession, document_id: uuid.UUID, current_user: dict
+) -> str:
+    """H7: ownership is enforced by the shared helper, not assumed here.
+
+    This selected chunks by `document_id` alone, so `/contracts/compare` —
+    which takes two caller-supplied ids — returned the full text of ANY
+    document in the database to ANY authenticated user.
+    """
+    text, _ = await get_owned_document_text(db, document_id, current_user)
+    return text
 
 
 # ── Helper: log immutable audit event ─────────────────────────────────────────
@@ -283,8 +286,8 @@ async def compare_contracts(
     doc_a_id = uuid.UUID(request.doc_id_a)
     doc_b_id = uuid.UUID(request.doc_id_b)
 
-    text_a = await _get_document_text(db, doc_a_id)
-    text_b = await _get_document_text(db, doc_b_id)
+    text_a = await _get_document_text(db, doc_a_id, current_user)
+    text_b = await _get_document_text(db, doc_b_id, current_user)
 
     if not text_a.strip() or not text_b.strip():
         raise HTTPException(status_code=422, detail="One or both documents have no extractable text.")
@@ -349,7 +352,7 @@ async def generate_risk_report(
         raise HTTPException(status_code=404, detail="Contract not found.")
 
     doc_id = contract.document_id
-    doc_text = await _get_document_text(db, uuid.UUID(str(doc_id)))
+    doc_text = await _get_document_text(db, uuid.UUID(str(doc_id)), current_user)
     if not doc_text.strip():
         raise HTTPException(status_code=422, detail="Contract document has no extractable text.")
 
