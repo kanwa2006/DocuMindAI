@@ -416,21 +416,21 @@ async def get_document(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
-    """Fetch document metadata. Strict owner + workspace isolation."""
+    """Fetch document metadata. Strict owner isolation.
+
+    H5: no `workspace_id` predicate. The JWT claim is the constant "general"
+    for every user, so requiring it to equal the STORED workspace 404s every
+    document uploaded from the other six workspaces. `owner_id` is the tenant
+    key and is sufficient on its own.
+    """
     try:
         doc_uuid = uuid.UUID(document_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid Document ID format.")
 
-    effective_workspace = current_user.get("workspace_id", "general")
-    # L-5: single derivation path — resolve_workspace_id lowercases slugs;
-    # the old inline uuid5 did not, a latent casing divergence.
-    ws_uuid = resolve_workspace_id(effective_workspace)
-
     stmt = select(Document).where(
         Document.id == doc_uuid,
         Document.owner_id == uuid.UUID(current_user["id"]),
-        Document.workspace_id == ws_uuid
     )
     result = await db.execute(stmt)
     doc = result.scalar_one_or_none()
@@ -448,21 +448,19 @@ async def head_document(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Lightweight polling endpoint. Returns status in X-Document-Status header."""
+    """Lightweight polling endpoint. Returns status in X-Document-Status header.
+
+    H5: owner-only scoping — see `get_document`. This one also gated the
+    frontend's READY transition, which never fired outside `general`.
+    """
     try:
         doc_uuid = uuid.UUID(document_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid Document ID format.")
 
-    effective_workspace = current_user.get("workspace_id", "general")
-    # L-5: single derivation path — resolve_workspace_id lowercases slugs;
-    # the old inline uuid5 did not, a latent casing divergence.
-    ws_uuid = resolve_workspace_id(effective_workspace)
-
     stmt = select(Document).where(
         Document.id == doc_uuid,
         Document.owner_id == uuid.UUID(current_user["id"]),
-        Document.workspace_id == ws_uuid
     )
     result = await db.execute(stmt)
     doc = result.scalar_one_or_none()
@@ -491,21 +489,18 @@ async def get_signed_url(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    """Return a 15-minute HMAC-signed URL for direct document access."""
+    """Return a 15-minute HMAC-signed URL for direct document access.
+
+    H5: owner-only scoping — see `get_document`.
+    """
     try:
         doc_uuid = uuid.UUID(document_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid Document ID format.")
 
-    effective_workspace = current_user.get("workspace_id", "general")
-    # L-5: single derivation path — resolve_workspace_id lowercases slugs;
-    # the old inline uuid5 did not, a latent casing divergence.
-    ws_uuid = resolve_workspace_id(effective_workspace)
-
     stmt = select(Document).where(
         Document.id == doc_uuid,
         Document.owner_id == uuid.UUID(current_user["id"]),
-        Document.workspace_id == ws_uuid,
     )
     result = await db.execute(stmt)
     doc = result.scalar_one_or_none()
@@ -528,21 +523,19 @@ async def delete_document(
     Secure deletion: removes DB record, storage file, Qdrant vectors, Redis cache,
     and referenced eval benchmark rows. Returns granular status for each step.
     NEVER silently ignores vector deletion failures.
+
+    H5: owner-only scoping — see `get_document`. While the workspace predicate
+    was in place, documents uploaded outside `general` could never be deleted
+    by anyone.
     """
     try:
         doc_uuid = uuid.UUID(document_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid Document ID format.")
 
-    effective_workspace = current_user.get("workspace_id", "general")
-    # L-5: single derivation path — resolve_workspace_id lowercases slugs;
-    # the old inline uuid5 did not, a latent casing divergence.
-    ws_uuid = resolve_workspace_id(effective_workspace)
-
     stmt = select(Document).where(
         Document.id == doc_uuid,
         Document.owner_id == uuid.UUID(current_user["id"]),
-        Document.workspace_id == ws_uuid,
     )
     result = await db.execute(stmt)
     doc = result.scalar_one_or_none()
@@ -652,21 +645,18 @@ async def head_document_status(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Lightweight status poll. Returns X-Document-Status header with no body."""
+    """Lightweight status poll. Returns X-Document-Status header with no body.
+
+    H5: owner-only scoping — see `get_document`.
+    """
     try:
         doc_uuid = uuid.UUID(document_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid Document ID format.")
 
-    effective_workspace = current_user.get("workspace_id", "general")
-    # L-5: single derivation path — resolve_workspace_id lowercases slugs;
-    # the old inline uuid5 did not, a latent casing divergence.
-    ws_uuid = resolve_workspace_id(effective_workspace)
-
     stmt = select(Document).where(
         Document.id == doc_uuid,
         Document.owner_id == uuid.UUID(current_user["id"]),
-        Document.workspace_id == ws_uuid
     )
     result = await db.execute(stmt)
     doc = result.scalar_one_or_none()
