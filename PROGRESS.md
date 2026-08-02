@@ -901,10 +901,145 @@ not usable as per-workspace fixtures. Re-upload per workspace during certificati
 
 ---
 
+### 2026-08-02 — defect-register run, Tier 0 closed (`8fd0f22`, `a632b13`, `0df7df9`)
+
+Working `final_audit.md` (83 findings) in §7 tier order. **Tier 0 is closed and
+verified at runtime with two real accounts.** Suite **131 → 144 passed, 0 failed**;
+every guard was watched going RED on the reintroduced defect before being kept.
+
+**H1 + S3 + S4 — retrieval had no tenant key (`8fd0f22`).** `retrieve_chunks`
+filtered on `Document.workspace_id` only — a CATEGORY key, `uuid5` of the slug,
+byte-identical for every user. Zero `owner_id` predicates on any of the four
+branches, so any session-less query (`query.py:442` produces exactly that) swept
+every user's READY documents and returned their text verbatim with page citations.
+Fixed at the layer that owns the decision: `owner_id` is now a **required
+parameter with no default**, applied to all four branches. All four matter — RRF
+fuses the vector and lexical lists, so filtering one branch and not its sibling
+still leaks through fusion. Threaded to all 8 call sites; every one sources the id
+from the verified JWT, none from a request body. S3's empty-list collapse
+(`[] → None`, "no documents attached" becoming "no filter") is fixed at the choke
+point so all callers inherit it. S4's `validate_retrieval_scope` — docstring
+claiming "called before EVERY retrieval operation", zero call sites — deleted with
+the `admin.py` comment that claimed it was logging violations.
+
+**H5 — six workspaces could not read or delete their own documents (`a632b13`).**
+My own regression from `31c7119`: I fixed the write path without checking its
+readers. Five endpoints required `workspace_id == <JWT claim>`, and the claim is
+the constant `"general"` while uploads now store the real workspace. Proven
+against the real database on the same row: owner-only → **200 FOUND**, owner+ws →
+**404 NOT FOUND**. Over HTTP, GET/HEAD/HEAD-status/signed-url all returned 404
+before and 200 after.
+
+**H4 — nine chat routes scoped by category, not owner (`0df7df9`).** `GET /chats`
+listed every user's sessions, and `POST /chats/{id}/share` **minted a public link
+to another user's conversation**, then readable unauthenticated. Fixed to
+`owner_id`; the write path still records the category, which per-workspace listing
+legitimately needs.
+
+**Cross-tenant isolation proven with two real accounts** (A = `dev@test.com`,
+B = `tenantb@example.com`, registered this session). B against A's data:
+
+```
+GET  /chats?workspace_type=general   -> []      (A has one)
+GET  /documents?workspace_id=legal   -> []
+GET  /chats/{A_session}/messages     -> 404
+POST /chats/{A_session}/share        -> 404     (was: mints a public link)
+GET  /documents/{A_doc}              -> 404
+GET  /documents/{A_doc}/signed-url   -> 404
+DELETE /documents/{A_doc}            -> 404
+```
+
+And the decisive H1 case — B asked a question whose answer sits verbatim in A's
+document: `semantic_candidates_found: 0`, `lexical_candidates_found: 0`,
+`evidence: []`, and a correct refusal. Before the fix that query returned A's
+contract text with citations.
+
+**B-1 — generation is UNBLOCKED, and the audit's diagnosis was stale.** Measured
+every key against every configured model with the rotator bypassed:
+
+| Model | Result across all 21 keys |
+|---|---|
+| `gemini-2.5-flash` (primary) | **10/21 200 OK** · 10/21 429 · 1/21 404 |
+| `gemini-1.5-flash` (old fallback) | **21/21 404 NotFound** — retired by Google |
+| `gemini-2.0-flash` (new fallback) | 21/21 429 ResourceExhausted (daily, resets) |
+
+Three corrections to the previous record: the primary was **never** globally
+exhausted — quota had simply reset; the 21 keys do **not** share one quota pool
+(10 work while 10 are exhausted, so they are independent); and the actual thing
+stopping generation in this session was the **trial counter** (`queries_used
+10/10`), which halts the stream after retrieval and before the LLM is reached —
+not Gemini at all. `GEMINI_FALLBACK_MODEL` corrected to `gemini-2.0-flash` in
+`backend/.env` under this run's one-time owner authorization (that file remains
+gitignored and uncommitted; `CLAUDE.md`'s standing "never edit `.env`" rule is
+deliberately left unchanged for future contributors).
+
+**Real generation confirmed end-to-end — `DummyLLMProvider` was never served.**
+Full SSE contract fired (`trial_status`, `thinking_stage`, `status`, `metadata`,
+`token`, `trust_report`, `done`), with `Configured Gemini with key 3…10` in the
+logs and a correctly grounded refusal when the evidence was absent.
+
+**Verification-environment correction, important for anyone continuing this:** the
+app runs against **Supabase** (`DATABASE_URL` → `pooler.supabase.com`), *not* the
+local `db` container. The local Postgres holds unrelated stale rows. Verifying
+against `docker compose exec db psql` measures the wrong database — an early check
+in this session did exactly that and produced a misleading 404.
+
+---
+
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** see `git log -1` · working tree clean
-- **Backend suite:** 131 passed · `tsc --noEmit` clean · all services healthy
+- **Branch:** `security/redact-env-example` · **HEAD:** `0df7df9` · working tree clean
+- **Backend suite:** **144 passed / 0 failed** · all services healthy · real Gemini generation working
+
+### Defect-register run — state
+
+**Closed and struck in `final_audit.md`:** H1, S3, S4, H5, H4, B-1.
+**Next finding:** Tier 1 continues — **S13** (`TAVILY_API_KEY` missing from
+`Settings`; emit `status="skipped"` when unset and narrow the bare `except` to
+`ImportError`), then **F1** (`WorkspaceUI.tsx:1614`), then **P-3**
+(`await asyncio.sleep`). Then Tier 2 (S1, S2, P-1, P-2).
+
+**Do NOT re-derive these — established this session:**
+- The app's database is Supabase, not the local `db` container (see above).
+- Generation works; the trial counter, not Gemini, is what silently halts a stream.
+- `resolve_workspace_id("general")` = `33d76fbe-437c-5b72-989c-798243045681`;
+  `legal` = `f9b2129e-6303-51cf-8e44-d85ec21bb8ed`.
+- Test accounts: A `dev@test.com` / `devpass123` (owner `140159b2-…`),
+  B `tenantb@example.com` / `TenantB-pass-9876` (owner `a5225563-…`).
+- `/query/stream` needs BOTH the session cookie and an `X-CSRF-Token` header
+  fetched from `GET /api/v1/csrf-token`; login is form-encoded, not JSON.
+- Guards that assert on SQL must inspect `stmt.whereclause`, never the compiled
+  statement — `select(Model)` lists every column, so a whole-statement match
+  cannot tell a selected column from a predicate.
+
+### OWNER DECISIONS — parked, need your call
+
+1. **H3 — HR models have no `owner_id` at all. LIVE PII EXPOSURE, highest
+   confidence in the register.** `CandidateProfile`, `CandidateNote`, `Interview`
+   and `JobMatch` have no ownership column. `GET /hr/jobs` returns every user's
+   roles; `/candidates` and `/candidates/export/csv` accept any `job_id` and return
+   name, email, phone and skills; `PUT /matches/{id}/status` and
+   `PATCH /candidates/{id}/stage` **mutate other users' rows**. HR is the one
+   workspace certified end to end, which is what makes this the most likely to be
+   exercised. The fix needs an Alembic migration with a **real backfill** on
+   non-empty tables (derivable from `JobRole.owner_id` via `job_id`).
+   *The question:* backfill from `JobRole`, or quarantine unattributable rows?
+   *Recommendation:* backfill via `job_id` — it is derivable and lossless — but
+   this asserts ownership of existing rows, so it is yours to authorise.
+2. **S6 / S7 — the Trust Score is not a real measurement.** 65% of its weight is
+   hardcoded and the rerank scores feeding the rest are min-max renormalised, so
+   the top result always scores 1.0. Observed live this session: `final_score: 70,
+   level: MEDIUM`. *The question:* implement it properly, or reduce the report to
+   what is actually measured? Either is honest; the current state is not.
+   *Recommendation:* reduce it to what is measured now, implement later — shipping
+   a number the system does not compute is the worse failure.
+3. **B-2 — `legal_compliance_rules` ships empty**, so every clause returns
+   COMPLIANT/LOW. Defining a flagged clause is a product decision.
+4. **P0-3** (18.8 GB image — bake vs. download) and **P0-4** (credential rotation;
+   redaction does not un-leak git history).
+5. **S26** — ORM UPDATE/DELETE are unfiltered by design in `tenant_scope.py` and
+   the "Limits" docstring does not say so. Documenting the gap is mine; changing
+   the shape is yours.
 
 ### Certified this effort (runtime evidence, do NOT re-verify)
 P0-1 rotation · P0-5 connection budget · P0-7 all 9 worker modules · P0-8 placeholder text in

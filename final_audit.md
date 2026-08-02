@@ -282,23 +282,38 @@ should know the difference between "checked and clean" and "tool said clean".
 
 ## 5. Functional bugs — open
 
-### B-1 · Gemini generation unavailable — OWNER ACTION · one line
+### ~~B-1 · Gemini generation unavailable — OWNER ACTION · one line~~ — STRUCK
 
-Verified by testing **every key against every configured model**, bypassing the rotator:
+**The measurement below was a snapshot and has since been superseded.** Re-measured
+2026-08-02 with the same method (every key × every configured model, rotator bypassed):
 
-| Model | Result |
-|---|---|
-| `gemini-2.5-flash` (primary) | **0/21 keys — ResourceExhausted** → genuine daily quota |
-| `gemini-1.5-flash` (fallback) | **0/21 keys — NotFound** → **retired by Google** |
+| Model | Original reading | Re-measured 2026-08-02 |
+|---|---|---|
+| `gemini-2.5-flash` (primary) | 0/21 ResourceExhausted | **10/21 200 OK** · 10/21 429 · 1/21 404 |
+| `gemini-1.5-flash` (old fallback) | 0/21 NotFound | **21/21 404 NotFound** — confirmed retired |
+| `gemini-2.0-flash` (new fallback) | not tested | 21/21 429 ResourceExhausted (daily, resets) |
 
-**Root cause (fallback):** `GEMINI_FALLBACK_MODEL` in `backend/.env` names a model Google
-no longer serves, so the retry at `llm_service.py:357` raises `NotFound` **every time** —
-including for ordinary rate limits the fallback exists to absorb. The fallback chain has
-never been able to fire.
+**The retired-fallback root cause was correct and is fixed:** `GEMINI_FALLBACK_MODEL`
+named a model Google no longer serves, so the retry at `llm_service.py:357` raised
+`NotFound` every time, including for the ordinary rate limits the fallback exists to
+absorb. Set to `gemini-2.0-flash`.
 
-**Fix:** `backend/.env` → `GEMINI_FALLBACK_MODEL=gemini-2.0-flash`. That model generated
-successfully during this effort and is already `config.py`'s default. **No dependency
-impact** — it is a configuration value read at call time.
+**Two conclusions in the original entry were wrong**, and matter for anyone reasoning
+about this subsystem later:
+
+1. The primary was **never** globally exhausted — that reading was one day's free-tier
+   quota, which resets. Generation was available the whole time.
+2. The 21 keys do **not** share a single quota pool. Ten succeed while ten are
+   exhausted, which is only possible if their quotas are independent.
+
+**And the actual blocker was elsewhere:** the per-user **trial counter**
+(`trial_queries_used >= 10`) halts `/query/stream` after retrieval and before the LLM is
+reached, emitting `queries_remaining: 0` and no `token` events. That is indistinguishable
+from an LLM failure when read from the client, and it is what was stopping generation in
+practice. Not a defect — but it is why "generation is blocked" was attributed to Gemini.
+
+Real generation confirmed end to end after the fix: full SSE contract, `Configured Gemini
+with key 3…10` in the logs, correct grounded refusal. `DummyLLMProvider` never served.
 
 **Rotation itself is correct**: dynamic `GEMINI_API_KEY_N` discovery (unlimited, no code
 change to add keys), 403 → permanent skip, 429 → cooldown **with expiry**, sweeps every
@@ -471,7 +486,7 @@ shared retrieval path has no tenant filter at all.
 
 ---
 
-## H1 · Retrieval service has no owner filter — CRITICAL
+## ~~H1 · Retrieval service has no owner filter — CRITICAL~~ — STRUCK
 
 **File:** `backend/app/services/retrieval_service.py:53-119` (all four query branches)
 
@@ -496,7 +511,7 @@ shared retrieval path has no tenant filter at all.
 
 ---
 
-## H5 · Six workspaces cannot read or delete their own documents — REGRESSION I INTRODUCED
+## ~~H5 · Six workspaces cannot read or delete their own documents — REGRESSION I INTRODUCED~~ — STRUCK
 
 **File:** `backend/app/api/v1/endpoints/documents.py:425, 457, 500, 537, 661`
 
@@ -547,7 +562,7 @@ shared retrieval path has no tenant filter at all.
 
 ---
 
-## H4 · Nine chat routes scoped by category, not owner — HIGH
+## ~~H4 · Nine chat routes scoped by category, not owner — HIGH~~ — STRUCK
 
 **File:** `backend/app/api/v1/endpoints/chats.py`
 
@@ -943,7 +958,7 @@ me against source before recording.** This section independently corroborates §
 
 ---
 
-## S3 · Deep Research scans the entire database — HIGH
+## ~~S3 · Deep Research scans the entire database — HIGH~~ — STRUCK
 
 **File:** `backend/app/services/deep_research_agent.py:89`
 
@@ -958,7 +973,7 @@ me against source before recording.** This section independently corroborates §
 
 ---
 
-## S4 · `validate_retrieval_scope` has zero callers — HIGH
+## ~~S4 · `validate_retrieval_scope` has zero callers — HIGH~~ — STRUCK
 
 **File:** `backend/app/services/tenant_guard.py:45`
 
