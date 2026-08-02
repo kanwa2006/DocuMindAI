@@ -106,6 +106,13 @@ class Settings(BaseSettings):
     GEMINI_CONTINUATION_ROUNDS: int = 2
     TOP_K_RESULTS: int = 20
 
+    # Deep Research web augmentation (Tavily). Optional: when unset, the web
+    # search step reports itself SKIPPED rather than pretending to have run.
+    # S13 — this field did not exist, so `settings.TAVILY_API_KEY` raised
+    # AttributeError into an over-broad `except Exception`, and the feature was
+    # silently document-only from the day it shipped.
+    TAVILY_API_KEY: Optional[str] = None
+
     # Vector Backend
     # H-1: pgvector is the default — the "faiss" option never used FAISS (it
     # is an in-memory NumPy scan, dev-only fallback; O(N) per query).

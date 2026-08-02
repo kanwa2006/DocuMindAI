@@ -51,14 +51,38 @@ class DeepResearchAgent:
         self._tavily_client: Optional[Any] = None
 
     def _get_tavily(self) -> Any:
-        if self._tavily_client is None:
-            try:
-                from tavily import TavilyClient
-                from app.core.config import settings
-                self._tavily_client = TavilyClient(api_key=settings.TAVILY_API_KEY)
-            except Exception as exc:
-                logger.warning("Tavily unavailable: %s", exc)
-                return None
+        """Return a Tavily client, or None with a LOUD reason.
+
+        S13: this used to be `except Exception`, which caught the
+        `AttributeError` raised because `settings.TAVILY_API_KEY` did not
+        exist. A missing config field, an uninstalled package and a genuine
+        client error were all indistinguishable, and all of them returned
+        None forever. Each case is now reported separately, and the caller
+        distinguishes "not configured" from "failed".
+        """
+        if self._tavily_client is not None:
+            return self._tavily_client
+
+        from app.core.config import settings
+
+        if not settings.TAVILY_API_KEY:
+            logger.error(
+                "[DeepResearch] TAVILY_API_KEY is not set — web augmentation is "
+                "unavailable and will be reported as SKIPPED, not as a search "
+                "that found nothing."
+            )
+            return None
+
+        try:
+            from tavily import TavilyClient
+        except ImportError as exc:
+            logger.error(
+                "[DeepResearch] tavily package is not installed (%s) — web "
+                "augmentation unavailable.", exc
+            )
+            return None
+
+        self._tavily_client = TavilyClient(api_key=settings.TAVILY_API_KEY)
         return self._tavily_client
 
     async def research(
@@ -176,10 +200,22 @@ class DeepResearchAgent:
 
         # Step 3: Web search for gaps
         web_results: List[Dict[str, Any]] = []
+        web_search_ran = False
         if gaps:
             yield ResearchEvent(step=3, status="running", message="Searching current sources...")
             tavily = self._get_tavily()
-            if tavily:
+            if tavily is None:
+                # S13: previously fell through to status="done", "Found 0
+                # current source(s)" — a step that never ran reporting success,
+                # and a synthesis prompt then told the LLM "No web sources
+                # found", inviting it to describe an absence as a finding.
+                yield ResearchEvent(
+                    step=3, status="skipped",
+                    message="Web search is not configured — answering from your "
+                            "documents only.",
+                )
+            else:
+                web_search_ran = True
                 for search_query in gaps:
                     try:
                         results = tavily.search(
@@ -196,10 +232,10 @@ class DeepResearchAgent:
                         web_results.extend(results.get("results", []))
                     except Exception as exc:
                         logger.warning("Tavily search failed for '%s': %s", search_query, exc)
-            yield ResearchEvent(
-                step=3, status="done",
-                message=f"Found {len(web_results)} current source(s)"
-            )
+                yield ResearchEvent(
+                    step=3, status="done",
+                    message=f"Found {len(web_results)} current source(s)"
+                )
 
         # Step 4: Synthesise
         yield ResearchEvent(step=4, status="running", message="Synthesizing findings...")
@@ -210,7 +246,13 @@ class DeepResearchAgent:
         synthesis_prompt = (
             f"User question: {query}\n\n"
             f"FROM UPLOADED DOCUMENTS (Trust Score: {doc_trust.final_score}/100):\n{doc_answer}\n\n"
-            f"FROM CURRENT WEB SOURCES:\n{web_text or 'No web sources found.'}\n\n"
+            # S13: "No web sources found" asserted that a search had run and
+            # returned nothing. When web search is not configured no search
+            # runs at all, and telling the model otherwise invites it to
+            # present an absence as a finding. Structure unchanged; only the
+            # placeholder is made truthful.
+            f"FROM CURRENT WEB SOURCES:\n"
+            f"{web_text or ('No web sources found.' if web_search_ran else 'Web search was not performed.')}\n\n"
             "Create a structured synthesis:\n"
             "1. ANSWER FROM YOUR DOCUMENTS (with page citations)\n"
             "2. CURRENT CONTEXT (what web sources add, with URLs)\n"
