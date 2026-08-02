@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from typing import List, Dict, Any, Optional
@@ -86,7 +87,14 @@ class GroundingService:
                 
         # 3. Reranking Orchestration
         rerank_start = time.time()
-        reranked_candidates = reranker_service.rerank_results(query, unique_candidates)
+        # S2: the cross-encoder scores up to 30 query/passage pairs at 512
+        # tokens each. That is the dominant CPU cost of a query and it ran
+        # synchronously on the event loop, freezing every other request for
+        # its duration. Offloaded via the same pattern as the query embedding.
+        loop = asyncio.get_running_loop()
+        reranked_candidates = await loop.run_in_executor(
+            None, reranker_service.rerank_results, query, unique_candidates
+        )
         rerank_duration = time.time() - rerank_start
         
         # 4. Low-Confidence Filtering & Top-N Selection

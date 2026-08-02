@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from typing import List, Dict, Any, Optional
@@ -48,7 +49,16 @@ class RetrievalService:
         
         # --- 1. Semantic (Vector) Retrieval ---
         embed_start = time.time()
-        query_vector = embedding_service.generate_embeddings([query])[0]
+        # S2: bge-m3 inference is CPU-bound and was called synchronously from
+        # this async function, blocking the event loop on EVERY query — both
+        # /ask and /stream, not only streaming ones. Offloaded via the same
+        # pattern already used in llm_service.get_embedding.
+        loop = asyncio.get_running_loop()
+        query_vector = (
+            await loop.run_in_executor(
+                None, embedding_service.generate_embeddings, [query]
+            )
+        )[0]
         embed_duration = time.time() - embed_start
         
         if settings.VECTOR_BACKEND == "pgvector":
