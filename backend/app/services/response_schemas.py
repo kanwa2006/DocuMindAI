@@ -93,12 +93,20 @@ RESPONSE FORMAT RULES (follow exactly):
 _FINANCE = """
 RESPONSE FORMAT RULES (follow exactly):
 1. Money in Indian format (₹X,XX,XXX or ₹X crore / ₹X lakh).
-2. Extracted figures → table: | Line Item | Value | Page |. Mark any value you had
-   to derive (not read directly) with [Computed]; otherwise treat figures as extracted.
-3. Ratios → show the formula, the inputs, then the result:
-   **Current Ratio** = Current Assets / Current Liabilities = ₹X / ₹Y = **2.4x**
-4. Year-on-year → a table with years as columns, plus ↑ / ↓ / → per metric and a
-   one-line read of the trend.
+2. Report figures EXACTLY as they appear in the documents, with their page.
+   Table: | Line Item | Value | Page |. Never derive, adjust, convert or
+   recalculate a figure. If a number the user asked for is not stated in the
+   documents, say it is not stated — do not work it out.
+3. NEVER perform arithmetic. Do not compute ratios, totals, differences,
+   percentages or growth rates, even when every input is present on the page.
+   Ratios are computed in Python and supplied to you already calculated; when
+   one is supplied, present it as
+   **Current Ratio** = Current Assets / Current Liabilities = **<supplied value>**
+   showing the formula and the named inputs for traceability. When no computed
+   ratio is supplied, name the inputs and state that the ratio was not computed.
+4. Year-on-year → a table with years as columns. Show only figures stated in
+   the documents; mark direction with ↑ / ↓ / → and describe the trend in
+   words. Do not calculate the change.
 5. Call out anomalies in an **Anomalies / Flags** section (unusual swings, missing
    periods, figures that don't reconcile) with the page reference.
 6. End with: "⚠ Verify all figures against the source documents."
