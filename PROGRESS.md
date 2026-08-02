@@ -1049,16 +1049,27 @@ heartbeats for S1, **1** heartbeat for each S2 site.
 
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `24d55c0` · working tree clean
-- **Backend suite:** **183 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
+- **Branch:** `security/redact-env-example` · **HEAD:** `2408c9f` · working tree clean
+- **Backend suite:** **206 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
   `npm run build` succeeds · all services healthy · real Gemini generation working
 
 ### Defect-register run — state
 
-**Closed and struck in `final_audit.md` (16):** H1, S3, S4, H5, H4, B-1 (Tier 0) ·
-S13, F1, P-3 (Tier 1) · S1, S2, P-1, P-2 (Tier 2) · H8, H11, H9 + the JobRole half
-of H3. **Tier 0, 1 and 2 are complete.**
+**EVERY HIGH FINDING IS NOW CLOSED.** H1, H2, H4, H5, H6, H7, H8, H9, H10, H11 —
+struck and verified at runtime. H3 is partially closed (`JobRole`) with the rest
+parked as an owner decision because those models have no ownership column.
+
+**Closed and struck (23):** H1, S3, S4, H5, H4, B-1 (Tier 0) · S13, F1, P-3
+(Tier 1) · S1, S2, P-1, P-2 (Tier 2) · H8, H11, H9, H3-partial · H6, H7, H10 · H2.
 **Every one carries a guard that was watched going RED on the reintroduced defect.**
+
+**H2 was the most severe of them and is worth remembering as a shape:** the
+client-supplied `object_key` was stored verbatim and reached
+`Path(...).unlink()` — an **arbitrary file delete**, plus an arbitrary file READ
+into the RAG corpus (upload a path, then ask a question about the file and get
+a cited answer). Fixed at `core/storage.validate_object_key`, enforced at the
+write path *and* both sinks, because rows written earlier still carry
+unvalidated values.
 
 ### The tenancy class is now bounded, not enumerated — read this before trusting any endpoint
 
@@ -1084,9 +1095,21 @@ and are **owner decisions**.
 **Next finding: Tier 3** — **S12** (`aioredis` → `redis.asyncio`, six sites; log
 at ERROR when the client cannot be constructed), then **S10** (remove ratio
 arithmetic from the Finance schema — extract-then-compute). **S6/S7 are PARKED**
-as owner decisions (below). Then the remaining HIGH findings (H2, H6, H7, H8,
-H9, H10, H11), the silent-failure table, S5/S8/S9/S11/S14–S32, F2–F9, and
-per-workspace certification.
+as owner decisions (below). Then the **silent-failure table**
+(`study.py:235` fabricated quiz answers, `legal.py:390` "Low" on a parse
+failure, `finance.py:505`, `research.py:228` fabricated bibliography,
+`legal.py:85` audit-trail swallow, `query.py:328`, `auth.py:263` +
+`feedback.py:41` fail-open limits, `hr.py:462`), then S5/S8/S9/S11/S14–S32,
+F2–F9, and per-workspace certification.
+
+**Reusable infrastructure this run added — use it, don't re-derive it:**
+- `core/document_access.py` — `get_owned_document()` and
+  `get_owned_document_text()`. One definition of "may this caller read this
+  document". Route any new document-by-id access through it.
+- `core/storage.validate_object_key()` — one definition of "is this a legal
+  storage location". Call it before any path reaches the filesystem.
+- `tests/test_owned_model_reads_are_owner_scoped.py` — the class ratchet.
+  Its `KNOWN_OWNERLESS_MODELS` allowlist may only shrink.
 
 **Consolidations the audit calls for — do these as ONE fix, not N:**
 H9 → one shared `get_owned_document()`; H7 → `legal.py:54` and `finance.py:300`

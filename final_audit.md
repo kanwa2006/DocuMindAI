@@ -587,12 +587,12 @@ shared retrieval path has no tenant filter at all.
 
 | ID | File | Bug | Blast radius |
 |---|---|---|---|
-| H2 | `documents.py:194`, `core/storage.py:64` | `verify_upload` stores client-supplied `object_key` verbatim. Sinks: `Path(...).stat()` file oracle, absolute-path read into the RAG corpus, and `delete_document` calling `Path(...).unlink()` = **arbitrary file delete** | `documents.py` + `core/storage.py`; no frontend change |
-| H6 | `finance.py:482` | Comment reads `# Verify document ownership`; **there is no ownership predicate**. `/compare` does no lookup at all | self-contained |
-| H7 | `legal.py:54-61` | `_get_document_text` selects chunks by `document_id` alone; `/contracts/compare` feeds it caller-supplied ids | `legal.py` + mirror in `finance.py:300` — make it one shared helper |
+| ~~H2~~ **STRUCK** | `documents.py:194`, `core/storage.py:64` | `verify_upload` stores client-supplied `object_key` verbatim. Sinks: `Path(...).stat()` file oracle, absolute-path read into the RAG corpus, and `delete_document` calling `Path(...).unlink()` = **arbitrary file delete** | `documents.py` + `core/storage.py`; no frontend change |
+| ~~H6~~ **STRUCK** | `finance.py:482` | Comment reads `# Verify document ownership`; **there is no ownership predicate**. `/compare` does no lookup at all | self-contained |
+| ~~H7~~ **STRUCK** | `legal.py:54-61` | `_get_document_text` selects chunks by `document_id` alone; `/contracts/compare` feeds it caller-supplied ids | `legal.py` + mirror in `finance.py:300` — make it one shared helper |
 | ~~H8~~ **STRUCK** | `exams.py:757, 768, 823` | `list/get/update_exam` filter `workspace_id` only while two routes **in the same file** correctly use `owner_id`. `PUT /exams/{id}` overwrites another user's paper | self-contained — copy from the same file |
 | ~~H9~~ **STRUCK** | 7 sites in legal/finance/study/research/hr | `Document` lookups filter `id + workspace_id`, never `owner_id`; `/process` dispatches another user's `document_id` to Celery | 7 one-line edits + a shared `get_owned_document()` |
-| H10 | `query.py:294-300` | History load selects `ChatMessage` by `session_id` alone — while the query **seven lines below** correctly filters `Document.owner_id`. Another user's transcript enters the LLM prompt and is paraphrased back | self-contained; **H4 does not fix this** |
+| ~~H10~~ **STRUCK** | `query.py:294-300` | History load selects `ChatMessage` by `session_id` alone — while the query **seven lines below** correctly filters `Document.owner_id`. Another user's transcript enters the LLM prompt and is paraphrased back | self-contained; **H4 does not fix this** |
 | ~~H11~~ **STRUCK** | `export.py:124, 143` | `list_exports` / `get_export_job` filter `workspace_id` only; the *create* docstring claims strict isolation | self-contained |
 
 ---
