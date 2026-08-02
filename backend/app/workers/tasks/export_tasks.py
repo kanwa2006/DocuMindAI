@@ -22,6 +22,7 @@ given, exactly as it trusted it before.
 """
 import logging
 import uuid
+from collections import defaultdict
 
 from sqlalchemy.future import select
 
@@ -63,17 +64,28 @@ def _process_export(contract_id: str, job_id: str) -> None:
                 .all()
             )
 
-            clauses_data = []
-            for clause in clauses:
-                redlines = (
+            # P-1: this issued one SELECT per clause, so a 50-clause contract
+            # ran 51 queries instead of 2. Against Supabase's pooler every
+            # round trip carries network latency, so export cost scaled
+            # linearly with contract size. Fetch all redlines in one query and
+            # group in Python — same result, two queries regardless of size.
+            clause_ids = [c.id for c in clauses]
+            redlines_by_clause: dict = defaultdict(list)
+            if clause_ids:
+                for redline in (
                     db.execute(
                         select(RedlineSuggestion).where(
-                            RedlineSuggestion.clause_id == clause.id
+                            RedlineSuggestion.clause_id.in_(clause_ids)
                         )
                     )
                     .scalars()
                     .all()
-                )
+                ):
+                    redlines_by_clause[redline.clause_id].append(redline)
+
+            clauses_data = []
+            for clause in clauses:
+                redlines = redlines_by_clause[clause.id]
                 clauses_data.append(
                     {
                         "clause": {

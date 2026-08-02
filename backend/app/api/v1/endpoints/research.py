@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import List, Any, Optional
+from collections import defaultdict
 import uuid
 import asyncio
 import json
@@ -22,6 +23,79 @@ from app.workers.tasks.research_tasks import process_research_batch
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _load_owned_docs_with_text(
+    db: AsyncSession,
+    raw_ids: List[str],
+    owner_id: uuid.UUID,
+    *,
+    chunks_per_doc: int,
+    max_chars: int,
+) -> List[tuple]:
+    """Load the caller's documents and a text excerpt for each, in 2 queries.
+
+    P-2: the two callers each ran a per-document loop issuing one query for the
+    Document and another for its chunks — 2N round trips for N documents, on a
+    request-path endpoint. Selecting 10 documents for a comparison meant 20
+    sequential awaited round trips against Supabase's pooler before any work
+    started. This batches both into `.in_()` queries and groups in Python, so
+    the cost is 2 queries regardless of how many documents are requested.
+
+    It also closes a tenancy hole that both loops shared: they scoped documents
+    by `workspace_id`, which is `uuid5` of the workspace SLUG and therefore
+    identical for every user. Any authenticated user could pass another user's
+    document id and receive its text back inside a generated citation or gap
+    analysis. `owner_id` is the tenant key.
+
+    Returns `[(document, excerpt), ...]` for the ids that exist AND belong to
+    the caller, in the order requested. Unparseable and unowned ids are skipped
+    silently, exactly as the per-item loops did.
+    """
+    doc_ids: List[uuid.UUID] = []
+    for raw_id in raw_ids:
+        try:
+            doc_ids.append(uuid.UUID(raw_id))
+        except (ValueError, TypeError):
+            continue
+    if not doc_ids:
+        return []
+
+    docs = (await db.execute(
+        select(Document).where(
+            Document.id.in_(doc_ids),
+            Document.owner_id == owner_id,
+        )
+    )).scalars().all()
+    if not docs:
+        return []
+    by_id = {d.id: d for d in docs}
+
+    chunk_rows = (await db.execute(
+        select(DocumentChunk)
+        .where(DocumentChunk.document_id.in_(list(by_id)))
+        .order_by(DocumentChunk.document_id, DocumentChunk.chunk_index)
+    )).scalars().all()
+
+    chunks_by_doc: dict = defaultdict(list)
+    for chunk in chunk_rows:
+        bucket = chunks_by_doc[chunk.document_id]
+        # Per-document cap applied here rather than in SQL: a single LIMIT
+        # across the whole batch would starve later documents entirely.
+        if len(bucket) < chunks_per_doc:
+            bucket.append(chunk)
+
+    out: List[tuple] = []
+    for doc_id in doc_ids:  # preserve the caller's order
+        doc = by_id.get(doc_id)
+        if doc is None:
+            continue
+        excerpt = "\n\n".join(
+            c.text_content for c in chunks_by_doc[doc_id] if c.text_content
+        )[:max_chars]
+        out.append((doc, excerpt))
+    return out
+
 
 # ── Task 6-R1 / 6-X1: Citation schemas ───────────────────────────────────────
 
@@ -178,30 +252,12 @@ async def export_citations(
             detail=f"Unsupported format '{fmt}'. Choose from: {', '.join(sorted(CITATION_FORMATS))}",
         )
 
-    workspace_id = resolve_workspace_id(current_user["workspace_id"])
     citations: List[str] = []
 
-    for raw_id in body.doc_ids:
-        try:
-            doc_id = uuid.UUID(raw_id)
-        except ValueError:
-            continue
-
-        doc = (await db.execute(
-            select(Document).where(Document.id == doc_id, Document.workspace_id == workspace_id)
-        )).scalar_one_or_none()
-        if not doc:
-            continue
-
-        # Pull a sample of text chunks for context
-        chunk_result = await db.execute(
-            select(DocumentChunk)
-            .where(DocumentChunk.document_id == doc_id)
-            .limit(6)
-        )
-        chunks = chunk_result.scalars().all()
-        context = "\n\n".join(c.text_content for c in chunks if c.text_content)[:3000]
-
+    for doc, context in await _load_owned_docs_with_text(
+        db, body.doc_ids, uuid.UUID(current_user["id"]),
+        chunks_per_doc=6, max_chars=3000,
+    ):
         system_prompt = (
             "You are a bibliographic metadata extractor. "
             "Given document text, extract the citation metadata as a single JSON object. "
@@ -244,28 +300,11 @@ async def find_research_gaps(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    workspace_id = resolve_workspace_id(current_user["workspace_id"])
-
     all_context_parts: List[str] = []
-    for raw_id in body.doc_ids:
-        try:
-            doc_id = uuid.UUID(raw_id)
-        except ValueError:
-            continue
-
-        doc = (await db.execute(
-            select(Document).where(Document.id == doc_id, Document.workspace_id == workspace_id)
-        )).scalar_one_or_none()
-        if not doc:
-            continue
-
-        chunk_result = await db.execute(
-            select(DocumentChunk)
-            .where(DocumentChunk.document_id == doc_id)
-            .limit(8)
-        )
-        chunks = chunk_result.scalars().all()
-        text = "\n\n".join(c.text_content for c in chunks if c.text_content)[:2000]
+    for doc, text in await _load_owned_docs_with_text(
+        db, body.doc_ids, uuid.UUID(current_user["id"]),
+        chunks_per_doc=8, max_chars=2000,
+    ):
         if text:
             all_context_parts.append(f"[{doc.filename}]\n{text}")
 
