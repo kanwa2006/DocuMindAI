@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
+from app.core.document_access import get_owned_document
 from app.core.workspace import resolve_workspace_id
 from app.models.research import ResearchProject, ResearchPaper, ResearchFinding, ContradictionReport
 from app.models.document import Document
@@ -376,9 +377,10 @@ async def process_research_document(
     Offloads heavy paper validation and extraction to Celery workers.
     """
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    doc = (await db.execute(select(Document).where(Document.id == document_id, Document.workspace_id == workspace_id))).scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
+    # H9: owner-scoped via the single shared helper. This used to filter on
+    # workspace_id, a category key identical for every user, then dispatch the
+    # id to Celery — so another user's document could be processed as yours.
+    doc = await get_owned_document(db, document_id, current_user)
 
     # Dispatch to Celery
     process_research_batch.delay(str(document_id), str(workspace_id), str(project_id))

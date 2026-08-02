@@ -754,8 +754,15 @@ async def list_exams(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    stmt = select(ExamPaper).where(ExamPaper.workspace_id == workspace_id).order_by(ExamPaper.updated_at.desc())
+    # H8: `owner_id` is the tenant key. Without it this listed every user's
+    # exam papers, because `workspace_id` is uuid5 of the slug and identical
+    # for everyone. Two routes in this same file already did it correctly.
+    stmt = (
+        select(ExamPaper)
+        .where(ExamPaper.owner_id == uuid.UUID(current_user["id"]))
+        .where(ExamPaper.workspace_id == resolve_workspace_id(current_user["workspace_id"]))
+        .order_by(ExamPaper.updated_at.desc())
+    )
     result = await db.execute(stmt)
     return result.scalars().all()
 
@@ -765,8 +772,12 @@ async def get_exam(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    stmt = select(ExamPaper).where(ExamPaper.id == exam_id, ExamPaper.workspace_id == workspace_id)
+    # H8: owner-scoped — see list_exams.
+    stmt = select(ExamPaper).where(
+        ExamPaper.id == exam_id,
+        ExamPaper.owner_id == uuid.UUID(current_user["id"]),
+        ExamPaper.workspace_id == resolve_workspace_id(current_user["workspace_id"]),
+    )
     result = await db.execute(stmt)
     exam = result.scalar_one_or_none()
     if not exam:
@@ -820,8 +831,14 @@ async def update_exam(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    stmt = select(ExamPaper).where(ExamPaper.id == exam_id, ExamPaper.workspace_id == workspace_id)
+    # H8: this route WRITES. Without the owner predicate `PUT /exams/{id}`
+    # overwrote another user's exam paper — a cross-tenant mutation, not just
+    # a disclosure.
+    stmt = select(ExamPaper).where(
+        ExamPaper.id == exam_id,
+        ExamPaper.owner_id == uuid.UUID(current_user["id"]),
+        ExamPaper.workspace_id == resolve_workspace_id(current_user["workspace_id"]),
+    )
     result = await db.execute(stmt)
     exam = result.scalar_one_or_none()
 

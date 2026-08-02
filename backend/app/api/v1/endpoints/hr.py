@@ -13,6 +13,7 @@ import logging
 
 from app.db.session import get_db
 from app.core.auth import get_current_user
+from app.core.document_access import get_owned_document
 from app.core.workspace import resolve_workspace_id
 from app.models.hr import JobRole, CandidateProfile, JobMatch, CandidateNote
 from app.models.document import Document
@@ -60,7 +61,15 @@ async def list_jobs(
     db: AsyncSession = Depends(get_db)
 ):
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
-    stmt = select(JobRole).where(JobRole.workspace_id == workspace_id).order_by(JobRole.created_at.desc())
+    # H3 (partial): JobRole is the one HR model that already HAS owner_id.
+    # Without it this listed every user's job roles. The sibling HR models
+    # have no owner column at all and remain open — see PROGRESS.md.
+    stmt = (
+        select(JobRole)
+        .where(JobRole.owner_id == uuid.UUID(current_user["id"]))
+        .where(JobRole.workspace_id == workspace_id)
+        .order_by(JobRole.created_at.desc())
+    )
     result = await db.execute(stmt)
     return result.scalars().all()
 
@@ -78,13 +87,18 @@ async def process_candidate(
     """
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
     
-    job_stmt = select(JobRole).where(JobRole.id == job_id, JobRole.workspace_id == workspace_id)
+    job_stmt = select(JobRole).where(
+        JobRole.id == job_id,
+        JobRole.owner_id == uuid.UUID(current_user["id"]),  # H3 (partial)
+        JobRole.workspace_id == workspace_id,
+    )
     if not (await db.execute(job_stmt)).scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Job not found")
         
-    doc_stmt = select(Document).where(Document.id == document_id, Document.workspace_id == workspace_id)
-    if not (await db.execute(doc_stmt)).scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Document not found")
+    # H9: owner-scoped via the single shared helper. This used to filter on
+    # workspace_id, a category key identical for every user, then dispatch the
+    # id to Celery — so another user's resume could be processed as yours.
+    await get_owned_document(db, document_id, current_user)
 
     # Dispatch to Celery Main Queue
     process_resume_batch.delay(str(job_id), str(document_id), str(workspace_id))
@@ -416,7 +430,9 @@ async def score_candidate(
     workspace_id = resolve_workspace_id(current_user["workspace_id"])
 
     job_stmt = select(JobRole).where(
-        JobRole.id == job_id, JobRole.workspace_id == workspace_id
+        JobRole.id == job_id,
+        JobRole.owner_id == uuid.UUID(current_user["id"]),  # H3 (partial)
+        JobRole.workspace_id == workspace_id,
     )
     job = (await db.execute(job_stmt)).scalar_one_or_none()
     if not job:

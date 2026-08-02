@@ -120,9 +120,16 @@ async def list_exports(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
-    """Fetch all export jobs for the current tenant's workspace."""
+    """Fetch the caller's export jobs in the current workspace.
+
+    H11: this filtered on `workspace_id` alone, which is uuid5 of the workspace
+    slug and therefore identical for every user — so it listed every user's
+    export jobs. `owner_id` exists on the model and is NOT NULL; it was simply
+    not being read.
+    """
     stmt = select(ExportJob).where(
-        ExportJob.workspace_id == resolve_workspace_id(current_user["workspace_id"])
+        ExportJob.owner_id == uuid.UUID(current_user["id"]),
+        ExportJob.workspace_id == resolve_workspace_id(current_user["workspace_id"]),
     ).order_by(ExportJob.created_at.desc())
     
     result = await db.execute(stmt)
@@ -140,9 +147,13 @@ async def get_export_job(
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid Job ID format.")
 
+    # H11: owner-scoped — see list_exports. An export job's payload and
+    # file_path point at generated document content, so reaching another
+    # user's job leaks the artifact, not just its status.
     stmt = select(ExportJob).where(
         ExportJob.id == job_uuid,
-        ExportJob.workspace_id == resolve_workspace_id(current_user["workspace_id"])
+        ExportJob.owner_id == uuid.UUID(current_user["id"]),
+        ExportJob.workspace_id == resolve_workspace_id(current_user["workspace_id"]),
     )
     result = await db.execute(stmt)
     job = result.scalar_one_or_none()
