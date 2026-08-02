@@ -1047,12 +1047,53 @@ heartbeats for S1, **1** heartbeat for each S2 site.
 
 ---
 
+### 2026-08-03 — S10 + the silent-failure table (5 commits)
+
+**S10 (`c944a81`) — the Finance schema told the LLM to do the arithmetic.**
+`**Current Ratio** = Current Assets / Current Liabilities = ₹X / ₹Y = **2.4x**`
+instructed the model to evaluate the expression, on every finance chat query.
+Rule 2's "mark any value you had to derive with [Computed]" was the same defect
+in quieter form — a licence to derive. Both removed; formula and named inputs
+stay for traceability. **The 15 Python-computed ratios on the finance ENDPOINTS
+were always correct — that is why this survived: anyone checking "do we compute
+ratios in Python?" found the right answer and stopped, while the chat path
+quietly asked the model.**
+
+**The silent-failure table — four of eight entries closed:**
+
+| Entry | Was | Now |
+|---|---|---|
+| `study.py:235` (`4dbf283`) | `_stub_quiz` fabricated `correct_index: 0` + "The correct answer is Option A", PERSISTED, 200 — a student graded against invented answers | 502, nothing saved; `_stub_quiz` **deleted** |
+| `legal.py:390` (`764767f`) | parse failure → `"Low"` / score 0 / green ring | `"Unassessable"` / `null` / **escalates for human review** |
+| `research.py:228` (`493319f`) | filename formatted as a real APA entry — fabricated bibliography | reported in `failed[]`, zero citations emitted |
+| `finance.py:505` (`dfd62ae`) | `{}` → 15 ratios `None`, 200 — identical to "no financials in this doc" | 502 on failure; `extraction_status="no_financial_data"` names the honest empty case |
+
+**Every one verified against a REAL LLM outage, not a simulated one.** Gemini's
+daily quota went exhausted mid-session, which made every failure path the live
+path — a better fault injector than anything I could have mocked.
+
+**Two frontend readers had to change**, found by enumerating readers of values I
+changed: `scoreRingColor(null)` returned **green** (JS coerces `null <= 30` to
+true), so the backend fix alone would have moved the lie from the API into the
+UI; and `FinanceRatioPanel` had no reader for `no_financial_data`.
+
+**Recurring self-inflicted guard bug, now three times (P-1, S12, research):** a
+guard that greps source text for the defect it documents matches its own
+explanatory comment and fails on correct code. **Use AST matching from the
+start, never `in source`.**
+
+---
+
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `c1b10a8` · working tree clean
-- **Backend suite:** **211 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
-  `npm run build` succeeds · all services healthy · real Gemini generation working ·
+- **Branch:** `security/redact-env-example` · **HEAD:** `dfd62ae` · working tree clean
+- **Backend suite:** **237 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
+  `npm run build` succeeds · all services healthy ·
   **the retrieval cache works for the first time** (52.8s cold → 2.2s warm, verified)
+- **⚠ Gemini daily quota is EXHAUSTED** (all 21 keys, `All Gemini API keys exhausted
+  or on cooldown`). Resets on Google's daily schedule. Consumed by this run's own
+  verification streams. **Blocked until reset:** S10's behavioural check (does the
+  model now refuse to compute?), and any per-workspace generation certification.
 
 ### Defect-register run — state
 
@@ -1103,8 +1144,23 @@ companion test fails if any entry stops being a real violation.
 user sees every user's rows. Same shape as H3; both need a migration + backfill
 and are **owner decisions**.
 
-**Next finding: S10** (remove ratio arithmetic from the Finance schema —
-extract-then-compute; the invariant exists to protect exactly this workspace).
+**Next finding: the remaining FOUR silent-failure table entries**, in order:
+1. `legal.py:85` — `_log_audit` failure swallowed as a warning. This is the
+   **immutable compliance audit trail**; a legal audit log that silently drops
+   entries is worse than none, because it is relied on.
+2. `query.py:328` — history-load failure sets `attached_doc_ids = []`, which
+   silently WIDENS retrieval to unscoped mode instead of narrowing it.
+3. `auth.py:263` + `feedback.py:41` — `_get_redis()` returning None makes
+   registration IP limits, password-reset OTP storage and feedback limits fail
+   OPEN. **Partially addressed by S12** (the client is now real and logs at
+   ERROR), so re-verify before fixing: the remaining question is whether the
+   CALLERS should fail closed, which may be an owner decision for OTP.
+4. `hr.py:462` — embedding failure sets `similarity = 0.0`, producing a
+   real-looking blended score for a computation that never ran.
+
+Then: **S5, S8, S9, S11, S14–S32**, **F2–F9** and §11's MEDIUMs, **M1/M3/M4/M10/M11**,
+the §12 LOW list, and per-workspace certification (blocked on Gemini quota).
+
 **S6/S7 are PARKED**
 as owner decisions (below). Then the **silent-failure table**
 (`study.py:235` fabricated quiz answers, `legal.py:390` "Low" on a parse

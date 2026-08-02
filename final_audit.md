@@ -624,10 +624,10 @@ suspect until proven otherwise — the ratchet now does that automatically.
 
 | File | What it hides | Why it matters |
 |---|---|---|
-| `study.py:235` | Quiz parse failure produces `_stub_quiz()` with `correct_index: 0` and a fabricated explanation, **persisted and returned 200** | A student is graded against invented answers. `exams.py:419` models the honest behaviour — it refuses |
-| `legal.py:390` | LLM parse failure produces `overall_risk_level: "Low"`, 200 | A parse error renders as *this contract is low risk* |
-| `finance.py:505` | Parse failure produces `{}`; all 15 ratios `None`, returned as a normal result | Indistinguishable from *the document had no financials* |
-| `research.py:228` | Citation failure falls back to `title = filename`, **formatted as a real APA/IEEE citation** | Fabricated bibliography |
+| ~~`study.py:235`~~ **STRUCK** | Quiz parse failure produces `_stub_quiz()` with `correct_index: 0` and a fabricated explanation, **persisted and returned 200** | A student is graded against invented answers. `exams.py:419` models the honest behaviour — it refuses |
+| ~~`legal.py:390`~~ **STRUCK** | LLM parse failure produces `overall_risk_level: "Low"`, 200 | A parse error renders as *this contract is low risk* |
+| ~~`finance.py:505`~~ **STRUCK** | Parse failure produces `{}`; all 15 ratios `None`, returned as a normal result | Indistinguishable from *the document had no financials* |
+| ~~`research.py:228`~~ **STRUCK** | Citation failure falls back to `title = filename`, **formatted as a real APA/IEEE citation** | Fabricated bibliography |
 | `legal.py:85` | `_log_audit` failure becomes a warning | This is the **immutable compliance audit trail** |
 | `query.py:328` | History load failure sets `attached_doc_ids = []` | Silently widens retrieval to unscoped mode |
 | `auth.py:263`, `feedback.py:41` | `_get_redis` returns `None`; callers no-op | Registration IP limits, password-reset OTP storage and feedback limits **fail open, silently** |
@@ -1116,7 +1116,7 @@ me against source before recording.** This section independently corroborates §
 
 ---
 
-## S10 · The Finance schema tells the model to do the arithmetic — HIGH
+## ~~S10 · The Finance schema tells the model to do the arithmetic — HIGH~~ — STRUCK
 
 **File:** `backend/app/services/response_schemas.py:98`
 
