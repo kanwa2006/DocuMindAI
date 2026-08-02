@@ -1049,24 +1049,37 @@ heartbeats for S1, **1** heartbeat for each S2 site.
 
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `3daf888` · working tree clean
-- **Backend suite:** **158 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
+- **Branch:** `security/redact-env-example` · **HEAD:** `24d55c0` · working tree clean
+- **Backend suite:** **183 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
   `npm run build` succeeds · all services healthy · real Gemini generation working
 
 ### Defect-register run — state
 
-**Closed and struck in `final_audit.md` (13):** H1, S3, S4, H5, H4, B-1 (Tier 0) ·
-S13, F1, P-3 (Tier 1) · S1, S2, P-1, P-2 (Tier 2). **Tier 0, 1 and 2 are complete.**
+**Closed and struck in `final_audit.md` (16):** H1, S3, S4, H5, H4, B-1 (Tier 0) ·
+S13, F1, P-3 (Tier 1) · S1, S2, P-1, P-2 (Tier 2) · H8, H11, H9 + the JobRole half
+of H3. **Tier 0, 1 and 2 are complete.**
 **Every one carries a guard that was watched going RED on the reintroduced defect.**
 
-**A fourth tenancy hole was found and closed while fixing P-2** (not in the
-register): both `research.py` document loops scoped by `workspace_id` only, so
-any user could pass another user's document id to `/research/citations` or
-`/research/gaps` and get its text back inside the generated output. Now behind
-the same shared owner-scoped helper. Proven with two accounts — B gets
-`count: 0` and a 400 for A's document. **This is the H1/H4/H5 class at a fourth
-site; assume more exist and grep for `workspace_id ==` on any Document/owned
-model read before trusting an endpoint.**
+### The tenancy class is now bounded, not enumerated — read this before trusting any endpoint
+
+The register lists **four** instances of "filters `workspace_id`, ignores
+`owner_id`" (H4, H5, H8, H11) plus H9. A mechanical sweep found **twelve sites
+across seven files**, plus a fifth in `research.py` that no finding covered.
+**The register was enumerating examples of this class, not bounding it.**
+
+`tests/test_owned_model_reads_are_owner_scoped.py` now closes the class
+structurally: it walks every endpoint module and fails on any
+`<Model>.workspace_id ==` filter without an `owner_id` filter on the same model
+in the same function. `TenantScoped` models are exempt (the session hook injects
+the predicate). It is a **ratchet** on the `test_worker_session_discipline.py`
+model — `KNOWN_OWNERLESS_MODELS` may only shrink, is keyed by
+(module, function, model) rather than line number so it survives edits, and a
+companion test fails if any entry stops being a real violation.
+
+**Two NEW findings came out of that sweep — recorded as N1/N2 in the register:**
+`BenchmarkRun` and `Correction` have **no `owner_id` column at all**, so every
+user sees every user's rows. Same shape as H3; both need a migration + backfill
+and are **owner decisions**.
 
 **Next finding: Tier 3** — **S12** (`aioredis` → `redis.asyncio`, six sites; log
 at ERROR when the client cannot be constructed), then **S10** (remove ratio
@@ -1097,8 +1110,19 @@ renderer. Pairs that must land in a single commit: S5, S8, M1+M11, H2.
 
 ### OWNER DECISIONS — parked, need your call
 
+0. **N1 / N2 — two more models with no ownership column** (found 2026-08-03 by the
+   class sweep, not in the original audit). `BenchmarkRun` (`benchmark.py:56`) and
+   `Correction` (`corrections.py:167, 264`) have no `owner_id`, so every user sees
+   every user's rows; the corrections path also EXPORTS them to a file. Same
+   remedy as H3 — migration + backfill — and the same question: *backfill from
+   what, or quarantine?* Lower severity than H3 (metrics and correction records,
+   not resume PII), so my recommendation is to fold them into whatever migration
+   H3 gets rather than shipping three separate ones.
+
 1. **H3 — HR models have no `owner_id` at all. LIVE PII EXPOSURE, highest
-   confidence in the register.** `CandidateProfile`, `CandidateNote`, `Interview`
+   confidence in the register.** *(Partially closed 2026-08-03: `JobRole` already
+   had `owner_id` and its three read sites are now scoped. `JobMatch`,
+   `CandidateProfile` and `CandidateNote` remain open — they have no column.)* `CandidateProfile`, `CandidateNote`, `Interview`
    and `JobMatch` have no ownership column. `GET /hr/jobs` returns every user's
    roles; `/candidates` and `/candidates/export/csv` accept any `job_id` and return
    name, email, phone and skills; `PUT /matches/{id}/status` and

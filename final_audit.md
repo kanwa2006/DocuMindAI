@@ -590,10 +590,31 @@ shared retrieval path has no tenant filter at all.
 | H2 | `documents.py:194`, `core/storage.py:64` | `verify_upload` stores client-supplied `object_key` verbatim. Sinks: `Path(...).stat()` file oracle, absolute-path read into the RAG corpus, and `delete_document` calling `Path(...).unlink()` = **arbitrary file delete** | `documents.py` + `core/storage.py`; no frontend change |
 | H6 | `finance.py:482` | Comment reads `# Verify document ownership`; **there is no ownership predicate**. `/compare` does no lookup at all | self-contained |
 | H7 | `legal.py:54-61` | `_get_document_text` selects chunks by `document_id` alone; `/contracts/compare` feeds it caller-supplied ids | `legal.py` + mirror in `finance.py:300` — make it one shared helper |
-| H8 | `exams.py:757, 768, 823` | `list/get/update_exam` filter `workspace_id` only while two routes **in the same file** correctly use `owner_id`. `PUT /exams/{id}` overwrites another user's paper | self-contained — copy from the same file |
-| H9 | 7 sites in legal/finance/study/research/hr | `Document` lookups filter `id + workspace_id`, never `owner_id`; `/process` dispatches another user's `document_id` to Celery | 7 one-line edits + a shared `get_owned_document()` |
+| ~~H8~~ **STRUCK** | `exams.py:757, 768, 823` | `list/get/update_exam` filter `workspace_id` only while two routes **in the same file** correctly use `owner_id`. `PUT /exams/{id}` overwrites another user's paper | self-contained — copy from the same file |
+| ~~H9~~ **STRUCK** | 7 sites in legal/finance/study/research/hr | `Document` lookups filter `id + workspace_id`, never `owner_id`; `/process` dispatches another user's `document_id` to Celery | 7 one-line edits + a shared `get_owned_document()` |
 | H10 | `query.py:294-300` | History load selects `ChatMessage` by `session_id` alone — while the query **seven lines below** correctly filters `Document.owner_id`. Another user's transcript enters the LLM prompt and is paraphrased back | self-contained; **H4 does not fix this** |
-| H11 | `export.py:124, 143` | `list_exports` / `get_export_job` filter `workspace_id` only; the *create* docstring claims strict isolation | self-contained |
+| ~~H11~~ **STRUCK** | `export.py:124, 143` | `list_exports` / `get_export_job` filter `workspace_id` only; the *create* docstring claims strict isolation | self-contained |
+
+---
+
+## N1–N2 · Added 2026-08-03 — models with NO ownership column, found by sweep
+
+Found by `tests/test_owned_model_reads_are_owner_scoped.py`, not by the original
+read. Both are the same shape as H3: the model has **no `owner_id` at all**, so no
+predicate can close them — each needs an Alembic migration with a backfill, which
+is an owner decision. Both are currently allowlisted in that test's ratchet.
+
+| ID | File | Bug | Blast radius |
+|---|---|---|---|
+| N1 | `benchmark.py:56` | `BenchmarkRun` has no `owner_id`. `list_benchmark_runs` filters `workspace_id` only, so every user sees every user's benchmark runs — including `results`, which embeds per-query metrics | model + migration + backfill; **owner-decision-required** |
+| N2 | `corrections.py:167, 264` | `Correction` has no `owner_id`. `list_corrections` and `export_corrections` filter `workspace_id` only. The export path writes them to a file | model + migration + backfill; **owner-decision-required** |
+
+**Why this section exists.** §9 lists four instances of the
+`workspace_id`-instead-of-`owner_id` class (H4, H5, H8, H11) and §12 adds H9. A
+mechanical sweep found **twelve** sites across seven files, plus a fifth in
+`research.py` that no finding covered. The register was enumerating examples of
+this class, not bounding it. Treat any future `<Model>.workspace_id ==` filter as
+suspect until proven otherwise — the ratchet now does that automatically.
 
 ---
 
