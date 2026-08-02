@@ -357,3 +357,204 @@ live provider testing against every key and model.
 
 Every finding above is either a code reference you can open, or a command output. Where I
 inferred rather than measured, I said so.
+
+---
+
+# 9. DEEP-READ FINDINGS — backend endpoints (all 24 modules read in full)
+
+A specialist agent read all 24 endpoint modules plus supporting core/service/model files.
+**Every claim below was re-verified by me against source before being recorded.**
+
+## 9.0 One root cause behind nine of eleven HIGH findings
+
+**`workspace_id` is used as a tenant discriminator on models the P0-9 fix never reached.**
+
+P0-9 chose the right layer — the session, via `TenantScoped` + `do_orm_execute` — but scoped
+coverage to a **model list** rather than a **rule**. 18 models inherit the mixin; everything
+else silently opts out, and nothing detects the omission because the hook only fires for
+models that already inherit it (`core/tenant_scope.py:155-165`).
+
+`Document` — the highest-value table in the system — sits outside that set. That is why the
+shared retrieval path has no tenant filter at all.
+
+---
+
+## H1 · Retrieval service has no owner filter — CRITICAL
+
+**File:** `backend/app/services/retrieval_service.py:53-119` (all four query branches)
+
+- **Bug:** the hybrid query joins `Document` and filters on `Document.workspace_id` and
+  optionally `document_ids`. There is **no `owner_id` predicate on any branch**.
+- **Verified:** `grep -c owner_id retrieval_service.py` returns **0**. Line 59 is
+  `.where(Document.workspace_id == workspace_id)`.
+- **Root cause:** tenant filtering was delegated to callers, but `workspace_id` is
+  `uuid5(DNS,"general")` — identical for every user. The layer that owns *which documents a
+  query may see* is the retrieval service, and it was never given the tenant key.
+- **Why it happens:** bites whenever `document_ids` is `None`. `query.py:442` sets
+  `doc_filter = attached_doc_ids if body.session_id else None`, so a session-less query
+  retrieves across **every user's** READY documents.
+- **What breaks:** any authenticated user can extract another user's document content,
+  verbatim with page citations, through the primary RAG answer path.
+- **Debug — blast radius: NOT self-contained.** Add a **required** `owner_id` parameter (fail
+  closed, not optional) and apply it to all four branches. Callers that must change:
+  `services/grounding_service.py`, `endpoints/query.py:172-178` and `:443-450`,
+  `endpoints/exams.py:221-227` and `:859-865`, `services/evaluation_service.py`,
+  `services/summary_service.py`.
+- **Severity: HIGH — fix first.** One function closes the leak for all seven workspaces.
+
+---
+
+## H5 · Six workspaces cannot read or delete their own documents — REGRESSION I INTRODUCED
+
+**File:** `backend/app/api/v1/endpoints/documents.py:425, 457, 500, 537, 661`
+
+- **Bug:** `get_document`, `head_document`, `get_signed_url`, `head_document_status` and
+  `delete_document` derive the workspace from the **JWT claim**
+  (`current_user.get("workspace_id","general")`) and then require
+  `Document.workspace_id == ws_uuid`.
+- **Verified:** 5 sites confirmed; predicate present at `:432` and `:545`.
+- **Root cause: my commit `31c7119`.** I fixed the *write* path so uploads store the real
+  workspace — without checking what *reads* it. Before that fix every document was `general`,
+  so the JWT claim always matched. It no longer does.
+- **Why it happens:** immediately, for anything uploaded from HR / Legal / Finance / Study /
+  Research / Exam. `User.workspace_id` is `"general"` for every user (`auth.py:394`), so the
+  claim and the stored value now disagree for six of seven workspaces.
+- **What breaks:** `GET /documents/{id}` 404s. `DELETE` 404s, so those documents **can never
+  be deleted**. `HEAD` polling 404s, so the frontend READY transition never fires.
+- **Why it escaped:** `list_documents` takes an **explicit** `workspace_id` query param and
+  still works. A list-based smoke test passes while every single-document operation fails.
+  My own certification checked the database directly, not these endpoints.
+- **Debug — blast radius: self-contained in `documents.py`.** Drop the `workspace_id`
+  predicate from all five; `owner_id` alone is correct and sufficient. No frontend or schema
+  change.
+- **Severity: HIGH — a live regression, not a pre-existing defect.**
+
+---
+
+## H3 · HR models have no ownership column at all — HIGH
+
+**File:** `backend/app/models/hr.py:21, 38, 48, 60`
+
+- **Bug:** `CandidateProfile`, `CandidateNote`, `Interview`, `JobMatch` have **no `owner_id`
+  column**. Only `JobRole` has one, and no query uses it.
+- **Verified:** confirmed by reading the model file.
+- **Root cause:** explicitly scoped out during P0-9. The exclusion was recorded; the exposure
+  it left was not.
+- **Why it happens:** every request. `GET /hr/jobs` returns every user's roles; `/candidates`
+  and `/candidates/export/csv` accept any `job_id` and return name, email, phone, skills.
+  `PUT /matches/{id}/status` and `PATCH /candidates/{id}/stage` **mutate** other users' rows.
+- **What breaks:** full cross-tenant disclosure of **resume PII**, plus cross-tenant write.
+  HR is the one workspace certified end-to-end, which makes this the highest-confidence
+  live exposure in the audit.
+- **Debug — blast radius: NOT self-contained; migration required.** Add `owner_id` +
+  `TenantScoped` to the four models and the existing hook covers all reads with zero endpoint
+  edits. Also needs an Alembic migration **with a real backfill** (tables are non-empty —
+  derive from `JobRole.owner_id` via `job_id`), the `workers/tasks/hr_tasks.py` write sites,
+  and `services/processing_events.py:88-106`.
+- **Severity: HIGH — do last; the backfill is an owner decision.**
+
+---
+
+## H4 · Nine chat routes scoped by category, not owner — HIGH
+
+**File:** `backend/app/api/v1/endpoints/chats.py`
+
+- **Bug:** nine routes resolve a `ChatSession` by `id + workspace_id` while
+  `ChatSession.owner_id` exists and is populated. Only `delete_chat_session` uses it.
+- **Verified:** **10** `ChatSession.workspace_id` filters vs **5** total `owner_id` uses.
+- **Root cause:** the convention P0-9 disproved. The `# belt-and-suspenders ownership check`
+  comment on the delete route shows `owner_id` was treated as redundant rather than as *the*
+  tenant key.
+- **Why it happens:** `GET /chats` lists every user's sessions. With an id from that list an
+  attacker can read the transcript, append messages, rename and retag it — and
+  `POST /chats/{id}/share` **mints a public link to another user's conversation**, then
+  readable unauthenticated at `GET /shared/{token}`.
+- **Debug — blast radius: self-contained in `chats.py`.** Replace the predicate with
+  `ChatSession.owner_id == current_user["id"]` in all nine. Schema and frontend contract
+  unchanged. **Cheapest high-value fix in the audit.**
+- **Severity: HIGH**
+
+---
+
+## Remaining HIGH findings
+
+| ID | File | Bug | Blast radius |
+|---|---|---|---|
+| H2 | `documents.py:194`, `core/storage.py:64` | `verify_upload` stores client-supplied `object_key` verbatim. Sinks: `Path(...).stat()` file oracle, absolute-path read into the RAG corpus, and `delete_document` calling `Path(...).unlink()` = **arbitrary file delete** | `documents.py` + `core/storage.py`; no frontend change |
+| H6 | `finance.py:482` | Comment reads `# Verify document ownership`; **there is no ownership predicate**. `/compare` does no lookup at all | self-contained |
+| H7 | `legal.py:54-61` | `_get_document_text` selects chunks by `document_id` alone; `/contracts/compare` feeds it caller-supplied ids | `legal.py` + mirror in `finance.py:300` — make it one shared helper |
+| H8 | `exams.py:757, 768, 823` | `list/get/update_exam` filter `workspace_id` only while two routes **in the same file** correctly use `owner_id`. `PUT /exams/{id}` overwrites another user's paper | self-contained — copy from the same file |
+| H9 | 7 sites in legal/finance/study/research/hr | `Document` lookups filter `id + workspace_id`, never `owner_id`; `/process` dispatches another user's `document_id` to Celery | 7 one-line edits + a shared `get_owned_document()` |
+| H10 | `query.py:294-300` | History load selects `ChatMessage` by `session_id` alone — while the query **seven lines below** correctly filters `Document.owner_id`. Another user's transcript enters the LLM prompt and is paraphrased back | self-contained; **H4 does not fix this** |
+| H11 | `export.py:124, 143` | `list_exports` / `get_export_job` filter `workspace_id` only; the *create* docstring claims strict isolation | self-contained |
+
+---
+
+## Silent failure — the ones hiding a real failure
+
+22 swallow sites judged individually. Most are legitimate. These are not:
+
+| File | What it hides | Why it matters |
+|---|---|---|
+| `study.py:235` | Quiz parse failure produces `_stub_quiz()` with `correct_index: 0` and a fabricated explanation, **persisted and returned 200** | A student is graded against invented answers. `exams.py:419` models the honest behaviour — it refuses |
+| `legal.py:390` | LLM parse failure produces `overall_risk_level: "Low"`, 200 | A parse error renders as *this contract is low risk* |
+| `finance.py:505` | Parse failure produces `{}`; all 15 ratios `None`, returned as a normal result | Indistinguishable from *the document had no financials* |
+| `research.py:228` | Citation failure falls back to `title = filename`, **formatted as a real APA/IEEE citation** | Fabricated bibliography |
+| `legal.py:85` | `_log_audit` failure becomes a warning | This is the **immutable compliance audit trail** |
+| `query.py:328` | History load failure sets `attached_doc_ids = []` | Silently widens retrieval to unscoped mode |
+| `auth.py:263`, `feedback.py:41` | `_get_redis` returns `None`; callers no-op | Registration IP limits, password-reset OTP storage and feedback limits **fail open, silently** |
+| `hr.py:462` | Embedding failure sets `similarity = 0.0` | Returns a real-looking blended score for a computation that never ran |
+
+---
+
+## Notable MEDIUM findings
+
+| ID | File | Bug |
+|---|---|---|
+| M1 | `auth.py:115` + `core/auth.py:40-45` | `POST /auth/refresh` **always** 401s. `verify_token` rebuilds its return dict from four hard-coded keys and drops `token_type`, so the check is `None != "refresh"`. The refresh path has never worked; users are silently logged out at the 60-minute expiry |
+| M4 | `query.py:512` | `getattr(request, "comparison_mode", False)` reads the Starlette `Request`, not `body`. **Always `False`** — comparison mode has never activated. `getattr` with a default turned a rename into permanent silence |
+| M11 | `auth.py:143-153` | Logout deletes only the `token` cookie; `refresh_token` (different `path`) survives. Currently masked by M1 — **fix both together or logout stops working** |
+| M3 | `auth.py:442, 826` | Email/phone OTP compared with `!=`, no attempt limit, no rate limit. 10^6 keyspace, 600s TTL, unlimited attempts |
+| M10 | `hr.py:453` | `SentenceTransformer(...)` constructed **inside the request handler** on every scoring call — blocking model load on the async path |
+| M14 | `billing.py:176-187` | Razorpay webhook has no idempotency key and does not verify the captured amount. A replayed body extends the subscription each time |
+
+---
+
+# 10. STRENGTHS — preserve these through any fix
+
+- **`core/tenant_scope.py`** — the right answer to the right question. Puts the decision in
+  the session rather than ~90 `WHERE` clauses, **fails closed**, covers eager loads, forces
+  `system_scope()` to be typed explicitly, and **documents its own limits** rather than
+  overselling. Its shortcoming is coverage, not design.
+- **`core/auth.py:57-72`** — the comment explaining why `ContextVar.set()` without a reset is
+  correct here is precise, non-obvious and load-bearing.
+- **`endpoints/retention.py`** — all 11 routes scope on `user_id` from the token. Zero
+  `workspace_id`. **This is what the rest of the codebase should look like.**
+- **`notifications.py`, `bookmarks.py`** — uniformly `user_id`-scoped on read, write, delete.
+- **`insights.py`** — joins `Document` and filters `Document.owner_id`, deriving tenancy from
+  the parent. The correct technique when a child table has no owner column.
+- **`documents.py` `delete_document`** — per-step status, **HTTP 207 on partial failure**,
+  `finally: await redis.close()`, an explicit audit line, and a comment stating vector-
+  deletion failures must never be silently ignored.
+- **`finance.py:97-258`** — extract-then-compute preserved rigorously: **Python computes all
+  15 ratios**, `_safe_div` guards zero denominators, and two ratios return explicit `error`
+  strings rather than a misleading number.
+- **`exams.py:173-236, 419-421`** — best-scoped retrieval helper in the codebase, a five-way
+  `doc_status_hint` giving a distinct actionable error per failure mode, and a refusal path
+  that **refuses honestly** rather than shipping placeholder questions.
+- **`auth.py:594-691`** — password reset: identical 202 regardless of account existence,
+  `secrets.compare_digest`, a separate cooldown key so the response cannot probe for
+  accounts, atomic consume-on-success, layered rate limits.
+- **`billing.py:146-166`** — HMAC verified with `compare_digest` **before any parsing**, and a
+  guard refusing the sandbox free-upgrade path when `ENVIRONMENT == "production"`.
+- **`study.py:256-262`** — `correct_index` stripped from the response while the full version
+  persists. Correct anti-cheat placement.
+- **`health.py:20-52`** — the `unquote()` comment explaining that the 10-second healthcheck
+  loop tripped Supavisor's circuit breaker after ~210 rejected logins. An incident note, not
+  a code comment.
+
+**The pattern worth naming — and this is the audit's most useful finding for planning:**
+in nearly every case the *correct* implementation already exists **in the same file** as the
+defective one. `exams.py` has both. `export.py` has both. `documents.py` has both. The
+knowledge is present; it was applied unevenly. That makes these fixes **low-risk**: you copy
+a proven line from three functions away rather than inventing an approach.
