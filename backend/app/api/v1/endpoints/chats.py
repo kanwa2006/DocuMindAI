@@ -84,7 +84,7 @@ async def list_chat_sessions(
     db: AsyncSession = Depends(get_db)
 ):
     stmt = select(ChatSession).where(
-        ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"]),
+        ChatSession.owner_id == uuid.UUID(current_user["id"]),
         ChatSession.workspace_type == workspace_type,
         ChatSession.is_archived == False
     )
@@ -115,7 +115,7 @@ async def toggle_pin_session(
 ):
     stmt = select(ChatSession).where(
         ChatSession.id == uuid.UUID(session_id),
-        ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"])
+        ChatSession.owner_id == uuid.UUID(current_user["id"])
     )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
@@ -136,7 +136,7 @@ async def rename_session(
 ):
     stmt = select(ChatSession).where(
         ChatSession.id == uuid.UUID(session_id),
-        ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"])
+        ChatSession.owner_id == uuid.UUID(current_user["id"])
     )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
@@ -156,7 +156,7 @@ async def update_chat_session(
 ):
     stmt = select(ChatSession).where(
         ChatSession.id == uuid.UUID(session_id),
-        ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"])
+        ChatSession.owner_id == uuid.UUID(current_user["id"])
     )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
@@ -189,8 +189,7 @@ async def delete_chat_session(
     owner_id = uuid.UUID(current_user["id"])
     stmt = select(ChatSession).where(
         ChatSession.id == session_uuid,
-        ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"]),
-        ChatSession.owner_id == owner_id,  # belt-and-suspenders ownership check
+        ChatSession.owner_id == owner_id,
     )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
@@ -246,7 +245,7 @@ async def get_chat_messages(
     # Verify ownership
     stmt = select(ChatSession).where(
         ChatSession.id == uuid.UUID(session_id),
-        ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"])
+        ChatSession.owner_id == uuid.UUID(current_user["id"])
     )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
@@ -271,7 +270,7 @@ async def create_chat_message(
     # Verify ownership
     stmt = select(ChatSession).where(
         ChatSession.id == uuid.UUID(session_id),
-        ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"])
+        ChatSession.owner_id == uuid.UUID(current_user["id"])
     )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
@@ -301,7 +300,7 @@ async def update_session_tags(
     result = await db.execute(
         select(ChatSession).where(
             ChatSession.id == uuid.UUID(session_id),
-            ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"]),
+            ChatSession.owner_id == uuid.UUID(current_user["id"]),
         )
     )
     session = result.scalar_one_or_none()
@@ -352,7 +351,7 @@ async def share_session(
     result = await db.execute(
         select(ChatSession).where(
             ChatSession.id == uuid.UUID(session_id),
-            ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"]),
+            ChatSession.owner_id == uuid.UUID(current_user["id"]),
         )
     )
     session = result.scalar_one_or_none()
@@ -389,7 +388,7 @@ async def unshare_session(
     result = await db.execute(
         select(ChatSession).where(
             ChatSession.id == uuid.UUID(session_id),
-            ChatSession.workspace_id == resolve_workspace_id(current_user["workspace_id"]),
+            ChatSession.owner_id == uuid.UUID(current_user["id"]),
         )
     )
     session = result.scalar_one_or_none()
