@@ -501,8 +501,28 @@ async def compute_financial_ratios(
         raw_llm = re.sub(r'```\s*$', '', raw_llm.strip(), flags=re.MULTILINE)
         extraction_data = json.loads(raw_llm)
     except Exception as exc:
-        logger.warning(f"[finance/ratios] LLM extraction parse failed: {exc}")
-        extraction_data = {}
+        # Silent-failure table / finance.py:505 — this used to set
+        # `extraction_data = {}` and carry on, so `compute_ratios` produced all
+        # 15 ratios with `value: None` and the endpoint returned 200. That
+        # output is BYTE-IDENTICAL to the legitimate case "this document
+        # contains no financial statements", so a CA reading it could not tell
+        # whether the document had no numbers or the system had failed to read
+        # them. Both render as fifteen empty ratios.
+        #
+        # Nothing was extracted, so there is nothing to report. Fail loudly and
+        # persist no audit rows.
+        logger.error(
+            "[finance/ratios] extraction failed for doc %s (standard=%s): %s",
+            doc_id, accounting_standard, exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Financial extraction failed — the document's figures could "
+                "not be read. This is NOT a finding that the document has no "
+                "financial data. Nothing was saved. Please retry."
+            ),
+        )
 
     # Normalize: extract .value from each field if nested
     extracted: dict = {}
@@ -569,8 +589,21 @@ async def compute_financial_ratios(
     except Exception as exc:
         logger.warning(f"[finance/ratios] Audit row persistence failed: {exc}")
 
+    # The third state, now named. An extraction that SUCCEEDED but found no
+    # figures is a legitimate result — "this document has no financial
+    # statements" — and it must be distinguishable from the failure above,
+    # which now cannot reach this point at all. Without this field the caller
+    # sees fifteen empty ratios and has to guess which happened.
+    found_any = any(v is not None for v in extracted.values())
     return {
         "accounting_standard": accounting_standard,
+        "extraction_status": "ok" if found_any else "no_financial_data",
+        "extraction_message": (
+            None if found_any else
+            "No financial line items were found in this document. The document "
+            "was read successfully; it does not appear to contain financial "
+            "statements."
+        ),
         "extracted_line_items": extracted,
         "ratios": ratios,
         "flagged_values": flagged_values,

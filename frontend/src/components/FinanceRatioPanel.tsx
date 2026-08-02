@@ -34,6 +34,12 @@ interface FlaggedValue {
 
 interface RatioApiResponse {
   accounting_standard: string;
+  // Distinguishes "the document genuinely has no financials" from "extraction
+  // failed". Those used to render identically — fifteen empty ratio cards —
+  // so the reader could not tell which had happened. Extraction FAILURE is now
+  // a 502 and never reaches here; this covers the legitimate empty case.
+  extraction_status?: "ok" | "no_financial_data";
+  extraction_message?: string | null;
   extracted_line_items: Record<string, number | null>;
   ratios: Ratio[];
   flagged_values: FlaggedValue[];
@@ -404,6 +410,23 @@ export default function FinanceRatioPanel({ documentIds, onClose }: Props) {
 
         {data && activeTab === "ratios" && (
           <div>
+            {/* No financial data found — an honest empty result, not a failure.
+                Without this the user sees 15 blank ratio cards and cannot tell
+                whether the document had no numbers or the system failed. */}
+            {data.extraction_status === "no_financial_data" && (
+              <div style={{
+                background: "var(--surface-sunken)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "8px", padding: "10px 14px",
+                marginBottom: "16px",
+                fontFamily: "var(--font-body)", fontSize: "12px",
+                color: "var(--text-secondary)",
+              }}>
+                {data.extraction_message ||
+                  "No financial line items were found in this document."}
+              </div>
+            )}
+
             {/* Flagged values warning */}
             {data.flagged_values.some((v) => v.confidence < 0.70) && (
               <div style={{
