@@ -199,13 +199,18 @@ report back to the thread that called them.
 
 ### Session startup
 
-Read exactly three documents — `CLAUDE.md`, `PROGRESS.md`, the Directive. Then **discover**
-the organization rather than trusting a hardcoded list (files change; this section may lag):
+Read three documents — `CLAUDE.md`, `PROGRESS.md`, the Directive — plus `final_audit.md` when
+the session's work is defect repair. Then **discover** the organization rather than trusting a
+hardcoded list (files change; this section may lag):
 
 ```bash
 ls .claude/agents/*.md          # specialists — tracked, shared, authoritative
-ls .agents/skills/*/SKILL.md    # skills — UNTRACKED local tooling, see policy below
+ls .claude/skills/*/SKILL.md    # skills — UNTRACKED local tooling, see policy below
 ```
+
+`.agents/skills/` and `.claude/skills/` are **byte-identical copies** of the same seven skills,
+both gitignored. Listing either is sufficient; do not classify a skill twice because it appears
+in both paths.
 
 Build the map once. **Do not reload agents or skills before every task** — load a
 specialist's file only when delegating to it, and a skill only when its domain is in play.
@@ -216,18 +221,23 @@ Discovered from `.claude/agents/`. Each carries this project's real failure hist
 generic advice. Full trigger/scope/inputs/escalation live in the agent's own file — read it
 when delegating, not before.
 
-| Agent | Owns (exclusively) | Invoke when | Do NOT invoke when |
+Each agent answers **one question no other agent may answer.** If you cannot state an agent's
+question in a single sentence that no sibling could also claim, the roster is wrong — fix the
+roster, not the prompt.
+
+| Agent | The one question it answers | Invoke when | Do NOT invoke when |
 |---|---|---|---|
-| `docs-sync-checker` | Drift between the 3 governing docs and the repo | Session/phase start; after updating docs | Judging whether code is *correct* |
-| `test-runner` | Suite execution + failure-path coverage verdict | A fix is ready; before any "tests pass" claim | Asking whether a service is healthy |
-| `code-reviewer` | Whether a fix sits in the layer owning the decision; duplication; silenced failure | Before committing a non-trivial diff | Security severity; perf ranking |
-| `security-reviewer` | **The verdict** on exposure severity | Auth, tenancy, uploads, secrets, prompt injection | General code quality |
-| `infra-health-checker` | Runtime health **now**; pool/queue state after a drain | Changed a start command, flags, or env | Judging the shippable artifact |
-| `release-readiness-checker` | The **artifact before deploy** (image, CI, healthchecks, secret hygiene) | Before any deployment claim | Adjudicating a secret's severity |
-| `rag-pipeline-tracer` | **Which stage** produced a bad/slow answer | Answer wrong, ungrounded, uncited, or unfindable | Deciding whether to optimize it |
-| `performance-profiler` | **How much it costs** and whether it's worth fixing | Before any performance claim | Correctness attribution |
-| `workspace-qa` | Does an advertised workspace feature actually work | Before claiming a workspace works | Fixing what it finds |
-| `response-quality-reviewer` | Presentation, and the Phase-8 substance boundary | Changing how answers render | Anything touching retrieval/prompts/citations |
+| `docs-sync-checker` | Do the 3 governing docs still match the repo? | Session/phase start; after updating docs | Judging whether code is *correct* |
+| `test-runner` | Did the suite pass, is the failure path covered, **and does the guard bite**? | A fix is ready; before any "tests pass" claim; after adding a guard | Asking whether a service is healthy |
+| `code-reviewer` | Is this decision in the layer that owns it — and are its readers still symmetric? | Before committing a non-trivial diff; on a standing finding | Security severity; perf ranking |
+| `integrity-auditor` | **Does this code do what it claims?** | A feature reports success; a number reaches a user; a docstring asserts "always" | A change is what's in question → `code-reviewer` |
+| `security-reviewer` | Is this an exposure, and how bad? | Auth, tenancy, uploads, secrets, prompt injection | General code quality |
+| `infra-health-checker` | Did it come up healthy, and what did it leave behind? | Changed a start command, flags, or env | Judging the shippable artifact |
+| `release-readiness-checker` | Is the **artifact** shippable? | Before any deployment claim | Adjudicating a secret's severity |
+| `rag-pipeline-tracer` | **Which stage** produced this bad answer? | Answer wrong, ungrounded, uncited, or unfindable | Deciding whether to optimize it |
+| `performance-profiler` | **What does it cost**, and is it worth fixing? | Before any performance claim | Correctness attribution |
+| `workspace-qa` | Does the advertised feature actually work end to end? | Before claiming a workspace works | Fixing what it finds |
+| `response-quality-reviewer` | Is the presentation good **and the substance untouched**? | Changing how answers render | Anything touching retrieval/prompts/citations |
 
 **Exclusive-ownership tie-breaks** (where two could plausibly answer the same question):
 
@@ -237,12 +247,41 @@ when delegating, not before.
 - `test-runner` reports suite results; **suite-green is not process-healthy** → `infra-health-checker`.
 - `response-quality-reviewer` owns presentation only; retrieval, prompts, citation derivation,
   and trust-score computation are substance.
+- `code-reviewer` reviews **a decision that was made**; `integrity-auditor` establishes **a claim
+  that was never true**. A dead symbol, inert setting, hardcoded metric, missing dependency, or
+  drifted library API is the auditor's even when the reviewer notices it first.
+- `integrity-auditor` **detects** a fabricated control; `security-reviewer` **adjudicates** whether
+  it is an exposure — the same detection→verdict split as the release checker.
+- `rag-pipeline-tracer` explains why **one answer** was wrong; `integrity-auditor` establishes that
+  a number was **never real for any answer**. A metric that is always identical cannot "disagree
+  with the answer," so the tracer's trigger can never fire on it.
+
+### Two trigger modes
+
+Every agent runs in one of two modes, and the mode changes what the invoking prompt must supply.
+
+- **Change-triggered** — the default. A diff exists; the agent judges it. Supply the diff.
+- **Standing-defect** — no diff, no recent change. The agent audits code as it is, against a
+  `final_audit.md` finding id or a file list. Supply the finding id and the claim under test
+  **in place of** a diff.
+
+**A missing diff is never a reason to decline.** The overwhelming majority of this repository's
+real defects were found in code nobody had touched in months: the guard with zero callers, the
+trust score that is a constant, the two features that have never executed once. A roster that
+only reviews changes cannot find them, and for one full cycle this one could not. **Age is a
+trigger, not a defence.**
 
 **Subagents start cold.** The invoking prompt must carry every file path, diff, error, and
 prior decision. All return the same 10-section contract (Summary · Evidence · Findings ·
 Root Cause · Risks · Recommendations · Confidence · Escalation · Files Reviewed · Additional
 Verification Needed) and tag blockers **agent-actionable** / **owner-access-required** /
 **owner-decision-required**. Editing an agent file needs a session restart to take effect.
+
+**Cross-agent repetition is deliberate.** The Turbopack restart rule appears in four agent
+files, the `DummyLLMProvider` warning in three. Do not consolidate them into a shared file:
+a cold subagent reads only its own definition, so a rule it does not carry is a rule it does
+not have. **Duplication is the cost of cold start; pay it.** The rule for changing one is to
+change every copy in the same commit.
 
 **Verify agent output before acting on it.** Agents have been wrong here. Re-check any
 load-bearing claim against the repo or runtime — this is not optional politeness, it has
@@ -254,13 +293,29 @@ caught real errors.
 repeated per agent (that would be two sources of truth for one contract):
 
 - **Required inputs — every agent, every time.** Subagents start cold: nothing carries over.
-  The invoking prompt must supply the diff or changed-file list, the intent in one sentence,
-  how to run the stack, any prior decision that must not be relitigated, and any
-  known-failing baseline. An agent's own file lists anything additional it needs.
+  The invoking prompt must supply **(1)** the diff or changed-file list *or*, in standing-defect
+  mode, the `final_audit.md` finding id and the claim under test; **(2)** the intent in one
+  sentence — without it no agent can judge ownership; **(3)** how to run the stack; **(4)** any
+  prior decision that must not be relitigated; **(5)** any known-failing baseline, so
+  pre-existing failures are not reported as new. An agent's own file lists anything additional.
 - **Expected output — every agent.** The 10-section contract (Summary · Evidence · Findings ·
   Root Cause · Risks · Recommendations · Confidence · Escalation · Files Reviewed ·
   Additional Verification Needed), findings ranked most-severe first, each blocker tagged
   **agent-actionable** / **owner-access-required** / **owner-decision-required**.
+
+  Four quality bars apply to that contract, and a report that misses one is not usable:
+
+  1. **Evidence is a command and its output**, or `file:line` and the actual lines. A timing
+     without the command that produced it, or a claim without the grep behind it, is an
+     assertion. This project has already shipped wrong conclusions drawn from a proxy metric
+     (`len(app.routes)`) and from a regex that silently failed on a multi-line decorator.
+  2. **Confidence is three-valued and load-bearing.** Verified / Partially Verified /
+     Unverified. **Unverified is a distinct verdict from "fine"** — never collapse "I could not
+     check this" into "no findings."
+  3. **Every blocker carries its tag.** An untagged blocker cannot be routed and stalls.
+  4. **No padding.** "No findings; the fix is at the right layer" is a complete report. Inventing
+     findings to fill sections is worse than an empty section, because it costs the thread a
+     verification pass it did not need.
 - **Who consumes it.** Always the main engineering thread. Agents cannot invoke each other,
   so any "follow-up agent" in the table below is a call *the thread* makes next.
 - **Implementation owner — always the main engineering thread.** No specialist writes
@@ -268,9 +323,12 @@ repeated per agent (that would be two sources of truth for one contract):
   implementing.
 
 **Handoff chains** (thread-mediated): `release-readiness-checker` → `security-reviewer`
-(detection → verdict) · `rag-pipeline-tracer` → `performance-profiler` (stage → cost) ·
+(detection → verdict) · `integrity-auditor` → `security-reviewer` (a fabricated control is
+detected, then adjudicated) · `integrity-auditor` → `test-runner` (a test that passes by
+asserting a hardcoded value) · `rag-pipeline-tracer` → `performance-profiler` (stage → cost) ·
 `workspace-qa` → the layer owner it names · `test-runner` → `code-reviewer` when a failure
-is architectural rather than a bad assertion.
+is architectural rather than a bad assertion · `code-reviewer` → `integrity-auditor` when a
+reviewed file turns out to claim something it never did.
 
 **Changing the roster.** Add an agent only for an *observed, recurring* responsibility no
 existing agent covers — not because a technology exists. Split one that has grown two
@@ -359,6 +417,52 @@ change is waste, not rigor.
 | Performance claim | `performance-profiler` |
 | Deployment claim | `release-readiness-checker` → `security-reviewer` |
 | Documentation | `docs-sync-checker` |
+| A score, confidence, status, or count shown to a user | `integrity-auditor` → `security-reviewer` if it is a control |
+| A feature that reports success | `integrity-auditor` → `workspace-qa` |
+| Dead code, inert setting, missing dependency, drifted library API | `integrity-auditor` |
+| Adding or changing a regression guard | `test-runner` (must watch it go red) |
+| Changing how a value is **written** anywhere | `code-reviewer` — question 3 enumerates its readers |
+
+**A finding is not routed by the file it lives in, but by the question it raises.** `veritas_engine.py`
+is a services file, which suggests `code-reviewer`; the question "is this number real" is
+`integrity-auditor`'s. Route on the question.
+
+### Defect-register lifecycle
+
+`final_audit.md` is the **standing defect register** — 83 findings from a line-by-line read of
+all 425 tracked files. It is a register, not a status document: `PROGRESS.md` remains the single
+source of truth for what is *done*. A finding is closed in `PROGRESS.md` and struck in
+`final_audit.md`; **never record status in the register itself.**
+
+Work it one finding at a time:
+
+```
+Pick a finding  (order: final_audit.md §7 tiers — exposure × cost, not severity alone)
+  → Re-verify it still exists          ← the register is a snapshot; code moves
+  → Read its "Debug — blast radius" tag
+  → Implement at the layer that OWNS it
+  → Route by the question, not the file (matrix above)
+  → Force the failure path; add the guard; watch the guard go red
+  → Update PROGRESS.md; strike the finding in final_audit.md
+  → Commit
+```
+
+**Three rules specific to a register, learned from this one:**
+
+1. **Re-verify before fixing.** A finding is a point-in-time observation. Fixing a defect that
+   no longer exists wastes a cycle; worse, it can reintroduce one.
+2. **Honour the blast-radius tag.** Findings marked *NOT self-contained* require two or more
+   files changed **in the same commit** or the fix is not a fix — S5 (key rotation and
+   `embedding_service` both mutate the same `genai` global) and S8 (embedding dimension agreement
+   across two containers) are the live examples. A tag of *owner-decision-required* means the
+   thread may not choose unilaterally.
+3. **One finding per commit, unless the tag says otherwise.** Batching unrelated fixes is how H5
+   escaped: a correct write-path change and an unexamined read path travelled together, and the
+   green happy path covered for both.
+
+**A fix is not done when the defect stops reproducing.** It is done when the *class* is closed —
+see the regression lifecycle. Every finding in this register escaped a green suite; closing one
+without asking why it escaped guarantees a sibling survives.
 
 ### Runtime verification lifecycle
 
@@ -390,6 +494,17 @@ subsystem fail the same way. Then strengthen the shared layer and add the guard 
 **verify the guard bites** by reintroducing the defect. `tests/test_worker_session_discipline.py`
 is the reference: a ratchet whose allowlist may only shrink.
 
+**The thread writes the guard; `test-runner` verifies it bites.** A guard nobody has watched go
+red is an untested guard, and this repository already contains a control that documents itself
+as always-called and has zero callers. Add the guard **and** the observation that it failed on
+the reintroduced defect — the second half is the part that has been skipped before.
+
+**When the escape was a roster gap, fix the roster.** If no agent could have been triggered for
+a defect, adding a test closes the instance and leaves the class open. That is how
+`integrity-auditor` came to exist: three agents referenced the trust score and none could be
+invoked for it, so a fabricated metric survived a repair phase, a security review, and 131
+passing tests.
+
 ### Commit lifecycle
 
 Commit at each **logically complete milestone** — a coherent unit that is verified, not a
@@ -407,13 +522,20 @@ artifacts before committing. Push and deploy are **owner-authorized**, never aut
 
 ### Documentation lifecycle
 
-Three files, three owners, no overlap — enforced by `docs-sync-checker`:
+Four files, four owners, no overlap — enforced by `docs-sync-checker`:
 
 | File | Owns | Update when |
 |---|---|---|
 | `CLAUDE.md` | Stable context + this execution model | Architecture, invariants, or orchestration changes |
 | `PROGRESS.md` | All status, evidence, blockers, session log | Every completed unit of work |
 | The Directive | Permanent principles, Release Gate, definition of done | **Frozen** — only when a real failure exposes a missing rule |
+| `final_audit.md` | The standing **defect register** — findings, causes, blast radius | A finding is added, struck, or its blast radius changes |
+
+`final_audit.md` holds **defects, never status.** Whether a finding is fixed is `PROGRESS.md`'s
+to say. The register answers "what is wrong and what does fixing it touch"; the progress file
+answers "what has been done about it." Keeping the two separate is what stops the register from
+becoming a second, competing status document — the split-brain failure this table exists to
+prevent.
 
 If information belongs elsewhere, **move it, never copy it**. When a fix invalidates a
 documented claim, correct the claim in the same commit — an invariant that has become false
