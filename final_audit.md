@@ -150,7 +150,7 @@ Method: AST analysis over all 208 Python files for query-in-loop patterns and bl
 calls inside `async def`; static index-coverage analysis over the ORM models; component
 size analysis over the frontend. **Ranked by measured or reasoned impact.**
 
-### P-1 · N+1 query in legal DOCX export — HIGH · *introduced by me*
+### ~~P-1 · N+1 query in legal DOCX export — HIGH · *introduced by me*~~ — STRUCK
 
 **Where:** `backend/app/workers/tasks/export_tasks.py:67`
 
@@ -182,7 +182,7 @@ by_clause = defaultdict(list)
 for r in rows: by_clause[r.clause_id].append(r)
 ```
 
-### P-2 · N+1 query in research document loading — HIGH
+### ~~P-2 · N+1 query in research document loading — HIGH~~ — STRUCK
 
 **Where:** `backend/app/api/v1/endpoints/research.py:184` (also `:250`, `:467`)
 

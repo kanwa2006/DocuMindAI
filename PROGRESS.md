@@ -1049,19 +1049,27 @@ heartbeats for S1, **1** heartbeat for each S2 site.
 
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `e697dd1` · working tree clean
-- **Backend suite:** **152 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
+- **Branch:** `security/redact-env-example` · **HEAD:** `3daf888` · working tree clean
+- **Backend suite:** **158 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
   `npm run build` succeeds · all services healthy · real Gemini generation working
 
 ### Defect-register run — state
 
-**Closed and struck in `final_audit.md` (11):** H1, S3, S4, H5, H4, B-1 (Tier 0) ·
-S13, F1, P-3 (Tier 1) · S1, S2 (Tier 2).
+**Closed and struck in `final_audit.md` (13):** H1, S3, S4, H5, H4, B-1 (Tier 0) ·
+S13, F1, P-3 (Tier 1) · S1, S2, P-1, P-2 (Tier 2). **Tier 0, 1 and 2 are complete.**
 **Every one carries a guard that was watched going RED on the reintroduced defect.**
 
-**Next finding: P-1 and P-2** — the two N+1 query fixes, ~20 lines each,
-self-contained. Then Tier 3: **S12** (`aioredis` → `redis.asyncio`, six sites;
-log at ERROR when the client cannot be constructed), **S10** (remove ratio
+**A fourth tenancy hole was found and closed while fixing P-2** (not in the
+register): both `research.py` document loops scoped by `workspace_id` only, so
+any user could pass another user's document id to `/research/citations` or
+`/research/gaps` and get its text back inside the generated output. Now behind
+the same shared owner-scoped helper. Proven with two accounts — B gets
+`count: 0` and a 400 for A's document. **This is the H1/H4/H5 class at a fourth
+site; assume more exist and grep for `workspace_id ==` on any Document/owned
+model read before trusting an endpoint.**
+
+**Next finding: Tier 3** — **S12** (`aioredis` → `redis.asyncio`, six sites; log
+at ERROR when the client cannot be constructed), then **S10** (remove ratio
 arithmetic from the Finance schema — extract-then-compute). **S6/S7 are PARKED**
 as owner decisions (below). Then the remaining HIGH findings (H2, H6, H7, H8,
 H9, H10, H11), the silent-failure table, S5/S8/S9/S11/S14–S32, F2–F9, and
