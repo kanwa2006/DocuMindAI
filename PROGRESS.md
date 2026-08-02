@@ -1049,9 +1049,10 @@ heartbeats for S1, **1** heartbeat for each S2 site.
 
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `2408c9f` · working tree clean
-- **Backend suite:** **206 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
-  `npm run build` succeeds · all services healthy · real Gemini generation working
+- **Branch:** `security/redact-env-example` · **HEAD:** `c1b10a8` · working tree clean
+- **Backend suite:** **211 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
+  `npm run build` succeeds · all services healthy · real Gemini generation working ·
+  **the retrieval cache works for the first time** (52.8s cold → 2.2s warm, verified)
 
 ### Defect-register run — state
 
@@ -1059,9 +1060,19 @@ heartbeats for S1, **1** heartbeat for each S2 site.
 struck and verified at runtime. H3 is partially closed (`JobRole`) with the rest
 parked as an owner decision because those models have no ownership column.
 
-**Closed and struck (23):** H1, S3, S4, H5, H4, B-1 (Tier 0) · S13, F1, P-3
-(Tier 1) · S1, S2, P-1, P-2 (Tier 2) · H8, H11, H9, H3-partial · H6, H7, H10 · H2.
-**Every one carries a guard that was watched going RED on the reintroduced defect.**
+**Closed and struck (24):** H1, S3, S4, H5, H4, B-1 (Tier 0) · S13, F1, P-3
+(Tier 1) · S1, S2, P-1, P-2 (Tier 2) · H8, H11, H9, H3-partial · H6, H7, H10 · H2 ·
+S12. **Every one carries a guard that was watched going RED on the reintroduced
+defect.**
+
+**S12 is the clearest example of the pattern this register keeps surfacing.**
+`aioredis` was never installed; six `except Exception: return None` blocks turned
+that into silence. Trial-abuse prevention, the retrieval cache, two IP rate limits
+and the post-delete cache purge were ALL inert, with no log line anywhere. A
+missing dependency was indistinguishable from a cache miss. Proof it is now real:
+`KEYS retrieval:*` was empty before any query and had never been populated; after
+the fix the key appears with a 260s TTL and the same query drops from 52.8s to
+2.2s.
 
 **H2 was the most severe of them and is worth remembering as a shape:** the
 client-supplied `object_key` was stored verbatim and reached
@@ -1092,9 +1103,9 @@ companion test fails if any entry stops being a real violation.
 user sees every user's rows. Same shape as H3; both need a migration + backfill
 and are **owner decisions**.
 
-**Next finding: Tier 3** — **S12** (`aioredis` → `redis.asyncio`, six sites; log
-at ERROR when the client cannot be constructed), then **S10** (remove ratio
-arithmetic from the Finance schema — extract-then-compute). **S6/S7 are PARKED**
+**Next finding: S10** (remove ratio arithmetic from the Finance schema —
+extract-then-compute; the invariant exists to protect exactly this workspace).
+**S6/S7 are PARKED**
 as owner decisions (below). Then the **silent-failure table**
 (`study.py:235` fabricated quiz answers, `legal.py:390` "Low" on a parse
 failure, `finance.py:505`, `research.py:228` fabricated bibliography,

@@ -1154,7 +1154,7 @@ me against source before recording.** This section independently corroborates §
 
 ---
 
-## S12 · `aioredis` is not installed — every Redis path is a silent no-op — HIGH
+## ~~S12 · `aioredis` is not installed — every Redis path is a silent no-op — HIGH~~ — STRUCK
 
 **Files:** `core/middleware.py:9` · `query.py:127, 146` · `auth.py:265` · `documents.py:609` ·
 `feedback.py:43`
