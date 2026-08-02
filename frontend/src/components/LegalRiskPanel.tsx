@@ -36,7 +36,7 @@ interface ConsistencyWarning {
 
 interface RiskReport {
   disclaimer: string;
-  overall_risk_score: number;
+  overall_risk_score: number | null;
   overall_risk_level: string;
   summary: string;
   clause_risks: ClauseRisk[];
@@ -75,7 +75,12 @@ function riskBg(level: string): string {
   return "var(--surface-raised)";
 }
 
-function scoreRingColor(score: number): string {
+function scoreRingColor(score: number | null | undefined): string {
+  // `null <= 30` is TRUE in JavaScript — null coerces to 0 — so an UNASSESSED
+  // contract used to render the green "low risk" ring. The backend now sends
+  // a null score when analysis could not be produced (see legal.py), and this
+  // must read as "no verdict", never as the safest verdict.
+  if (score === null || score === undefined || Number.isNaN(score)) return "#64748b";
   if (score <= 30) return "#16a34a";
   if (score <= 60) return "#d97706";
   if (score <= 80) return "#dc2626";
@@ -83,10 +88,12 @@ function scoreRingColor(score: number): string {
 }
 
 /** SVG ring for the overall risk score. */
-function ScoreRing({ score, level }: { score: number; level: string }) {
+function ScoreRing({ score, level }: { score: number | null; level: string }) {
   const r = 44;
   const circumference = 2 * Math.PI * r;
-  const filled = circumference * (score / 100);
+  const unassessed = score === null || score === undefined || Number.isNaN(score);
+  // An empty ring, not a full green one: nothing is being claimed.
+  const filled = unassessed ? 0 : circumference * (score / 100);
   const color = scoreRingColor(score);
 
   return (
@@ -100,15 +107,17 @@ function ScoreRing({ score, level }: { score: number; level: string }) {
           strokeLinecap="round"
           transform="rotate(-90 55 55)"
         />
-        <text x="55" y="52" textAnchor="middle" fontFamily="var(--font-display)" fontSize="22" fontWeight="700" fill={color}>{score}</text>
-        <text x="55" y="68" textAnchor="middle" fontFamily="var(--font-body)" fontSize="10" fill="var(--text-secondary)">/100</text>
+        <text x="55" y="52" textAnchor="middle" fontFamily="var(--font-display)" fontSize="22" fontWeight="700" fill={color}>{unassessed ? "—" : score}</text>
+        {!unassessed && (
+          <text x="55" y="68" textAnchor="middle" fontFamily="var(--font-body)" fontSize="10" fill="var(--text-secondary)">/100</text>
+        )}
       </svg>
       <div style={{
         marginTop: "6px",
         fontFamily: "var(--font-body)", fontSize: "13px", fontWeight: 700,
         color,
       }}>
-        {level} Risk
+        {unassessed || level === "Unassessable" ? "Not assessed" : `${level} Risk`}
       </div>
     </div>
   );

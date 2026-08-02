@@ -393,19 +393,43 @@ async def generate_risk_report(
         raw_llm = re.sub(r'```\s*$', '', raw_llm.strip(), flags=re.MULTILINE)
         risk_data = json.loads(raw_llm)
     except Exception as exc:
-        logger.warning(f"[legal/risk-report] LLM parse failed: {exc}")
+        # Silent-failure table / legal.py:390 — this used to return
+        # `overall_risk_level: "Low"` with score 0, so a PARSE ERROR rendered
+        # in the UI as "this contract is low risk, score 0". The one output a
+        # lawyer would act on directly, and it said the safest possible thing
+        # precisely when the system knew nothing.
+        #
+        # "Unassessable" is not a new concept invented here: it is already in
+        # RISK_LEVELS (value -1, deliberately excluded from the consistency
+        # drift check below) and the system prompt above already instructs the
+        # model to use it when confidence is too low. The failure path simply
+        # was not using the vocabulary the success path already had.
+        #
+        # The score is None rather than 0 for the same reason: 0 is a claim
+        # ("no risk found"), None is the absence of one.
+        logger.error(
+            "[legal/risk-report] risk analysis unavailable for doc %s — "
+            "reporting Unassessable rather than a risk level: %s", doc_id, exc,
+        )
         risk_data = {
-            "overall_risk_score": 0,
-            "overall_risk_level": "Low",
-            "summary": "Unable to parse risk analysis.",
+            "overall_risk_score": None,
+            "overall_risk_level": "Unassessable",
+            "summary": (
+                "Risk analysis could not be completed — the model response "
+                "could not be parsed. This is NOT a finding of low risk: the "
+                "contract has not been assessed. Please retry."
+            ),
             "clause_risks": [],
             "missing_clauses": [],
         }
 
     clause_risks = risk_data.get("clause_risks", [])
     missing_clauses = risk_data.get("missing_clauses", [])
-    overall_score = risk_data.get("overall_risk_score", 0)
-    overall_level = risk_data.get("overall_risk_level", "Low")
+    # Same defect as the except branch above, one line apart: a model response
+    # that parsed but OMITTED these keys also defaulted to "Low"/0. An absent
+    # verdict is not a verdict of low risk.
+    overall_score = risk_data.get("overall_risk_score")
+    overall_level = risk_data.get("overall_risk_level") or "Unassessable"
 
     # Task 6-L4: Consistency validation against previous analysis
     prev_analysis = (await db.execute(
@@ -442,7 +466,18 @@ async def generate_risk_report(
     # Task 6-L5: Escalation triggers — Python logic, not LLM
     escalation_required = False
     escalation_reason = None
-    if overall_score >= 70:
+    if overall_level == "Unassessable":
+        # `overall_score` is now None when the analysis could not be produced,
+        # and `None >= 70` is a TypeError. More importantly: an UNASSESSED
+        # contract is exactly the case a human should look at, so it escalates
+        # rather than quietly scoring below the threshold. Previously this
+        # branch could not be reached — the failure path claimed "Low"/0 and
+        # sailed under every trigger.
+        escalation_required = True
+        escalation_reason = (
+            "Contract could not be assessed automatically — manual review required."
+        )
+    elif (overall_score or 0) >= 70:
         escalation_required = True
         escalation_reason = "Overall contract risk score is High or Critical."
     elif any(c.get("risk_level") == "Critical" for c in clause_risks):
