@@ -216,13 +216,30 @@ async def generate_quiz(
         '"explanation":"...","source_page":null}'
     )
 
-    raw = await llm_service.provider.generate(
-        system_prompt=(
-            "You are an expert quiz generator. Respond ONLY with a valid JSON array. "
-            "No markdown, no commentary. The correct_index is 0-based."
-        ),
-        user_prompt=prompt,
-    )
+    # The provider call was unguarded, so an LLM outage escaped as an opaque
+    # HTTP 500 with a stack trace in the logs and "Internal Server Error" for
+    # the student. Nothing was persisted — that part was already correct — but
+    # the failure was unattributable. Same honest-failure treatment as the
+    # parse path below: one clear reason, nothing saved.
+    try:
+        raw = await llm_service.provider.generate(
+            system_prompt=(
+                "You are an expert quiz generator. Respond ONLY with a valid JSON array. "
+                "No markdown, no commentary. The correct_index is 0-based."
+            ),
+            user_prompt=prompt,
+        )
+    except Exception as exc:
+        logger.error(
+            "[study/quiz] LLM call failed for topic=%r: %s", request.topic, exc
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Quiz generation is temporarily unavailable — the language "
+                "model could not be reached. Nothing was saved. Please retry."
+            ),
+        )
 
     clean = raw.strip()
     if clean.startswith("```json"):
@@ -230,12 +247,34 @@ async def generate_quiz(
     elif clean.startswith("```"):
         clean = clean[3:-3].strip()
 
+    # Silent-failure table / study.py:235 — a parse failure used to call
+    # `_stub_quiz`, which fabricated questions with `correct_index: 0` on every
+    # item and an explanation asserting "The correct answer is Option A". That
+    # was PERSISTED and returned 200, so `/quiz/{id}/submit` then graded a
+    # student against invented answers and told them they were wrong.
+    #
+    # A quiz is not a document the user reads and judges — it is scored. So the
+    # honest behaviour is stronger here than `exams.py`'s refusal paper: fail
+    # loudly and persist nothing. There is no such thing as a degraded quiz.
     try:
         questions_full = json.loads(clean)
         if not isinstance(questions_full, list):
-            raise ValueError("Expected a JSON array")
-    except (json.JSONDecodeError, ValueError):
-        questions_full = _stub_quiz(request.topic, request.count, request.difficulty)
+            raise ValueError("expected a JSON array")
+        if not questions_full:
+            raise ValueError("model returned an empty question list")
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.error(
+            "[study/quiz] quiz generation failed for topic=%r difficulty=%r: %s; "
+            "raw[:400]=%r",
+            request.topic, request.difficulty, exc, clean[:400],
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Quiz generation failed — the model did not return usable "
+                "questions. Nothing was saved. Please retry."
+            ),
+        )
 
     # Ensure each question has an id
     for i, q in enumerate(questions_full):
@@ -264,18 +303,10 @@ async def generate_quiz(
     return {"quiz_id": str(quiz_record.id), "questions": safe_questions, "count": len(safe_questions)}
 
 
-def _stub_quiz(topic: str, count: int, difficulty: str) -> list:
-    return [
-        {
-            "id": f"q{i+1}",
-            "question": f"Sample {difficulty} question {i+1} about {topic}.",
-            "options": ["Option A", "Option B", "Option C", "Option D"],
-            "correct_index": 0,
-            "explanation": f"The correct answer is Option A based on {topic} fundamentals.",
-            "source_page": None,
-        }
-        for i in range(count)
-    ]
+# `_stub_quiz` was deleted, not merely unwired. It generated questions whose
+# `correct_index` was always 0 with an explanation asserting Option A was
+# right, and those rows were saved and graded against. Leaving the function in
+# place would leave the fabrication one call away from returning.
 
 
 @router.post("/quiz/{quiz_id}/submit")
