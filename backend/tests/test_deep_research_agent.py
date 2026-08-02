@@ -33,6 +33,7 @@ FAKE_CHUNKS = [
 async def test_step1_retrieves_chunks_and_synthesizes_answer():
     agent = DeepResearchAgent()
     doc_id = str(uuid.uuid4())
+    owner_id = str(uuid.uuid4())
 
     with patch(
         "app.services.retrieval_service.RetrievalService.retrieve_chunks",
@@ -44,12 +45,19 @@ async def test_step1_retrieves_chunks_and_synthesizes_answer():
         "app.services.llm_service.llm_service.generate",
         new=AsyncMock(return_value="[]"),
     ):
-        events = [e async for e in agent.research("what is attention?", [doc_id], db=object())]
+        events = [
+            e async for e in agent.research(
+                "what is attention?", [doc_id], owner_id=owner_id, db=object()
+            )
+        ]
 
     mock_retrieve.assert_awaited_once()
     _, kwargs = mock_retrieve.await_args
     assert kwargs["query"] == "what is attention?"
     assert kwargs["document_ids"] == [uuid.UUID(doc_id)]
+    # S3/H1: the caller's owner must reach the retrieval choke point, or the
+    # agent scans every tenant's chunks.
+    assert kwargs["owner_id"] == uuid.UUID(owner_id)
 
     step1_done = next(e for e in events if e.step == 1 and e.status == "done")
     assert "1 passages" in step1_done.message
@@ -75,7 +83,11 @@ async def test_step1_failure_is_loud_but_degrades(caplog):
         "app.services.llm_service.llm_service.generate",
         new=AsyncMock(return_value="[]"),
     ), caplog.at_level(logging.ERROR, logger="app.services.deep_research_agent"):
-        events = [e async for e in agent.research("q", [str(uuid.uuid4())], db=object())]
+        events = [
+            e async for e in agent.research(
+                "q", [str(uuid.uuid4())], owner_id=str(uuid.uuid4()), db=object()
+            )
+        ]
 
     assert any("RAG pipeline error" in r.message for r in caplog.records)
     final = next(e for e in events if e.step == "final")

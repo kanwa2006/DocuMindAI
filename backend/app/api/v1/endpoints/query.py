@@ -172,6 +172,7 @@ async def ask_question(
     grounding_payload = await GroundingService.prepare_grounded_context(
         db=db,
         query=request.query,
+        owner_id=uuid.UUID(current_user["id"]),
         workspace_id=resolve_workspace_id(current_user["workspace_id"]),
         final_top_k=request.top_k,
         similarity_threshold=request.similarity_threshold
@@ -443,6 +444,7 @@ async def ask_question_stream(
                 grounding_payload = await GroundingService.prepare_grounded_context(
                     db=db,
                     query=body.query,
+                    owner_id=uuid.UUID(user_id),
                     workspace_id=resolve_workspace_id(current_user["workspace_id"]),
                     final_top_k=effective_top_k,
                     similarity_threshold=body.similarity_threshold,

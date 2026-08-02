@@ -15,6 +15,7 @@ class GroundingService:
     async def prepare_grounded_context(
         db: AsyncSession,
         query: str,
+        owner_id: UUID,
         workspace_id: Optional[UUID] = None,
         retrieval_top_k: int = 30,          # Candidate Expansion
         final_top_k: int = 5,               # Selection Limit
@@ -67,6 +68,7 @@ class GroundingService:
         retrieval_payload = await RetrievalService.retrieve_chunks(
             db=db,
             query=query,
+            owner_id=owner_id,
             workspace_id=workspace_id,
             top_k=retrieval_top_k,
             similarity_threshold=similarity_threshold,

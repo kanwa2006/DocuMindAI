@@ -70,15 +70,16 @@ async def list_boundary_violations(
     current_user: dict = Depends(get_current_user),
 ) -> Any:
     """
-    Return recent tenant boundary violations from structured logs.
-    Violations are written to the application log by TenantBoundaryViolation;
-    this endpoint returns an empty list when no in-memory log store is wired up.
-    Admin only.
+    Always returns an empty list. Admin only.
+
+    S4: this used to claim violations were logged by `tenant_guard.py`. That
+    module had zero callers and was deleted — no code path could ever have
+    written such a log line. Tenant isolation is enforced in SQL instead
+    (`Document.owner_id` in `retrieval_service`, and the `tenant_scope`
+    session hook), which filters rather than recording an attempt, so there
+    is no violation stream to report.
     """
     _require_admin(current_user)
-    # Violations are logged via logger.warning in tenant_guard.py.
-    # A log-aggregator (Loki, CloudWatch, etc.) would query these in production.
-    # For now return empty list — the UI handles this gracefully.
     return []
 
 

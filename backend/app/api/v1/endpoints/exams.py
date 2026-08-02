@@ -221,6 +221,7 @@ async def _retrieve_grounding_for_paper(
     payload = await RetrievalService.retrieve_chunks(
         db=db,
         query=seed_query,
+        owner_id=owner_id,
         document_ids=doc_ids,
         top_k=target_k,
         similarity_threshold=0.0,
@@ -859,6 +860,7 @@ async def generate_exam_question(
     retrieval_result = await RetrievalService.retrieve_chunks(
         db=db,
         query=request.topic,
+        owner_id=uuid.UUID(current_user["id"]),
         workspace_id=workspace_id,
         document_ids=request.document_ids,
         top_k=5

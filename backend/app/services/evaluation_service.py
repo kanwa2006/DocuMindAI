@@ -19,8 +19,9 @@ class EvaluationService:
 
     @staticmethod
     async def run_benchmark(
-        db: AsyncSession, 
-        workspace_id: UUID, 
+        db: AsyncSession,
+        workspace_id: UUID,
+        owner_id: UUID,
         queries: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         results = []
@@ -36,14 +37,16 @@ class EvaluationService:
             
             # Phase 1: Pure Semantic Retrieval (Top 30 Base Accuracy)
             base_payload = await RetrievalService.retrieve_chunks(
-                db=db, query=query_str, workspace_id=workspace_id, top_k=30
+                db=db, query=query_str, owner_id=owner_id,
+                workspace_id=workspace_id, top_k=30
             )
             base_retrieved_docs = [str(chunk["document_id"]) for chunk in base_payload["results"]]
             mrr_before = EvaluationService.calculate_mrr(base_retrieved_docs, expected_docs)
             
             # Phase 2: Reranking & Grounding (Top 5 Precision)
             grounding_payload = await GroundingService.prepare_grounded_context(
-                db=db, query=query_str, workspace_id=workspace_id, final_top_k=5
+                db=db, query=query_str, owner_id=owner_id,
+                workspace_id=workspace_id, final_top_k=5
             )
             reranked_docs = [str(chunk["document_id"]) for chunk in grounding_payload["evidence_metadata"]]
             mrr_after = EvaluationService.calculate_mrr(reranked_docs, expected_docs)

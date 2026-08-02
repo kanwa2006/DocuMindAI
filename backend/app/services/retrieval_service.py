@@ -24,6 +24,7 @@ class RetrievalService:
     async def retrieve_chunks(
         db: AsyncSession,
         query: str,
+        owner_id: UUID,
         workspace_id: Optional[UUID] = None,
         top_k: int = 5,
         similarity_threshold: float = 0.0,
@@ -31,8 +32,13 @@ class RetrievalService:
     ) -> Dict[str, Any]:
         """
         Hybrid Retrieval Orchestrator.
-        Executes parallel Semantic (pgvector) and Lexical (tsvector BM25) searches, 
+        Executes parallel Semantic (pgvector) and Lexical (tsvector BM25) searches,
         then fuses the candidate lists using Reciprocal Rank Fusion (RRF).
+
+        H1: `owner_id` is required, not optional — this is the tenant choke
+        point for every retrieval path. `workspace_id`/`document_ids` narrow
+        further but must never substitute for the owner filter, since
+        `workspace_id` is a category slug identical for every user.
         """
         start_time = time.time()
         logger.info(f"[Tracing] Starting hybrid retrieval for: '{query}' (top_k={top_k})")
@@ -53,11 +59,12 @@ class RetrievalService:
                 select(DocumentChunk, DocumentPage.page_number, Document.filename, similarity_expr)
                 .join(Document, DocumentChunk.document_id == Document.id)
                 .join(DocumentPage, DocumentChunk.page_id == DocumentPage.id)
+                .where(Document.owner_id == owner_id)
             )
-            
+
             if workspace_id:
                 stmt_vec = stmt_vec.where(Document.workspace_id == workspace_id)
-            if document_ids:
+            if document_ids is not None:
                 stmt_vec = stmt_vec.where(Document.id.in_(document_ids))
             stmt_vec = stmt_vec.where(Document.status == "READY")
             if similarity_threshold > 0.0:
@@ -79,13 +86,14 @@ class RetrievalService:
                 select(DocumentChunk, DocumentPage.page_number, Document.filename)
                 .join(Document, DocumentChunk.document_id == Document.id)
                 .join(DocumentPage, DocumentChunk.page_id == DocumentPage.id)
+                .where(Document.owner_id == owner_id)
             )
             if workspace_id:
                 stmt_vec = stmt_vec.where(Document.workspace_id == workspace_id)
-            if document_ids:
+            if document_ids is not None:
                 stmt_vec = stmt_vec.where(Document.id.in_(document_ids))
             stmt_vec = stmt_vec.where(Document.status == "READY")
-        
+
         # --- 2. Lexical (BM25-style FTS or Fallback) ---
         if "sqlite" in settings.async_database_url:
             # SQLite does not support func.websearch_to_tsquery natively without fts5 setup
@@ -95,9 +103,12 @@ class RetrievalService:
                 select(DocumentChunk, DocumentPage.page_number, Document.filename, lexical_rank_expr)
                 .join(Document, DocumentChunk.document_id == Document.id)
                 .join(DocumentPage, DocumentChunk.page_id == DocumentPage.id)
+                .where(Document.owner_id == owner_id)
             )
             if workspace_id:
                 stmt_lex = stmt_lex.where(Document.workspace_id == workspace_id)
+            if document_ids is not None:
+                stmt_lex = stmt_lex.where(Document.id.in_(document_ids))
             stmt_lex = stmt_lex.where(Document.status == "READY")
             stmt_lex = stmt_lex.where(DocumentChunk.text_content.ilike(f"%{query}%"))
             stmt_lex = stmt_lex.limit(fusion_k)
@@ -110,14 +121,15 @@ class RetrievalService:
                 select(DocumentChunk, DocumentPage.page_number, Document.filename, lexical_rank_expr)
                 .join(Document, DocumentChunk.document_id == Document.id)
                 .join(DocumentPage, DocumentChunk.page_id == DocumentPage.id)
+                .where(Document.owner_id == owner_id)
             )
-            
+
             if workspace_id:
                 stmt_lex = stmt_lex.where(Document.workspace_id == workspace_id)
-            if document_ids:
+            if document_ids is not None:
                 stmt_lex = stmt_lex.where(Document.id.in_(document_ids))
             stmt_lex = stmt_lex.where(Document.status == "READY")
-            
+
             stmt_lex = stmt_lex.where(ts_vector.op('@@')(ts_query))
             stmt_lex = stmt_lex.order_by(lexical_rank_expr.desc()).limit(fusion_k)
         

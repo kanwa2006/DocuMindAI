@@ -478,7 +478,8 @@ async def deep_research(
     async def event_generator():
         try:
             async for event in deep_research_agent.research(
-                body.query, valid_doc_ids, session_id=body.session_id, db=db
+                body.query, valid_doc_ids, owner_id=str(owner_id),
+                session_id=body.session_id, db=db
             ):
                 yield f"data: {json.dumps(event.to_dict())}\n\n"
         except Exception:

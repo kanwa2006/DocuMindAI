@@ -28,6 +28,7 @@ async def create_benchmark_run(
     eval_report = await EvaluationService.run_benchmark(
         db=db,
         workspace_id=workspace_id,
+        owner_id=uuid.UUID(current_user["id"]),
         queries=[q.model_dump() for q in request.queries]
     )
     

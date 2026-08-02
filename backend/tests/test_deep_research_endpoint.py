@@ -18,7 +18,7 @@ USER = {"id": str(uuid.uuid4()), "workspace_id": "research"}
 
 @pytest.mark.asyncio
 async def test_deep_research_streams_agent_events():
-    async def fake_research(query, doc_ids, session_id=None, db=None):
+    async def fake_research(query, doc_ids, owner_id=None, session_id=None, db=None):
         yield ResearchEvent(step=1, status="running", message="Analyzing...")
         yield ResearchEvent(step="final", status="complete", answer="done answer")
 
@@ -39,6 +39,9 @@ async def test_deep_research_streams_agent_events():
     # Unowned doc ids are filtered out before the agent runs.
     args, kwargs = mock_research.call_args
     assert args[1] == []
+    # H1: the endpoint must hand the caller's owner id to the agent — it is
+    # the only tenant key the retrieval choke point will accept.
+    assert kwargs["owner_id"] == USER["id"]
 
     payloads = [
         json.loads(f.replace("data: ", "").strip())

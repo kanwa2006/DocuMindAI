@@ -65,6 +65,7 @@ class DeepResearchAgent:
         self,
         query: str,
         document_ids: List[str],
+        owner_id: str,
         session_id: Optional[str] = None,
         db: Optional[Any] = None,
     ) -> AsyncGenerator[ResearchEvent, None]:
@@ -85,10 +86,19 @@ class DeepResearchAgent:
                     "DeepResearchAgent.research requires a db session for document retrieval"
                 )
 
-            doc_uuid_ids = [UUID(str(d)) for d in document_ids] if document_ids else None
+            # S3: an EMPTY list means "the user attached no documents", which
+            # is not the same as "no document filter". Collapsing it to None
+            # widened retrieval to every READY chunk the owner has instead of
+            # the none they selected. Preserve the distinction, as
+            # grounding_service.py already does.
+            doc_uuid_ids = (
+                None if document_ids is None
+                else [UUID(str(d)) for d in document_ids]
+            )
             retrieval = await RetrievalService.retrieve_chunks(
                 db=db,
                 query=query,
+                owner_id=UUID(str(owner_id)),
                 top_k=8,
                 document_ids=doc_uuid_ids,
             )
