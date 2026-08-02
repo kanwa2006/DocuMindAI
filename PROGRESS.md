@@ -1016,23 +1016,63 @@ out-of-lock cooldown wait the audit says to preserve.
 
 ---
 
+### 2026-08-02 (cont.) — Tier 2 event-loop blocking closed (`4964ed6`, `e697dd1`)
+
+**S1 — streaming blocked the whole event loop (`4964ed6`).** `generate_stream`
+consumed Gemini with a synchronous `for chunk in stream_response:` inside an
+`async def`. Only the call that OBTAINED the stream was offloaded; the iteration
+doing the network I/O ran on the loop thread, so one streaming user froze every
+other request, every other SSE stream and the health check. The iterator is now
+stepped through the executor with a sentinel (StopIteration cannot cross an
+executor boundary). Also closed the finding's second half: `generate_stream` had
+**no timeout at all** while `_provider_generate` enforces `LLM_TIMEOUT_SECONDS`
+— each step is now bounded by that setting, which bounds a hung stream without
+capping legitimately long generations.
+
+**S2 — every query blocked the loop twice more (`e697dd1`).** The bge-m3 query
+embedding and the cross-encoder rerank (up to 30 pairs × 512 tokens — the
+dominant CPU cost) both ran synchronously on the request path, for `/ask` as
+well as `/stream`. Both offloaded using the pattern that already existed at
+`llm_service.get_embedding`.
+
+**Runtime proof of concurrency:** with a real `/query/stream` in flight, five
+concurrent health checks returned 200 in **956–1215 ms** each — the ~1s is the
+Supabase round trip, not loop starvation. Before S1+S2 they would have waited
+for the entire embed + rerank + stream.
+
+Both guards measure the property (an independent heartbeat keeps ticking) rather
+than asserting a `run_in_executor` call exists — a call can be present and still
+wrap the wrong thing, which is precisely what S1 was. Observed RED: **0**
+heartbeats for S1, **1** heartbeat for each S2 site.
+
+---
+
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `1c02c6b` · working tree clean
-- **Backend suite:** **148 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
+- **Branch:** `security/redact-env-example` · **HEAD:** `e697dd1` · working tree clean
+- **Backend suite:** **152 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
   `npm run build` succeeds · all services healthy · real Gemini generation working
 
 ### Defect-register run — state
 
-**Closed and struck in `final_audit.md`:** H1, S3, S4, H5, H4, B-1 (Tier 0) ·
-S13, F1, P-3 (Tier 1). **Nine findings closed, each with a guard watched going RED.**
+**Closed and struck in `final_audit.md` (11):** H1, S3, S4, H5, H4, B-1 (Tier 0) ·
+S13, F1, P-3 (Tier 1) · S1, S2 (Tier 2).
+**Every one carries a guard that was watched going RED on the reintroduced defect.**
 
-**Next finding: Tier 2** — **S1 + S2** (stream consumption and the two
-per-query model calls into `run_in_executor`; the correct pattern already exists
-at `llm_service.get_embedding:573`), then **P-1 + P-2** (the two N+1 fixes,
-~20 lines each). Then Tier 3: S6/S7 are **parked** (below), S12 (`aioredis` →
-`redis.asyncio`, six sites), S10 (remove ratio arithmetic from the Finance
-schema).
+**Next finding: P-1 and P-2** — the two N+1 query fixes, ~20 lines each,
+self-contained. Then Tier 3: **S12** (`aioredis` → `redis.asyncio`, six sites;
+log at ERROR when the client cannot be constructed), **S10** (remove ratio
+arithmetic from the Finance schema — extract-then-compute). **S6/S7 are PARKED**
+as owner decisions (below). Then the remaining HIGH findings (H2, H6, H7, H8,
+H9, H10, H11), the silent-failure table, S5/S8/S9/S11/S14–S32, F2–F9, and
+per-workspace certification.
+
+**Consolidations the audit calls for — do these as ONE fix, not N:**
+H9 → one shared `get_owned_document()`; H7 → `legal.py:54` and `finance.py:300`
+become one shared helper (both currently read chunk text with no owner check);
+F6+F14 → one `chatUrl(workspace, chatId)` helper; F7 → share the message
+renderer. Pairs that must land in a single commit: S5, S8, M1+M11, H2.
+**S19 implies a re-index — plan it, don't discover it.**
 
 **Do NOT re-derive these — established this session:**
 - The app's database is Supabase, not the local `db` container (see above).

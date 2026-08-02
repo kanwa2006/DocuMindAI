@@ -915,7 +915,7 @@ me against source before recording.** This section independently corroborates §
 
 ---
 
-## S1 · Streaming blocks the entire event loop — HIGH
+## ~~S1 · Streaming blocks the entire event loop — HIGH~~ — STRUCK
 
 **File:** `backend/app/services/llm_service.py:391`
 
@@ -940,7 +940,7 @@ me against source before recording.** This section independently corroborates §
 
 ---
 
-## S2 · Every query blocks the event loop twice more — HIGH
+## ~~S2 · Every query blocks the event loop twice more — HIGH~~ — STRUCK
 
 **Files:** `retrieval_service.py:45` (bge-m3 query embedding) · `grounding_service.py:87`
 (cross-encoder rerank of up to 30 candidates)
