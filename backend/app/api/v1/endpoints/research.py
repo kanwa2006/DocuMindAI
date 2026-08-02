@@ -254,6 +254,7 @@ async def export_citations(
         )
 
     citations: List[str] = []
+    failed: List[dict] = []
 
     for doc, context in await _load_owned_docs_with_text(
         db, body.doc_ids, uuid.UUID(current_user["id"]),
@@ -282,16 +283,44 @@ async def export_citations(
                 if raw.startswith("json"):
                     raw = raw[4:]
             metadata = json.loads(raw.strip())
+            if not isinstance(metadata, dict):
+                raise ValueError("expected a JSON object of citation fields")
         except Exception as exc:
-            logger.warning("Citation extraction failed for %s: %s", doc.filename, exc)
-            metadata = {"author": "", "title": doc.filename, "journal": "", "year": "",
-                        "doi": "", "volume": "", "issue": "", "pages": "", "publisher": ""}
+            # Silent-failure table / research.py:228 — this used to substitute
+            # `{"title": doc.filename}` and hand it to a real APA/MLA/IEEE
+            # formatter, which fills the blanks with "Unknown Author" and
+            # "n.d.". The result was a correctly formatted bibliography entry
+            # for a paper whose metadata was never extracted — a FABRICATED
+            # CITATION, indistinguishable in the output from a real one, in a
+            # feature whose entire purpose is bibliographic accuracy. A
+            # researcher would paste it into a manuscript.
+            #
+            # A citation that could not be extracted is reported as a failure,
+            # not rendered as a citation.
+            logger.error(
+                "[research/citations] metadata extraction failed for %s: %s",
+                doc.filename, exc,
+            )
+            failed.append({
+                "filename": doc.filename,
+                "document_id": str(doc.id),
+                "reason": "Citation metadata could not be extracted from this document.",
+            })
+            continue
 
         idx = len(citations) + 1
         formatter = FORMAT_DISPATCH[fmt]
         citations.append(formatter(metadata, idx))
 
-    return {"citations": citations, "format": fmt, "count": len(citations)}
+    return {
+        "citations": citations,
+        "format": fmt,
+        "count": len(citations),
+        # Named explicitly so a caller cannot mistake a short list for a
+        # complete one. Empty on the happy path.
+        "failed": failed,
+        "failed_count": len(failed),
+    }
 
 # ── Task 6-R2: Research gaps endpoint ────────────────────────────────────────
 
