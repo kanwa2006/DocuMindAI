@@ -17,6 +17,7 @@ from app.services.document_service import DocumentService
 from app.models.document import Document, DocumentStatus
 from app.core.auth import get_current_user
 from app.core.workspace import KNOWN_WORKSPACE_SLUGS, resolve_workspace_id
+from app.core.storage import UnsafeStorageKey, validate_object_key
 from app.core.config import settings
 from app.core.rate_limiter import limiter
 from app.workers.tasks.document_tasks import process_document, process_clip_document
@@ -191,7 +192,20 @@ async def verify_upload(
         else current_user.get("workspace_id")
     )
 
-    storage_path = request.object_key
+    # H2: the client-supplied object_key was stored verbatim and later reached
+    # Path(...).stat(), the worker's file read, and Path(...).unlink() — a file
+    # oracle, an arbitrary file read into the RAG corpus, and an ARBITRARY FILE
+    # DELETE. Both upload routes generate this value server-side; the client is
+    # only echoing it back, so requiring it to resolve inside the storage root
+    # rejects nothing legitimate.
+    try:
+        storage_path = validate_object_key(request.object_key)
+    except UnsafeStorageKey as exc:
+        logger.warning(
+            "[verify_upload] rejected unsafe object_key from user %s: %s",
+            current_user["id"], exc,
+        )
+        raise HTTPException(status_code=422, detail="Invalid storage key.")
 
     # FIX 0.7: Compute fallback values — never let NOT NULL columns be None
     file_hash = request.file_hash or hashlib.sha256(storage_path.encode()).hexdigest()
@@ -565,10 +579,21 @@ async def delete_document(
     await db.commit()
 
     # 3. Delete storage file
+    # H2: this unlinked `storage_path` unconditionally. Combined with the
+    # unvalidated object_key on the write path, it was an ARBITRARY FILE
+    # DELETE — upload a document claiming storage_path="/etc/…", then delete
+    # it. Validated here as well as at write time, because rows created before
+    # the write-path fix still carry unvalidated values.
     try:
+        validate_object_key(storage_path)
         local_file = Path(storage_path)
         if local_file.exists():
             local_file.unlink()
+    except UnsafeStorageKey as exc:
+        logger.error(
+            "[delete_document] refused to unlink an out-of-root storage_path "
+            "for doc %s: %s", doc_uuid, exc,
+        )
     except Exception as exc:
         logger.warning("[delete_document] Storage file deletion failed: %s", exc)
 
