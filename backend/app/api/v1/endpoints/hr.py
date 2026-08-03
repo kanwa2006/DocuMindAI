@@ -475,14 +475,36 @@ async def score_candidate(
 
         from sentence_transformers import util
         similarity = float(util.cos_sim(torch.tensor(jd_emb), torch.tensor(resume_emb)))
+        semantic_available = True
     except Exception as exc:
-        logger.warning("[HR] Sentence-transformer unavailable, using fit_score only: %s", exc)
-        similarity = 0.0
+        # Silent-failure table / hr.py:462 — this used to set
+        # `similarity = 0.0` and fall through to the blend, producing
+        # `final_score = 0.6*llm + 0.4*0*100` = 60% of the LLM score. A
+        # candidate was ranked FORTY PERCENT LOWER because a model failed to
+        # load, and the response reported `semantic_similarity: 0.0` as though
+        # the comparison had run and found no resemblance.
+        #
+        # The old log line said "using fit_score only" — which is exactly the
+        # right behaviour and exactly what the code did NOT do. Now it does:
+        # the blend is skipped entirely rather than blended against a zero
+        # that was never measured.
+        logger.error(
+            "[HR] semantic similarity unavailable for job %s — scoring on the "
+            "LLM fit_score alone and marking the match as not semantically "
+            "scored: %s", job_id, exc, exc_info=True,
+        )
+        similarity = None
+        semantic_available = False
 
     llm_score = job_match.fit_score or 0.0
-    final_score = round(0.6 * llm_score + 0.4 * similarity * 100, 1)
+    if semantic_available:
+        final_score = round(0.6 * llm_score + 0.4 * similarity * 100, 1)
+    else:
+        # No fabricated zero in the blend. The LLM score is a real signal on
+        # its own; it is the SILENT downweighting that was dishonest.
+        final_score = round(llm_score, 1)
 
-    job_match.semantic_score = round(similarity, 4)
+    job_match.semantic_score = round(similarity, 4) if semantic_available else None
     job_match.final_score = final_score
     await db.commit()
 
@@ -496,8 +518,24 @@ async def score_candidate(
         skill_gaps=skill_gaps,
         match_breakdown={
             "llm_score": llm_score,
-            "semantic_similarity": round(similarity, 4),
-            "semantic_score_contribution": round(similarity * 100, 1),
-            "blend_weights": {"llm": 0.6, "semantic": 0.4},
+            # None, not 0.0. Reporting 0.0 claimed the comparison ran and found
+            # no resemblance between the résumé and the job description — a
+            # damning finding about a candidate, asserted because a model
+            # failed to load.
+            "semantic_similarity": round(similarity, 4) if semantic_available else None,
+            "semantic_score_contribution": (
+                round(similarity * 100, 1) if semantic_available else None
+            ),
+            "semantic_available": semantic_available,
+            "blend_weights": (
+                {"llm": 0.6, "semantic": 0.4} if semantic_available
+                else {"llm": 1.0, "semantic": 0.0}
+            ),
+            "scoring_note": (
+                None if semantic_available else
+                "Semantic similarity could not be computed. This score is the "
+                "LLM fit score alone and is NOT comparable with semantically "
+                "scored candidates."
+            ),
         },
     )

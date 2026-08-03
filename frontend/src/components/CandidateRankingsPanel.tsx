@@ -26,7 +26,7 @@ interface CandidateRow {
     id: string;
     fit_score?: number;
     final_score?: number;
-    semantic_score?: number;
+    semantic_score?: number | null;
     match_analysis?: {
       pros?: string[];
       cons?: string[];
@@ -417,7 +417,13 @@ export default function CandidateRankingsPanel({ onClose }: Props) {
                   const isSelected = selectedIds.has(row.profile.id);
                   const skills = row.profile.skills || [];
                   const isScoring = scoringId === row.profile.id;
-                  const hasSemanticScore = row.match.final_score !== undefined && row.match.final_score !== null;
+                  // Keyed on semantic_score, not final_score. `final_score` is
+                  // populated either way — with the blend when semantic
+                  // scoring ran, and with the LLM score alone when it could
+                  // not — so testing it reported "semantically scored" for
+                  // candidates that were not. `semantic_score` is null exactly
+                  // when the comparison did not happen.
+                  const hasSemanticScore = row.match.semantic_score !== undefined && row.match.semantic_score !== null;
 
                   return (
                     <tr
