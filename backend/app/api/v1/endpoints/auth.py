@@ -270,6 +270,16 @@ async def _get_redis():
 async def _check_ip_rate_limit(ip: str) -> None:
     redis = await _get_redis()
     if not redis:
+        # Silent-failure table / auth.py:263 — this returned silently, so the
+        # registration IP limit was simply NOT ENFORCED and nothing said so.
+        # It still fails OPEN: whether a Redis outage should block all
+        # registration is a business call, not one to make inside a repair
+        # commit (parked under OWNER DECISIONS). What is not a business call is
+        # doing it quietly — an abuse control that is off must say it is off.
+        logger.error(
+            "[auth] registration IP rate limit NOT ENFORCED for %s — Redis "
+            "unavailable. Abuse prevention is currently disabled.", ip,
+        )
         return
     try:
         key = f"reg_ip:{ip}"
@@ -285,12 +295,28 @@ async def _check_ip_rate_limit(ip: str) -> None:
         await redis.close()
 
 
-async def _store_email_otp(user_id: str, otp: str) -> None:
+async def _store_email_otp(user_id: str, otp: str) -> bool:
+    """Store the OTP. Returns False if it could NOT be stored.
+
+    Silent-failure table / auth.py:263 — this returned None whether or not the
+    code was saved. The caller then emailed the user a code that verification
+    could never accept, and answered `{"success": true}`. The verify path
+    fails closed (no stored OTP -> 400), so this was never an auth bypass —
+    it was a dead end presented as success.
+    """
     redis = await _get_redis()
     if not redis:
-        return
+        logger.error(
+            "[auth] email OTP for user %s NOT stored — Redis unavailable. "
+            "Refusing to send a code that could never be verified.", user_id,
+        )
+        return False
     try:
         await redis.setex(f"email_otp:{user_id}", 600, otp)
+        return True
+    except Exception as exc:
+        logger.error("[auth] email OTP storage failed for %s: %s", user_id, exc)
+        return False
     finally:
         await redis.close()
 
@@ -716,7 +742,15 @@ async def resend_verification_email(
         )
 
     otp = "".join(random.choices(string.digits, k=6))
-    await _store_email_otp(user_id, otp)
+    if not await _store_email_otp(user_id, otp):
+        # Do not email a code the verify path cannot accept.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Verification is temporarily unavailable and no code was sent. "
+                "Please try again shortly."
+            ),
+        )
     _send_otp_email(user.email, otp)
     return {"success": True, "message": "Verification code resent."}
 
@@ -726,12 +760,22 @@ async def resend_verification_email(
 import json as _json
 
 
-async def _store_phone_otp(user_id: str, otp: str, phone: str) -> None:
+async def _store_phone_otp(user_id: str, otp: str, phone: str) -> bool:
+    """Store the phone OTP. Returns False if it could NOT be stored — see
+    `_store_email_otp` for why sending an unverifiable code is the defect."""
     redis = await _get_redis()
     if not redis:
-        return
+        logger.error(
+            "[auth] phone OTP for user %s NOT stored — Redis unavailable. "
+            "Refusing to send a code that could never be verified.", user_id,
+        )
+        return False
     try:
         await redis.setex(f"phone_otp:{user_id}", 600, _json.dumps({"otp": otp, "phone": phone}))
+        return True
+    except Exception as exc:
+        logger.error("[auth] phone OTP storage failed for %s: %s", user_id, exc)
+        return False
     finally:
         await redis.close()
 
@@ -787,7 +831,16 @@ async def send_phone_otp(
         raise HTTPException(status_code=409, detail="Phone number already registered to a trial account.")
 
     otp = "".join(random.choices(string.digits, k=6))
-    await _store_phone_otp(current_user["id"], otp, phone)
+    if not await _store_phone_otp(current_user["id"], otp, phone):
+        # Do not send an SMS the verify path cannot accept — that costs the
+        # owner a Twilio message and the user a dead end.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Phone verification is temporarily unavailable and no code was "
+                "sent. Please try again shortly."
+            ),
+        )
 
     if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN and settings.TWILIO_PHONE_NUMBER:
         try:

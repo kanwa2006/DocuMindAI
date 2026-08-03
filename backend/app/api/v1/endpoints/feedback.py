@@ -48,6 +48,13 @@ async def _get_redis():
 async def _check_feedback_rate_limit(rate_key: str) -> None:
     redis = await _get_redis()
     if not redis:
+        # Silent-failure table — same shape as auth.py's IP limit. Fails OPEN
+        # by design (feedback should not be blocked by a cache outage), but it
+        # now says so instead of returning silently.
+        logger.error(
+            "[feedback] rate limit NOT ENFORCED for %s — Redis unavailable.",
+            rate_key,
+        )
         return
     try:
         key = f"feedback_rl:{rate_key}"
