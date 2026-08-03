@@ -75,7 +75,19 @@ async def _log_audit(
     event_type: str,
     event_detail: dict = None,
 ):
-    """Insert-only audit log entry. Never log document content or PII."""
+    """Insert-only audit log entry. Never log document content or PII.
+
+    Returns True if the entry was written, False if it was not.
+
+    Silent-failure table / legal.py:85 — this used to swallow every failure at
+    WARNING and return None, so a dropped entry in the IMMUTABLE COMPLIANCE
+    AUDIT TRAIL looked exactly like a successful write. An audit log that
+    silently loses records is worse than having none, because its whole value
+    is that you can rely on it: an absent entry reads as "this never happened".
+
+    The failure is now ERROR and the outcome is returned, so the caller can
+    tell the user their action was not recorded rather than implying it was.
+    """
     try:
         entry = LegalAuditLog(
             user_id=user_id,
@@ -86,8 +98,21 @@ async def _log_audit(
         )
         db.add(entry)
         await db.commit()
+        return True
     except Exception as exc:
-        logger.warning(f"[legal/audit_log] Failed to write audit entry: {exc}")
+        logger.error(
+            "[legal/audit_log] AUDIT ENTRY LOST — event=%s user=%s document=%s "
+            "analysis=%s: %s",
+            event_type, user_id, document_id, analysis_id, exc,
+            exc_info=True,
+        )
+        # Leave the session usable for the caller; a failed audit write must
+        # not also poison the request that triggered it.
+        try:
+            await db.rollback()
+        except Exception:  # pragma: no cover - rollback of a dead session
+            pass
+        return False
 
 @router.post("/rules", response_model=ComplianceRuleResponse)
 async def create_compliance_rule(
@@ -511,26 +536,39 @@ async def generate_risk_report(
         clause_count=len(clause_risks),
         missing_clause_count=len(missing_clauses),
     )
+    # Sibling of the audit swallow below, one block away and answering the same
+    # question — "was this recorded?". A report returned as though saved when
+    # it was not is the same failure shape, so it is reported the same way.
+    persisted = True
     try:
         db.add(analysis)
         await db.commit()
         await db.refresh(analysis)
     except Exception as exc:
-        logger.warning(f"[legal/risk-report] Analysis persistence failed: {exc}")
+        persisted = False
+        logger.error(
+            "[legal/risk-report] analysis persistence FAILED for doc %s: %s",
+            doc_id, exc, exc_info=True,
+        )
         await db.rollback()
 
     # Immutable audit log — Task 6-L6
-    await _log_audit(
-        db, user_id, uuid.UUID(str(doc_id)), analysis.id,
+    # `analysis.id` is None when persistence failed (the client-side uuid4
+    # default is applied at flush, and the rollback discarded it), so the audit
+    # rows would silently lose their link. Pass it only when it is real.
+    analysis_ref = analysis.id if persisted else None
+
+    audit_logged = await _log_audit(
+        db, user_id, uuid.UUID(str(doc_id)), analysis_ref,
         "analysis_created",
         {"contract_id": str(contract_id), "overall_risk_score": overall_score},
     )
     if escalation_required:
-        await _log_audit(
-            db, user_id, uuid.UUID(str(doc_id)), analysis.id,
+        audit_logged = await _log_audit(
+            db, user_id, uuid.UUID(str(doc_id)), analysis_ref,
             "escalation_triggered",
             {"reason": escalation_reason},
-        )
+        ) and audit_logged
 
     # Task 6-L1: Mandatory disclaimer prepended to every response
     return {
@@ -546,6 +584,11 @@ async def generate_risk_report(
         "analysis_id": str(analysis.id) if analysis.id else None,
         "contract_id": str(contract_id),
         "document_id": str(doc_id),
+        # Reported, not assumed. A risk report that was never saved, or whose
+        # compliance audit entry was lost, still renders identically — so the
+        # only way the caller can know is if we say so.
+        "persisted": persisted,
+        "audit_logged": audit_logged,
     }
 
 
