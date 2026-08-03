@@ -1086,10 +1086,38 @@ start, never `in source`.**
 
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `dfd62ae` · working tree clean
-- **Backend suite:** **237 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
+- **Branch:** `security/redact-env-example` · **HEAD:** `40e4980` · working tree clean
+- **Backend suite:** **254 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
   `npm run build` succeeds · all services healthy ·
   **the retrieval cache works for the first time** (52.8s cold → 2.2s warm, verified)
+
+### The silent-failure table is CLOSED — all 8 entries
+
+| Entry | Was | Now |
+|---|---|---|
+| `study.py:235` | fabricated quiz answers, persisted, graded against | 502, nothing saved; `_stub_quiz` deleted |
+| `legal.py:390` | `"Low"` / 0 / green ring on parse failure | `"Unassessable"` / null / **escalates** |
+| `research.py:228` | filename formatted as a real APA citation | reported in `failed[]`, zero emitted |
+| `finance.py:505` | `{}` → 15 ratios None, identical to "no financials" | 502; `no_financial_data` names the honest empty case |
+| `legal.py:85` | compliance audit entries lost at WARNING | ERROR + `audit_logged` reported |
+| `query.py:328` | doc-load failure → **general-knowledge answer** | error event, model never called |
+| `hr.py:462` | `similarity = 0.0` → candidate ranked **40% lower** | blend skipped, `semantic_score` NULL |
+| `auth.py:263`, `feedback.py:41` | OTP sent but never stored; limits off silently | 503 before sending; ERROR when a limit is off |
+
+**Checked explicitly rather than assumed: the OTP verify path FAILS CLOSED**
+(`if not stored_otp: raise 400`), so the storage failure was never an
+authentication bypass — a dead end, not a hole. Guarded so it stays true.
+
+**Three frontend readers had to change**, each found by enumerating readers of a
+backend value I changed — never by the type checker:
+- `scoreRingColor(null)` returned **green** (`null <= 30` is true in JS)
+- `FinanceRatioPanel` had no reader for `no_financial_data`
+- `CandidateRankingsPanel` keyed its existing "LLM score only" label off
+  `final_score`, which is populated either way; it needed `semantic_score`
+
+**Two register entries were partly stale and had to be re-derived, not trusted:**
+`query.py:328` (S3 changed adjacent empty-vs-None semantics but did NOT
+neutralise it) and `auth.py:263` (S12 fixed the client, not the callers).
 - **⚠ Gemini daily quota is EXHAUSTED** (all 21 keys, `All Gemini API keys exhausted
   or on cooldown`). Resets on Google's daily schedule. Consumed by this run's own
   verification streams. **Blocked until reset:** S10's behavioural check (does the
@@ -1144,22 +1172,15 @@ companion test fails if any entry stops being a real violation.
 user sees every user's rows. Same shape as H3; both need a migration + backfill
 and are **owner decisions**.
 
-**Next finding: the remaining FOUR silent-failure table entries**, in order:
-1. `legal.py:85` — `_log_audit` failure swallowed as a warning. This is the
-   **immutable compliance audit trail**; a legal audit log that silently drops
-   entries is worse than none, because it is relied on.
-2. `query.py:328` — history-load failure sets `attached_doc_ids = []`, which
-   silently WIDENS retrieval to unscoped mode instead of narrowing it.
-3. `auth.py:263` + `feedback.py:41` — `_get_redis()` returning None makes
-   registration IP limits, password-reset OTP storage and feedback limits fail
-   OPEN. **Partially addressed by S12** (the client is now real and logs at
-   ERROR), so re-verify before fixing: the remaining question is whether the
-   CALLERS should fail closed, which may be an owner decision for OTP.
-4. `hr.py:462` — embedding failure sets `similarity = 0.0`, producing a
-   real-looking blended score for a computation that never ran.
+**Next finding: S5**, then in order **S8, S9, S11, S14–S32**, then **F2–F9** and
+§11's MEDIUMs, **M1/M3/M4/M10/M11**, the §12 LOW list, and per-workspace
+certification (blocked on Gemini quota).
 
-Then: **S5, S8, S9, S11, S14–S32**, **F2–F9** and §11's MEDIUMs, **M1/M3/M4/M10/M11**,
-the §12 LOW list, and per-workspace certification (blocked on Gemini quota).
+**Pairs that MUST land in one commit** (from §7): **S5** — key rotation and
+`embedding_service` both mutate the same `genai` global; **S8** — embedding
+dimension agreement across two containers; **M1 + M11** — fix refresh and logout
+together or logout stops working. **S19 implies a re-index — plan it, don't
+discover it.**
 
 **S6/S7 are PARKED**
 as owner decisions (below). Then the **silent-failure table**

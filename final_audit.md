@@ -618,7 +618,7 @@ suspect until proven otherwise — the ratchet now does that automatically.
 
 ---
 
-## Silent failure — the ones hiding a real failure
+## ~~Silent failure — the ones hiding a real failure~~ — ALL 8 STRUCK
 
 22 swallow sites judged individually. Most are legitimate. These are not:
 
@@ -629,9 +629,9 @@ suspect until proven otherwise — the ratchet now does that automatically.
 | ~~`finance.py:505`~~ **STRUCK** | Parse failure produces `{}`; all 15 ratios `None`, returned as a normal result | Indistinguishable from *the document had no financials* |
 | ~~`research.py:228`~~ **STRUCK** | Citation failure falls back to `title = filename`, **formatted as a real APA/IEEE citation** | Fabricated bibliography |
 | ~~`legal.py:85`~~ **STRUCK** | `_log_audit` failure becomes a warning | This is the **immutable compliance audit trail** |
-| `query.py:328` | History load failure sets `attached_doc_ids = []` | Silently widens retrieval to unscoped mode |
-| `auth.py:263`, `feedback.py:41` | `_get_redis` returns `None`; callers no-op | Registration IP limits, password-reset OTP storage and feedback limits **fail open, silently** |
-| `hr.py:462` | Embedding failure sets `similarity = 0.0` | Returns a real-looking blended score for a computation that never ran |
+| ~~`query.py:328`~~ **STRUCK** | History load failure sets `attached_doc_ids = []` | Silently widens retrieval to unscoped mode |
+| ~~`auth.py:263`, `feedback.py:41`~~ **STRUCK** | `_get_redis` returns `None`; callers no-op | Registration IP limits, password-reset OTP storage and feedback limits **fail open, silently** |
+| ~~`hr.py:462`~~ **STRUCK** | Embedding failure sets `similarity = 0.0` | Returns a real-looking blended score for a computation that never ran |
 
 ---
 
