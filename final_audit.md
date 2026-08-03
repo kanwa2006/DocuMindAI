@@ -1032,6 +1032,37 @@ me against source before recording.** This section independently corroborates §
   must be fixed together or neither is fixed. Preferred fix: a per-call client so the key
   travels with the request rather than the process. Extra-care, concurrency-sensitive.
 
+**Addendum 2026-08-03 — PARKED (owner decision). The blast radius is FIVE sites,
+not two, across two process types.** Writing a containment ratchet found three
+writers this entry never listed:
+
+| Process | Sites |
+|---|---|
+| API | `llm_service.py` (the rotator) · `embedding_service.py` |
+| worker / beat | `embedding_service.py` · `automation/auto_health_check.py` · `automation/auto_key_rotation.py` · `automation/auto_model_check.py` |
+
+`auto_key_rotation._test_api_key` is the worst: it **deliberately iterates every
+key** calling `genai.configure` on each, and leaves the global set to whichever
+key it tested last. It is Beat-scheduled, so it fires on a timer unrelated to
+whatever else that worker is doing — and `embedding_service` shares the process.
+
+**Why parked rather than fixed:** the preferred fix is NOT EXPRESSIBLE in the
+installed SDK. Verified:
+
+```
+google.generativeai == 0.8.6
+inspect.signature(genai.GenerativeModel.__init__) ->
+    (self, model_name, safety_settings, generation_config, tools,
+     tool_config, system_instruction)
+```
+
+No `client`, no `api_key` — the key cannot travel with the request. The two
+available options are an owner decision; see OWNER DECISIONS in `PROGRESS.md`.
+
+Contained meanwhile by `tests/test_genai_global_configure_is_contained.py`, a
+ratchet whose allowlist may only shrink, plus a test that automatically unparks
+S5 if the SDK ever gains per-instance keying.
+
 ---
 
 ## S6 · The Trust Score is a near-constant — HIGH

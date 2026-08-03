@@ -1086,8 +1086,8 @@ start, never `in source`.**
 
 ## Continuation state (for the next session)
 
-- **Branch:** `security/redact-env-example` · **HEAD:** `40e4980` · working tree clean
-- **Backend suite:** **254 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
+- **Branch:** `security/redact-env-example` · **HEAD:** see `git log -1` · working tree clean
+- **Backend suite:** **257 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
   `npm run build` succeeds · all services healthy ·
   **the retrieval cache works for the first time** (52.8s cold → 2.2s warm, verified)
 
@@ -1172,7 +1172,8 @@ companion test fails if any entry stops being a real violation.
 user sees every user's rows. Same shape as H3; both need a migration + backfill
 and are **owner decisions**.
 
-**Next finding: S5**, then in order **S8, S9, S11, S14–S32**, then **F2–F9** and
+**Next finding: S8** (S5 is PARKED — owner decision, see below), then in order
+**S9, S11, S14–S32**, then **F2–F9** and
 §11's MEDIUMs, **M1/M3/M4/M10/M11**, the §12 LOW list, and per-workspace
 certification (blocked on Gemini quota).
 
@@ -1229,6 +1230,42 @@ renderer. Pairs that must land in a single commit: S5, S8, M1+M11, H2.
    what, or quarantine?* Lower severity than H3 (metrics and correction records,
    not resume PII), so my recommendation is to fold them into whatever migration
    H3 gets rather than shipping three separate ones.
+
+0b. **S5 — the Gemini key rotator cools the WRONG key under load. Architectural;
+   I cannot fix it without your call on the SDK.**
+   `genai.configure(api_key=…)` mutates PROCESS-GLOBAL state and
+   `google.generativeai` resolves its client from that global **at call time**.
+   With concurrency ≥2, request A configures key 3, request B configures key 7
+   before A's thread issues its HTTP call, and A goes out on key 7 — so a 429
+   cools key 3, a *healthy* key, for 300s while key 7 keeps being handed out.
+   Under load the pool degrades progressively and no log explains it.
+
+   **The register says two call sites. There are five, across two processes** —
+   `llm_service`, `embedding_service`, and three Beat-scheduled automation jobs.
+   `auto_key_rotation` deliberately walks EVERY key and leaves the global set to
+   the last one it tested, in the same process as `embedding_service`.
+
+   *Why I stopped:* the register's preferred fix — a per-call client — is not
+   expressible in the installed SDK. `GenerativeModel.__init__` takes no
+   `client` or `api_key` (verified against `google.generativeai==0.8.6`).
+
+   *The question:* which of these two?
+   - **(a) Migrate the 5 sites to `google.genai.Client(api_key=…)`.** Already
+     installed (2.5.0); the legacy package is END OF SUPPORT and says so on
+     import. Fixes the defect properly — the key travels with the request.
+     Cost: an SDK migration touching an extra-care, concurrency-sensitive file.
+   - **(b) Serialise configure→dispatch behind a lock.** No new dependency, but
+     the client is resolved *inside* the executor thread, so the lock must be
+     held across the whole HTTP call — which serialises all Gemini traffic and
+     would undo the concurrency S1 and S2 just restored.
+
+   *My recommendation:* **(a)**. (b) trades a correctness bug for a throughput
+   bug and contradicts work already landed in this run; and the legacy SDK is
+   EOL, so this migration is coming regardless.
+
+   *Contained meanwhile:* `tests/test_genai_global_configure_is_contained.py`
+   pins the writer set at those five (allowlist may only shrink), and
+   auto-unparks S5 if the SDK ever gains per-instance keying.
 
 1. **H3 — HR models have no `owner_id` at all. LIVE PII EXPOSURE, highest
    confidence in the register.** *(Partially closed 2026-08-03: `JobRole` already
