@@ -628,7 +628,7 @@ suspect until proven otherwise — the ratchet now does that automatically.
 | ~~`legal.py:390`~~ **STRUCK** | LLM parse failure produces `overall_risk_level: "Low"`, 200 | A parse error renders as *this contract is low risk* |
 | ~~`finance.py:505`~~ **STRUCK** | Parse failure produces `{}`; all 15 ratios `None`, returned as a normal result | Indistinguishable from *the document had no financials* |
 | ~~`research.py:228`~~ **STRUCK** | Citation failure falls back to `title = filename`, **formatted as a real APA/IEEE citation** | Fabricated bibliography |
-| `legal.py:85` | `_log_audit` failure becomes a warning | This is the **immutable compliance audit trail** |
+| ~~`legal.py:85`~~ **STRUCK** | `_log_audit` failure becomes a warning | This is the **immutable compliance audit trail** |
 | `query.py:328` | History load failure sets `attached_doc_ids = []` | Silently widens retrieval to unscoped mode |
 | `auth.py:263`, `feedback.py:41` | `_get_redis` returns `None`; callers no-op | Registration IP limits, password-reset OTP storage and feedback limits **fail open, silently** |
 | `hr.py:462` | Embedding failure sets `similarity = 0.0` | Returns a real-looking blended score for a computation that never ran |
