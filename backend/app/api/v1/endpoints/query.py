@@ -349,7 +349,33 @@ async def ask_question_stream(
                         f"{len(attached_doc_ids)} attached READY docs"
                     )
                 except Exception as exc:
-                    logger.warning(f"[query/stream] Failed to load history/docs: {exc}")
+                    # Silent-failure table / query.py:328 — this used to log a
+                    # warning and continue with `attached_doc_ids = []`.
+                    #
+                    # Empty means "this chat has no documents", which is a
+                    # LEGITIMATE state: grounding short-circuits, `is_grounded`
+                    # goes False, and the stream answers in `mode: "general"`
+                    # from the model's own knowledge. That is correct when the
+                    # chat really has no documents — and completely wrong when
+                    # it has documents we simply failed to read.
+                    #
+                    # The user asked a question about their contract and got a
+                    # general-knowledge answer, with nothing anywhere saying
+                    # their documents had not been consulted. Answering the
+                    # wrong question confidently is worse than not answering.
+                    logger.error(
+                        "[query/stream] could not load chat history/attached docs "
+                        "for session %s — refusing rather than answering "
+                        "ungrounded: %s",
+                        body.session_id, exc, exc_info=True,
+                    )
+                    _detail = (
+                        "Could not load this chat's documents, so the answer "
+                        "would not have been based on them. Nothing was sent "
+                        "to the model. Please retry."
+                    )
+                    yield f"event: error\ndata: {json.dumps({'detail': _detail})}\n\n"
+                    return
 
             # PART 4 — strengthen conversation context.
             # Old behaviour truncated to 300 chars per message AND fed raw
@@ -462,6 +488,11 @@ async def ask_question_stream(
                 # or no docs are attached, attached_doc_ids stays []; the
                 # GroundingService short-circuits to no-document mode (which
                 # the existing C10 logic below handles).
+                #
+                # Reaching here means the attached-document list is KNOWN, so
+                # an empty list genuinely means "this chat has no documents".
+                # A failure to load it now returns above instead of arriving
+                # here indistinguishable from the empty case.
                 doc_filter = attached_doc_ids if body.session_id else None
                 grounding_payload = await GroundingService.prepare_grounded_context(
                     db=db,
