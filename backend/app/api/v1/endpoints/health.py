@@ -102,7 +102,21 @@ async def detailed_health_check(
         "db": "unknown",
         "redis": "unknown",
         "api_keys": {},
+        # S8: which embedding model THIS process is using. The API container
+        # and the Celery worker load models independently; if they disagree,
+        # document vectors and query vectors are not comparable and their
+        # similarity is plausible garbage rather than an obvious error.
+        # Compare this value across processes when retrieval is inexplicably
+        # bad. Cheap and never raises — a diagnostic must not break /health.
+        "embedding": "unknown",
     }
+
+    try:
+        from app.services.embedding_service import embedding_service
+        status["embedding"] = embedding_service.signature
+    except Exception as e:
+        logger.error(f"[health] Embedding signature unavailable: {e}")
+        status["embedding"] = "error"
 
     try:
         await asyncio.to_thread(_db_ping)

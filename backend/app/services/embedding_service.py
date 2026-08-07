@@ -25,15 +25,60 @@ class LocalEmbeddingProvider(BaseEmbeddingProvider):
             self.model = SentenceTransformer(model_name)
             self._dim = self.model.get_sentence_embedding_dimension()
             logger.info(f"[embedding] Dimension: {self._dim}")
+            # S8: a model whose dimension disagrees with the column would write
+            # vectors that pgvector accepts only after padding/truncation, and
+            # every similarity computed against them is then meaningless while
+            # still looking like a number. Fail at load, not per document.
+            if self._dim != EMBEDDING_DIM:
+                raise RuntimeError(
+                    f"[embedding] {model_name} produces {self._dim}-dim vectors but "
+                    f"DocumentChunk.embedding is Vector({EMBEDDING_DIM}). Mixing "
+                    "dimensions silently corrupts the corpus — refusing to start."
+                )
             self._use_local = True
         except Exception as e:
             # M-4: the primary model being unavailable degrades every vector
             # in the corpus (768-dim padded Gemini vs 1024-dim bge-m3) — this
             # must be an alert-worthy signal, not an info-level shrug.
+            # S8: the padded-Gemini fallback is SAFE ONLY IF EVERY PROCESS IS IN
+            # THE SAME MODE. The API container and the Celery worker load models
+            # independently, and nothing reconciles them. A worker that fails to
+            # download bge-m3 while the API succeeds writes 768-dim vectors
+            # zero-padded to 1024, which are then compared against real 1024-dim
+            # bge-m3 query vectors. That cosine similarity is not zero — it is
+            # PLAUSIBLE GARBAGE. Retrieval returns confidently ranked irrelevant
+            # chunks, and every downstream signal that might have caught it
+            # (rerank scores, trust score) reports normally.
+            #
+            # Nothing can detect that after the fact without per-chunk
+            # provenance, so the corruption must be prevented at the source:
+            # in production this refuses rather than silently producing a corpus
+            # that cannot be told apart from a good one. Same precedent, same
+            # file — DummyEmbeddingProvider already refuses in production for
+            # exactly this reason (M-4).
+            from app.core.config import settings as _settings
+
+            if _settings.ENVIRONMENT == "production":
+                logger.critical(
+                    "[embedding] primary model %s unavailable (%s). REFUSING to fall "
+                    "back to zero-padded Gemini vectors in production: this process "
+                    "would write a corpus that silently disagrees with every other "
+                    "process's vectors (S8).",
+                    model_name, e,
+                )
+                raise RuntimeError(
+                    f"[embedding] primary model {model_name} unavailable ({e}) and the "
+                    "zero-padded Gemini fallback is disabled in production — it would "
+                    "corrupt the corpus undetectably. Fix model availability, then "
+                    "restart. Documents already embedded by this process must be "
+                    "re-indexed."
+                ) from e
+
             logger.error(
                 f"[embedding] DEGRADED MODE — primary model {model_name} unavailable ({e}). "
                 "Falling back to GeminiEmbeddingProvider (768-dim zero-padded to 1024; "
-                "mixing with bge-m3 vectors harms similarity)."
+                "mixing with bge-m3 vectors harms similarity). This is permitted ONLY "
+                f"because ENVIRONMENT={_settings.ENVIRONMENT!r} is not production."
             )
             self._use_local = False
             self._fallback = GeminiEmbeddingProvider()
@@ -162,6 +207,30 @@ class EmbeddingService:
         if not texts:
             return []
         return self.provider.embed_documents(texts)
+
+    @property
+    def signature(self) -> str:
+        """Which embedding model THIS process is actually using.
+
+        S8: the API container and the Celery worker load models independently
+        and nothing reconciles them. Vectors produced under different providers
+        are not comparable, but their cosine similarity is a plausible number
+        rather than an obvious error, so the mismatch is invisible in results.
+
+        Exposing the signature does not fix that — a full fix records
+        provenance per chunk and refuses at query time, which needs a migration
+        and a re-index (owner decision, see PROGRESS.md). It makes the mismatch
+        DIAGNOSABLE: compare this value across `/health` on the API and the
+        worker, and a disagreement is the answer to "why is retrieval bad?"
+        """
+        provider = self.provider
+        name = type(provider).__name__
+        if isinstance(provider, LocalEmbeddingProvider):
+            if getattr(provider, "_use_local", False):
+                return f"{name}:{provider.MODEL_NAME}:{provider._dim}"
+            # Degraded: this process writes padded Gemini vectors.
+            return f"{name}:FALLBACK->GeminiEmbeddingProvider:padded-{EMBEDDING_DIM}"
+        return f"{name}:{EMBEDDING_DIM}"
 
 
 # Singleton
