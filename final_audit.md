@@ -1011,7 +1011,7 @@ me against source before recording.** This section independently corroborates §
 
 ---
 
-## S5 · Key rotation attributes failures to the wrong key — HIGH
+## ~~S5 · Key rotation attributes failures to the wrong key — HIGH~~ — STRUCK
 
 **File:** `backend/app/services/llm_service.py:224, 343, 375`
 
@@ -1032,8 +1032,8 @@ me against source before recording.** This section independently corroborates §
   must be fixed together or neither is fixed. Preferred fix: a per-call client so the key
   travels with the request rather than the process. Extra-care, concurrency-sensitive.
 
-**Addendum 2026-08-03 — PARKED (owner decision). The blast radius is FIVE sites,
-not two, across two process types.** Writing a containment ratchet found three
+**Addendum — RESOLVED via Option A (owner decision). The blast radius was FIVE
+sites, not two, across two process types.** Writing a containment ratchet found three
 writers this entry never listed:
 
 | Process | Sites |
@@ -1046,8 +1046,8 @@ key** calling `genai.configure` on each, and leaves the global set to whichever
 key it tested last. It is Beat-scheduled, so it fires on a timer unrelated to
 whatever else that worker is doing — and `embedding_service` shares the process.
 
-**Why parked rather than fixed:** the preferred fix is NOT EXPRESSIBLE in the
-installed SDK. Verified:
+**Why the legacy SDK could not carry the fix** — the reason Option A was
+necessary rather than merely preferred. Verified:
 
 ```
 google.generativeai == 0.8.6
@@ -1056,12 +1056,24 @@ inspect.signature(genai.GenerativeModel.__init__) ->
      tool_config, system_instruction)
 ```
 
-No `client`, no `api_key` — the key cannot travel with the request. The two
-available options are an owner decision; see OWNER DECISIONS in `PROGRESS.md`.
+No `client`, no `api_key` — the key cannot travel with the request.
 
-Contained meanwhile by `tests/test_genai_global_configure_is_contained.py`, a
-ratchet whose allowlist may only shrink, plus a test that automatically unparks
-S5 if the SDK ever gains per-instance keying.
+**Resolved (`8270866`).** All five sites migrated to
+`google.genai.Client(api_key=...)`, which binds the key to the CLIENT. One
+immutable client per key — construction measured at ~2.5 s, so cached and
+warmed at startup rather than built per request — with rotation, cooldown and
+retry in `services/gemini_client.py`. `google-generativeai` is dropped from
+both requirements files: nothing imports it and it is end-of-support.
+
+Verified at runtime: 21 clients warmed, zero `Configured Gemini with key` log
+lines, a real grounded/cited streaming answer, and 3 concurrent streams with no
+spurious cooldowns.
+
+Guarded by `tests/test_gemini_key_isolation.py` (a 429 must cool the key that
+SERVED the call; the key is fixed once streaming begins; status codes beat
+substrings) and `tests/test_genai_global_configure_is_contained.py`, whose
+allowlist is now EMPTY — that emptiness is the assertion. Incidentally closes
+S17: the provider no longer keeps a second cooldown store.
 
 ---
 

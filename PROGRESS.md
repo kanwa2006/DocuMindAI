@@ -1087,7 +1087,7 @@ start, never `in source`.**
 ## Continuation state (for the next session)
 
 - **Branch:** `security/redact-env-example` · **HEAD:** see `git log -1` · working tree clean
-- **Backend suite:** **257 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
+- **Backend suite:** **264 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
   `npm run build` succeeds · all services healthy ·
   **the retrieval cache works for the first time** (52.8s cold → 2.2s warm, verified)
 
@@ -1172,14 +1172,13 @@ companion test fails if any entry stops being a real violation.
 user sees every user's rows. Same shape as H3; both need a migration + backfill
 and are **owner decisions**.
 
-**Next finding: S8** (S5 is PARKED — owner decision, see below), then in order
-**S9, S11, S14–S32**, then **F2–F9** and
+**Next finding: S8**, then in order **S9, S11, S14–S32**, then **F2–F9** and
 §11's MEDIUMs, **M1/M3/M4/M10/M11**, the §12 LOW list, and per-workspace
 certification (blocked on Gemini quota).
 
-**Pairs that MUST land in one commit** (from §7): **S5** — key rotation and
-`embedding_service` both mutate the same `genai` global; **S8** — embedding
-dimension agreement across two containers; **M1 + M11** — fix refresh and logout
+**Pairs that MUST land in one commit** (from §7): **S8** — embedding
+dimension agreement across two containers; (**S5** is DONE — it needed five
+files together, not the two the register listed); **M1 + M11** — fix refresh and logout
 together or logout stops working. **S19 implies a re-index — plan it, don't
 discover it.**
 
@@ -1188,7 +1187,7 @@ as owner decisions (below). Then the **silent-failure table**
 (`study.py:235` fabricated quiz answers, `legal.py:390` "Low" on a parse
 failure, `finance.py:505`, `research.py:228` fabricated bibliography,
 `legal.py:85` audit-trail swallow, `query.py:328`, `auth.py:263` +
-`feedback.py:41` fail-open limits, `hr.py:462`), then S5/S8/S9/S11/S14–S32,
+`feedback.py:41` fail-open limits, `hr.py:462`), then S8/S9/S11/S14–S32,
 F2–F9, and per-workspace certification.
 
 **Reusable infrastructure this run added — use it, don't re-derive it:**
@@ -1204,7 +1203,7 @@ F2–F9, and per-workspace certification.
 H9 → one shared `get_owned_document()`; H7 → `legal.py:54` and `finance.py:300`
 become one shared helper (both currently read chunk text with no owner check);
 F6+F14 → one `chatUrl(workspace, chatId)` helper; F7 → share the message
-renderer. Pairs that must land in a single commit: S5, S8, M1+M11, H2.
+renderer. Pairs that must land in a single commit: S8, M1+M11, H2.
 **S19 implies a re-index — plan it, don't discover it.**
 
 **Do NOT re-derive these — established this session:**
@@ -1220,6 +1219,51 @@ renderer. Pairs that must land in a single commit: S5, S8, M1+M11, H2.
   statement — `select(Model)` lists every column, so a whole-statement match
   cannot tell a selected column from a predicate.
 
+### 2026-08-07 — S5 RESOLVED (owner chose Option A) (`8270866`)
+
+**The Gemini key is now bound to a CLIENT, not to process-global SDK state.**
+`genai.configure()` mutated a global the SDK read at CALL time, so under
+concurrency request A's HTTP call could go out on request B's key — and a 429
+then cooled a HEALTHY key for 300s while the exhausted one kept being handed
+out.
+
+Migrated all **five** writers in one commit (they share the global, so a subset
+fixes nothing): `llm_service`, `embedding_service`, `auto_health_check`,
+`auto_key_rotation`, `auto_model_check`. New `services/gemini_client.py` owns
+key selection, per-key clients, retry, cooldown and streaming.
+
+**Clients are cached per key, not built per request — that is a measurement:**
+`google.genai.Client()` costs **~2.5 s** to construct. Per-request creation
+would put that on every LLM call. The property that mattered is preserved: a
+client's `api_key` is immutable, so there is no shared mutable state to race
+on. The pool is warmed at startup (21 clients).
+
+**Incidentally closed S17** — the provider no longer holds `current_key_idx` or
+its own `cooldowns` dict, so the second cooldown store that disagreed with the
+rotator's is gone.
+
+**Runtime evidence:** `Gemini clients warmed: 21` · **0** `Configured Gemini
+with key` log lines (was one per call) · a real grounded, cited streaming
+answer · **3 concurrent streams** all reaching `done` with no spurious
+cooldowns.
+
+**Two things this caught that the suite alone would not have:**
+1. `google-genai` was in the local venv but **not in the container image**, so
+   the suite was green while the running app logged
+   `could not build client ... not installed` for all 21 keys. Both
+   requirements files now pin `google-genai` and DROP `google-generativeai`
+   (nothing imports it; it is end-of-support).
+2. The S1 guard patched `_execute_with_rotation`, which no longer exists. With
+   `raising=False` that patch silently did nothing and the test started making
+   **real network calls** — passing for the wrong reason. It now patches the
+   client pool, the seam production code actually uses.
+
+**Also restored:** S1's per-chunk `LLM_TIMEOUT_SECONDS` bound, which I dropped
+in the first draft of the rewrite. A previously-fixed finding must not regress
+inside an unrelated migration.
+
+---
+
 ### OWNER DECISIONS — parked, need your call
 
 0. **N1 / N2 — two more models with no ownership column** (found 2026-08-03 by the
@@ -1230,42 +1274,6 @@ renderer. Pairs that must land in a single commit: S5, S8, M1+M11, H2.
    what, or quarantine?* Lower severity than H3 (metrics and correction records,
    not resume PII), so my recommendation is to fold them into whatever migration
    H3 gets rather than shipping three separate ones.
-
-0b. **S5 — the Gemini key rotator cools the WRONG key under load. Architectural;
-   I cannot fix it without your call on the SDK.**
-   `genai.configure(api_key=…)` mutates PROCESS-GLOBAL state and
-   `google.generativeai` resolves its client from that global **at call time**.
-   With concurrency ≥2, request A configures key 3, request B configures key 7
-   before A's thread issues its HTTP call, and A goes out on key 7 — so a 429
-   cools key 3, a *healthy* key, for 300s while key 7 keeps being handed out.
-   Under load the pool degrades progressively and no log explains it.
-
-   **The register says two call sites. There are five, across two processes** —
-   `llm_service`, `embedding_service`, and three Beat-scheduled automation jobs.
-   `auto_key_rotation` deliberately walks EVERY key and leaves the global set to
-   the last one it tested, in the same process as `embedding_service`.
-
-   *Why I stopped:* the register's preferred fix — a per-call client — is not
-   expressible in the installed SDK. `GenerativeModel.__init__` takes no
-   `client` or `api_key` (verified against `google.generativeai==0.8.6`).
-
-   *The question:* which of these two?
-   - **(a) Migrate the 5 sites to `google.genai.Client(api_key=…)`.** Already
-     installed (2.5.0); the legacy package is END OF SUPPORT and says so on
-     import. Fixes the defect properly — the key travels with the request.
-     Cost: an SDK migration touching an extra-care, concurrency-sensitive file.
-   - **(b) Serialise configure→dispatch behind a lock.** No new dependency, but
-     the client is resolved *inside* the executor thread, so the lock must be
-     held across the whole HTTP call — which serialises all Gemini traffic and
-     would undo the concurrency S1 and S2 just restored.
-
-   *My recommendation:* **(a)**. (b) trades a correctness bug for a throughput
-   bug and contradicts work already landed in this run; and the legacy SDK is
-   EOL, so this migration is coming regardless.
-
-   *Contained meanwhile:* `tests/test_genai_global_configure_is_contained.py`
-   pins the writer set at those five (allowlist may only shrink), and
-   auto-unparks S5 if the SDK ever gains per-instance keying.
 
 1. **H3 — HR models have no `owner_id` at all. LIVE PII EXPOSURE, highest
    confidence in the register.** *(Partially closed 2026-08-03: `JobRole` already
