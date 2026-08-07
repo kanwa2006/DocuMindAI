@@ -1119,7 +1119,7 @@ S17: the provider no longer keeps a second cooldown store.
 
 ---
 
-## S8 · Silent corpus corruption across containers — HIGH
+## ~~S8 · Silent corpus corruption across containers — HIGH~~ — STRUCK (partial: see below)
 
 **File:** `backend/app/services/embedding_service.py:78`
 
@@ -1137,6 +1137,26 @@ S17: the provider no longer keeps a second cooldown store.
 - **Debug — blast radius: owner-decision-required.** Record the producing model on the chunk
   and refuse at query time on mismatch; minimum viable is to assert `self._dim == EMBEDDING_DIM`
   and fail startup. Chunking/embedding changes imply a re-index.
+
+**Resolved (`a131e07`) — the minimum viable fix, plus prevention at the source.**
+Two changes, both in `embedding_service.py`:
+
+1. A model whose dimension disagrees with `Vector(EMBEDDING_DIM)` now fails at
+   LOAD. `self._dim` was read and logged but never checked.
+2. The zero-padded Gemini fallback **refuses in production**. Same precedent as
+   `DummyEmbeddingProvider` in the same file (M-4): a process that would write a
+   corpus nothing else can compare against must stop, not degrade quietly.
+
+The mismatch is also now DIAGNOSABLE: `EmbeddingService.signature` reports the
+model this process actually uses, exposed on `/health/detailed`. Healthy and
+degraded processes report DIFFERENT values. Verified across both containers —
+API and worker both `LocalEmbeddingProvider:BAAI/bge-m3:1024`, so the existing
+corpus is coherent.
+
+**STILL OPEN (owner decision):** per-chunk provenance — record the producing
+model on `DocumentChunk` and refuse at query time on mismatch. That needs an
+Alembic migration and a **full re-index**, so it is listed under OWNER
+DECISIONS in `PROGRESS.md` rather than done here.
 
 ---
 

@@ -1087,7 +1087,7 @@ start, never `in source`.**
 ## Continuation state (for the next session)
 
 - **Branch:** `security/redact-env-example` · **HEAD:** see `git log -1` · working tree clean
-- **Backend suite:** **264 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
+- **Backend suite:** **270 passed / 0 failed** (baseline was 131) · `tsc --noEmit` clean ·
   `npm run build` succeeds · all services healthy ·
   **the retrieval cache works for the first time** (52.8s cold → 2.2s warm, verified)
 
@@ -1172,13 +1172,11 @@ companion test fails if any entry stops being a real violation.
 user sees every user's rows. Same shape as H3; both need a migration + backfill
 and are **owner decisions**.
 
-**Next finding: S8**, then in order **S9, S11, S14–S32**, then **F2–F9** and
+**Next finding: S9**, then in order **S11, S14–S32**, then **F2–F9** and
 §11's MEDIUMs, **M1/M3/M4/M10/M11**, the §12 LOW list, and per-workspace
 certification (blocked on Gemini quota).
 
-**Pairs that MUST land in one commit** (from §7): **S8** — embedding
-dimension agreement across two containers; (**S5** is DONE — it needed five
-files together, not the two the register listed); **M1 + M11** — fix refresh and logout
+**Pairs that MUST land in one commit** (from §7): (**S5** and **S8** are DONE); **M1 + M11** — fix refresh and logout
 together or logout stops working. **S19 implies a re-index — plan it, don't
 discover it.**
 
@@ -1203,7 +1201,7 @@ F2–F9, and per-workspace certification.
 H9 → one shared `get_owned_document()`; H7 → `legal.py:54` and `finance.py:300`
 become one shared helper (both currently read chunk text with no owner check);
 F6+F14 → one `chatUrl(workspace, chatId)` helper; F7 → share the message
-renderer. Pairs that must land in a single commit: S8, M1+M11, H2.
+renderer. Pairs that must land in a single commit: M1+M11, H2.
 **S19 implies a re-index — plan it, don't discover it.**
 
 **Do NOT re-derive these — established this session:**
@@ -1264,7 +1262,41 @@ inside an unrelated migration.
 
 ---
 
+### 2026-08-07 (cont.) — S8 closed at the source (`a131e07`)
+
+**A process must not write vectors no other process can compare against.** When
+bge-m3 was unavailable the provider emitted 768-dim Gemini vectors zero-padded
+to 1024 — safe only if EVERY process is in the same mode, which nothing
+enforced. A worker in fallback mode while the API is healthy produces a corpus
+whose similarity scores are **plausible garbage**: not zero, not an error, just
+confidently wrong. The reranker scores it, the trust score says MEDIUM.
+
+Fixed at the source, following the M-4 precedent already in that file: the
+padded fallback now **refuses in production**, and a model whose dimension
+disagrees with the column fails at LOAD (`self._dim` was read and logged but
+never checked). Outside production the fallback still works, so local
+development is unaffected.
+
+**Now diagnosable:** `EmbeddingService.signature` on `/health/detailed`.
+Verified across both containers — API and worker both report
+`LocalEmbeddingProvider:BAAI/bge-m3:1024`, so the existing corpus is coherent.
+Healthy and degraded processes report DIFFERENT signatures, which is the point.
+
+---
+
 ### OWNER DECISIONS — parked, need your call
+
+0a. **S8 (remaining half) — per-chunk embedding provenance.** The source is now
+   safe (a process that would corrupt the corpus refuses in production) and a
+   mismatch is diagnosable via `/health/detailed`. What is NOT possible is
+   detecting an ALREADY-CORRUPTED corpus: nothing records which model produced
+   a given chunk, so mixed-provenance vectors written before this fix cannot be
+   identified. *The question:* add `embedding_model` to `DocumentChunk` and
+   refuse at query time on mismatch? That needs an Alembic migration **and a
+   full re-index**. *My recommendation:* do it when the next re-index is
+   scheduled anyway (S19 also implies one) rather than forcing one for this
+   alone — the source is already closed, so the exposure is historical, not
+   ongoing.
 
 0. **N1 / N2 — two more models with no ownership column** (found 2026-08-03 by the
    class sweep, not in the original audit). `BenchmarkRun` (`benchmark.py:56`) and
