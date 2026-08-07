@@ -64,7 +64,10 @@ razorpay>=1.4.1
 # ── Previously missing packages (BUG-002) ────────────────────────────────────
 # These packages are imported throughout the codebase but were absent from
 # requirements.txt, causing fresh installs to fail at runtime.
-google-generativeai>=0.8.0   # llm_service.py + embedding_service.py
+google-genai>=2.5.0          # S5: per-key clients. REPLACED google-generativeai,
+                             # which is END OF SUPPORT and had no way to bind an
+                             # api_key to a request — every call read a process
+                             # global, so a 429 cooled the wrong key under load.
 sentry-sdk>=1.40.0           # main.py Sentry error tracking
 # aioredis REMOVED (S12): never installed here, and 2.0.1 is broken on
 # Python 3.11 with "duplicate base class TimeoutError". Deprecated since

@@ -113,6 +113,60 @@ class GeminiKeyRotator:
             logger.warning(f"All API keys cooling. Waiting {wait_time:.1f}s...")
             time.sleep(wait_time)
 
+    def try_get_key(self) -> Optional[str]:
+        """Non-blocking sibling of `get_key()`: a healthy key, or None.
+
+        S5: `get_key()` waits with `time.sleep()` when every key is cooling.
+        That is correct for the synchronous callers (Celery tasks, automation
+        jobs) and is the M-9 out-of-lock wait, so it is left exactly as is.
+        It is NOT usable from the async request path, where sleeping blocks the
+        event loop for every other request — the same class of defect as S1/S2.
+
+        Async callers use this instead and await `seconds_until_next_key()`.
+        """
+        with self._lock:
+            now = time.time()
+            available = [
+                k for k in self._keys
+                if k not in self._bad_keys and self._cooling_keys.get(k, 0) <= now
+            ]
+            if not available:
+                return None
+            # Round-robin so concurrent requests spread across healthy keys
+            # rather than all piling onto the first one.
+            for _ in range(len(self._keys)):
+                key = next(self._cycle)
+                if key in available:
+                    return key
+            return available[0]
+
+    def seconds_until_next_key(self) -> Optional[float]:
+        """How long until some key leaves cooldown, or None if none ever will.
+
+        None means every key is permanently invalid (403) — waiting cannot
+        help, so callers must fail rather than spin.
+        """
+        with self._lock:
+            usable = [k for k in self._keys if k not in self._bad_keys]
+            if not usable:
+                return None
+            now = time.time()
+            waits = [max(0.0, self._cooling_keys.get(k, 0) - now) for k in usable]
+            return (min(waits) + 0.5) if waits else 0.0
+
+    def key_index(self, key: str) -> int:
+        """Stable index for logging. Never logs or returns the key itself."""
+        try:
+            return self._keys.index(key)
+        except ValueError:
+            return -1
+
+    @property
+    def keys(self) -> List[str]:
+        """Snapshot of configured keys, for building one client per key."""
+        with self._lock:
+            return list(self._keys)
+
     def report_rate_limit(self, key: str, retry_after_seconds: int = 60):
         """Call this when Gemini returns 429. Cools down the key."""
         with self._lock:

@@ -30,12 +30,17 @@ def check_model_status():
     admin = settings.ADMIN_EMAIL
 
     try:
-        import google.generativeai as genai
+        # S5: per-key client — see gemini_client.py.
+        from google.genai import types as genai_types
+        from app.services.gemini_client import get_client_pool
         from app.services.llm_key_rotation import get_key_rotator
+
         key = get_key_rotator().get_key()
-        genai.configure(api_key=key)
-        model = genai.GenerativeModel(current_model)
-        model.generate_content("test", generation_config={"max_output_tokens": 1})
+        get_client_pool().client_for(key).models.generate_content(
+            model=current_model,
+            contents="test",
+            config=genai_types.GenerateContentConfig(max_output_tokens=1),
+        )
         _redis.delete(MODEL_OVERRIDE_KEY)
         logger.info("[model_check] %s is healthy", current_model)
 

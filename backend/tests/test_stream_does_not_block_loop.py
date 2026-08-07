@@ -1,22 +1,28 @@
-"""Regression guard for final_audit S1.
+"""Regression guard for final_audit S1, retargeted after the S5 migration.
 
-`GeminiLLMProvider.generate_stream` consumed the Gemini stream with a
+**S1 (original):** `generate_stream` consumed the Gemini stream with a
 synchronous `for chunk in stream_response:` inside an `async def`. Only the
 call that OBTAINED the stream was wrapped in `run_in_executor`; the iteration
-that performs the network I/O was left on the event loop thread.
+that performed the network I/O ran on the event loop thread, so one streaming
+user froze the whole worker.
 
-The returned object is a blocking generator whose `__next__` waits on the
-network, so every chunk froze the entire worker — other requests, other SSE
-streams, and the health check with them. This would be misdiagnosed as "Gemini
-is slow" because the symptom appears everywhere except the code responsible.
+**Why this file changed:** S5 replaced `google.generativeai` with
+`google.genai`, whose `client.aio.*` API is natively async. There is no longer
+a blocking iterator to pump through an executor — the structure that caused S1
+is gone rather than fixed in place.
 
-The test measures the property: while a stream whose chunks each block for
-BLOCK_S is being consumed, an independent coroutine must continue to make
-progress on the loop. If iteration blocks the loop, that heartbeat starves.
+That makes it more important, not less, that this guard tests the PROPERTY
+(consuming a stream leaves the event loop free) rather than the old mechanism
+(an executor pump). A future edit that reintroduces a synchronous `for` over a
+blocking iterator would recreate S1 exactly, and this file must fail if it
+does.
 
-Second test: a chunk that never arrives must not hang forever — generate_stream
-had no timeout at all, while `_provider_generate` enforces
-`LLM_TIMEOUT_SECONDS`.
+The previous version of this test patched `provider._execute_with_rotation`,
+which no longer exists. With `raising=False` that patch silently did nothing
+and the test began issuing REAL network calls — passing for the wrong reason
+until the assertions happened to disagree with a live Gemini reply. Tests are
+patched against the pool now, which is the seam the production code actually
+uses.
 """
 import asyncio
 import time
@@ -24,59 +30,70 @@ import time
 import pytest
 
 from app.core.config import settings
-from app.services import llm_service as llm_module
+from app.services import gemini_client
 from app.services.llm_service import GeminiLLMProvider
 
-BLOCK_S = 0.15
+CHUNK_DELAY = 0.15
 N_CHUNKS = 4
 
 
 class _Chunk:
-    """Minimal stand-in for a Gemini stream chunk."""
-
     def __init__(self, text):
         self.text = text
         self.candidates = []
 
 
-class _BlockingStream:
-    """A sync generator whose every step blocks the calling thread."""
+class _AsyncStream:
+    """An async stream whose chunks arrive slowly, WITHOUT blocking the loop."""
 
-    def __init__(self, n, block_s, stall_forever_at=None):
-        self._n = n
-        self._block_s = block_s
-        self._stall_at = stall_forever_at
-        self._i = 0
+    def __init__(self, n, delay, stall_at=None):
+        self._n, self._delay, self._stall_at, self._i = n, delay, stall_at, 0
 
-    def __iter__(self):
+    def __aiter__(self):
         return self
 
-    def __next__(self):
+    async def __anext__(self):
         if self._stall_at is not None and self._i == self._stall_at:
-            time.sleep(30)  # never arrives within the test's patched timeout
+            await asyncio.sleep(30)  # never arrives within the patched timeout
         if self._i >= self._n:
-            raise StopIteration
+            raise StopAsyncIteration
         self._i += 1
-        time.sleep(self._block_s)
+        await asyncio.sleep(self._delay)
         return _Chunk(f"tok{self._i} ")
 
 
-def _provider_with_stream(monkeypatch, stream):
-    provider = GeminiLLMProvider.__new__(GeminiLLMProvider)
+class _FakeModels:
+    def __init__(self, stream_factory):
+        self._stream_factory = stream_factory
 
-    async def _fake_execute(run):
-        return stream
+    async def generate_content_stream(self, **kwargs):
+        return self._stream_factory()
 
-    monkeypatch.setattr(provider, "_execute_with_rotation", _fake_execute, raising=False)
-    monkeypatch.setattr(llm_module, "genai", object(), raising=False)
-    return provider
+
+class _FakeClient:
+    def __init__(self, stream_factory):
+        self.aio = type("aio", (), {"models": _FakeModels(stream_factory)})()
+
+
+@pytest.fixture
+def fake_pool(monkeypatch):
+    """Patch the client pool — the seam production code actually uses."""
+
+    def _install(stream_factory):
+        class _Pool:
+            def client_for(self, key):
+                return _FakeClient(stream_factory)
+
+        monkeypatch.setattr(gemini_client, "get_client_pool", lambda: _Pool())
+        return _Pool()
+
+    return _install
 
 
 @pytest.mark.asyncio
-async def test_stream_iteration_leaves_the_event_loop_free(monkeypatch):
-    provider = _provider_with_stream(
-        monkeypatch, _BlockingStream(N_CHUNKS, BLOCK_S)
-    )
+async def test_stream_consumption_leaves_the_event_loop_free(fake_pool):
+    fake_pool(lambda: _AsyncStream(N_CHUNKS, CHUNK_DELAY))
+    provider = GeminiLLMProvider()
 
     heartbeats = 0
     stop = False
@@ -87,40 +104,63 @@ async def test_stream_iteration_leaves_the_event_loop_free(monkeypatch):
             heartbeats += 1
             await asyncio.sleep(0.01)
 
-    hb_task = asyncio.create_task(heartbeat())
+    hb = asyncio.create_task(heartbeat())
     tokens = [t async for t in provider.generate_stream("sys", "user")]
     stop = True
-    await hb_task
+    await hb
 
     assert len(tokens) == N_CHUNKS, f"expected {N_CHUNKS} tokens, got {tokens}"
 
-    # Blocking iteration pins the loop for N_CHUNKS * BLOCK_S with the
-    # heartbeat unable to run; a properly offloaded pump lets it tick freely.
-    total_blocked = N_CHUNKS * BLOCK_S
+    total_blocked = N_CHUNKS * CHUNK_DELAY
     expected_ticks = total_blocked / 0.01
     assert heartbeats > expected_ticks * 0.3, (
-        f"only {heartbeats} heartbeats while consuming a stream that blocks "
-        f"{total_blocked:.2f}s in total. The event loop was starved, which "
-        "means stream iteration is running on the loop thread instead of in an "
-        "executor (S1)."
+        f"only {heartbeats} heartbeats while consuming a stream that takes "
+        f"{total_blocked:.2f}s. The event loop was starved, which means stream "
+        "iteration is blocking the loop thread again (S1)."
     )
 
 
 @pytest.mark.asyncio
-async def test_a_stalled_chunk_does_not_hang_forever(monkeypatch):
+async def test_a_stalled_chunk_does_not_hang_forever(fake_pool, monkeypatch):
+    """S1's second half: generate_stream had NO timeout at all."""
     monkeypatch.setattr(settings, "LLM_TIMEOUT_SECONDS", 1, raising=False)
-    provider = _provider_with_stream(
-        monkeypatch, _BlockingStream(N_CHUNKS, 0.01, stall_forever_at=2)
-    )
+    fake_pool(lambda: _AsyncStream(N_CHUNKS, 0.01, stall_at=2))
+    provider = GeminiLLMProvider()
 
     started = time.perf_counter()
     tokens = [t async for t in provider.generate_stream("sys", "user")]
     elapsed = time.perf_counter() - started
 
     assert elapsed < 10, (
-        f"a stalled stream took {elapsed:.1f}s to give up. generate_stream must "
-        "bound each chunk by LLM_TIMEOUT_SECONDS, or a hung upstream holds the "
-        "request open indefinitely (S1)."
+        f"a stalled stream took {elapsed:.1f}s to give up. Each chunk must be "
+        "bounded by LLM_TIMEOUT_SECONDS, or a hung upstream holds the request "
+        "open indefinitely (S1)."
     )
-    # It should still have yielded whatever arrived before the stall.
     assert len(tokens) == 2, f"expected the 2 pre-stall tokens, got {tokens}"
+
+
+def test_stream_iteration_is_not_synchronous():
+    """Structural backstop: a sync `for` over the stream would recreate S1."""
+    import ast
+    import inspect
+    import textwrap
+
+    src = textwrap.dedent(inspect.getsource(gemini_client.stream_with_rotation))
+    tree = ast.parse(src)
+
+    # Only a sync `for` OVER THE STREAM matters. `for _ in range(...)` is the
+    # retry loop and is correct — the first version of this check flagged it.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.For):  # ast.AsyncFor is a distinct node
+            continue
+        target = node.iter
+        name = (
+            target.id if isinstance(target, ast.Name)
+            else getattr(target, "attr", None)
+        )
+        if name in {"stream", "iterator", "response", "stream_response"}:
+            raise AssertionError(
+                f"stream_with_rotation iterates `{name}` with a SYNCHRONOUS "
+                "`for`. If that iterator does network I/O it blocks the event "
+                "loop for every other request — this is S1 exactly."
+            )

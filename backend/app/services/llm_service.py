@@ -7,12 +7,23 @@ from typing import Dict, Any, AsyncGenerator, Type, TypeVar, List
 from pydantic import BaseModel, ValidationError
 from app.core.config import settings
 from app.services.llm_key_rotation import get_key_rotator
+from app.services.gemini_client import (
+    ModelUnavailableForAllKeys,
+    get_client_pool,
+    run_with_rotation,
+    stream_with_rotation,
+)
 
+# S5: the legacy `google.generativeai` SDK is gone from this module. It had no
+# way to bind a key to a request — `GenerativeModel.__init__` accepts no
+# `client` or `api_key` — so every call resolved a PROCESS-GLOBAL default at
+# call time. `google.genai` binds the key to the client instead.
 try:
-    import google.generativeai as genai
-    from google.api_core.exceptions import ResourceExhausted, InternalServerError, ServiceUnavailable, TooManyRequests
-except ImportError:
-    genai = None
+    from google import genai as google_genai
+    from google.genai import types as genai_types
+except ImportError:  # pragma: no cover - surfaced loudly at first use
+    google_genai = None
+    genai_types = None
 
 logger = logging.getLogger(__name__)
 
@@ -209,234 +220,103 @@ class DummyLLMProvider(BaseLLMProvider):
         yield "and operational (test.pdf, Page 1)."
 
 class GeminiLLMProvider(BaseLLMProvider):
+    """Gemini via PER-KEY clients — no global SDK configuration (S5).
+
+    The previous implementation called `genai.configure(api_key=...)`, which
+    mutated process-global state that the SDK read at call time. Under
+    concurrency a request's HTTP call could go out on another request's key, so
+    a 429 cooled a healthy key for 300s while the exhausted one kept being
+    handed out.
+
+    Key selection, retry, cooldown and recovery now live in
+    `services/gemini_client.py`; the key travels with the client, so no request
+    can affect another's. This class is stateless with respect to keys — it
+    holds no index and no cooldown map, which also removes the second cooldown
+    store that disagreed with the rotator's (S17).
+    """
+
     def __init__(self):
-        if not genai:
-            logger.warning("google.generativeai not installed. Gemini provider will fail.")
-            
-        self._rotator = get_key_rotator()
-        self.keys = self._rotator._keys
-        if not self.keys:
+        if google_genai is None:
+            logger.warning("google-genai not installed. Gemini provider will fail.")
+        # Fail fast and loudly if there are no keys at all, exactly as before.
+        if not get_key_rotator().keys:
             raise ValueError("No Gemini keys found in configuration.")
 
-        self.current_key_idx = 0
-        self.cooldowns: Dict[str, float] = {key: 0.0 for key in self.keys}
-
-        self._configure_current_key()
-        
-    def _configure_current_key(self):
-        key = self.keys[self.current_key_idx]
-        if genai:
-            genai.configure(api_key=key)
-        safe_key = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "***"
-        logger.info(f"Configured Gemini with key {self.current_key_idx} ({safe_key})")
-        
-    def _rotate_key(self):
-        original_idx = self.current_key_idx
-        for _ in range(len(self.keys)):
-            self.current_key_idx = (self.current_key_idx + 1) % len(self.keys)
-            key = self.keys[self.current_key_idx]
-            if time.time() > self.cooldowns[key]:
-                self._configure_current_key()
-                return
-        
-        # If all keys are on cooldown, just advance to the next and wait if necessary
-        self.current_key_idx = (original_idx + 1) % len(self.keys)
-        self._configure_current_key()
-        
-    def _mark_key_failed(self, cooldown_seconds: float = 60.0):
-        key = self.keys[self.current_key_idx]
-        self.cooldowns[key] = time.time() + cooldown_seconds
-        safe_key = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "***"
-        logger.warning(f"Key {self.current_key_idx} ({safe_key}) marked failed. Cooldown for {cooldown_seconds}s.")
-        self._rotator.report_rate_limit(key, retry_after_seconds=int(cooldown_seconds))
-        self._rotate_key()
-
-    def _mark_key_invalid(self):
-        key = self.keys[self.current_key_idx]
-        self.cooldowns[key] = float("inf")
-        safe_key = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "***"
-        logger.error(f"Key {self.current_key_idx} ({safe_key}) is invalid (403). Permanently skipping.")
-        self._rotator.report_invalid_key(key)
-        self._rotate_key()
-
-    # Substrings that identify "this API key cannot use this model" rather than
-    # "this key is broken". Google returns 404 for a model that is retired, not
-    # yet enabled for the project, or restricted to existing users — and that
-    # verdict is PER KEY: "no longer available to new users" means older keys
-    # in the pool may still succeed. Verified in production: 30 consecutive
-    # failures all came from key 20 of 21 while other keys were never tried.
-    _MODEL_UNAVAILABLE_MARKERS = (
-        "404",
-        "not found for api version",
-        "no longer available",
-        "is not supported for generatecontent",
-    )
-
-    async def _execute_with_rotation(self, operation, *args, **kwargs):
-        max_attempts = len(self.keys) * 2
-        # Keys that rejected THIS model. Tracked per call so a model which is
-        # genuinely retired everywhere fails fast with a precise error instead
-        # of silently looping, while a per-key restriction is survivable.
-        keys_rejecting_model: set[int] = set()
-        for attempt in range(max_attempts):
-            key = self.keys[self.current_key_idx]
-            # Check cooldown
-            if time.time() < self.cooldowns[key]:
-                self._rotate_key()
-                continue
-                
-            try:
-                # Wrap sync call in executor if operation is synchronous.
-                # genai's generate_content is synchronous or async depending on the method.
-                # Assuming `operation` is an async function or we `await` it.
-                return await operation(*args, **kwargs)
-            except Exception as e:
-                error_msg = str(e).lower()
-                is_rate_limit = isinstance(e, (ResourceExhausted, TooManyRequests)) or "429" in error_msg or "quota" in error_msg
-                is_server_error = isinstance(e, (InternalServerError, ServiceUnavailable)) or "500" in error_msg or "503" in error_msg
-                
-                is_invalid_key = "403" in error_msg or "api_key_invalid" in error_msg or "INVALID_API_KEY" in str(e)
-
-                if is_rate_limit:
-                    logger.warning(f"Rate limit / Quota exhaustion on key {self.current_key_idx}.")
-                    self._mark_key_failed(cooldown_seconds=300.0) # 5 min cooldown for quota
-                elif is_invalid_key:
-                    self._mark_key_invalid()
-                elif is_server_error:
-                    logger.warning(f"Temporary server error on key {self.current_key_idx}.")
-                    self._mark_key_failed(cooldown_seconds=30.0) # 30 sec cooldown for 500s
-                elif any(m in error_msg for m in self._MODEL_UNAVAILABLE_MARKERS):
-                    # Per-key model restriction. Rotate WITHOUT marking the key
-                    # rate-limited or invalid — both would be wrong semantics and
-                    # would poison a healthy key (300s cooldown / permanent skip)
-                    # for what is only a capability gap on one model.
-                    keys_rejecting_model.add(self.current_key_idx)
-                    logger.warning(
-                        "Key %s cannot use this model (%s). Rotating; %d/%d keys have rejected it.",
-                        self.current_key_idx, str(e)[:120],
-                        len(keys_rejecting_model), len(self.keys),
-                    )
-                    if len(keys_rejecting_model) >= len(self.keys):
-                        # Every key agrees: the model itself is unavailable. Raise a
-                        # precise, actionable error so callers/UX can say so instead
-                        # of showing a generic "internal error" and inviting a retry
-                        # that cannot succeed.
-                        raise ModelUnavailableError(
-                            f"No configured Gemini API key can access this model. "
-                            f"Last error: {e}"
-                        ) from e
-                    self._rotate_key()
-                else:
-                    logger.error(f"Unrecoverable error on key {self.current_key_idx}: {e}")
-                    raise e
-
-        raise Exception("All Gemini API keys exhausted or on cooldown.")
+    @staticmethod
+    def _config(system_prompt: str, **overrides):
+        cfg = dict(
+            system_instruction=system_prompt,
+            temperature=settings.GEMINI_TEMPERATURE,
+            top_p=settings.GEMINI_TOP_P,
+            max_output_tokens=settings.GEMINI_MAX_OUTPUT_TOKENS,
+        )
+        cfg.update(overrides)
+        return genai_types.GenerateContentConfig(**cfg)
 
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
-        def _make_run(model_name: str):
-            async def _run():
-                model = genai.GenerativeModel(
-                    model_name=model_name,
-                    system_instruction=system_prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=settings.GEMINI_TEMPERATURE,
-                        top_p=settings.GEMINI_TOP_P,
-                        max_output_tokens=settings.GEMINI_MAX_OUTPUT_TOKENS,
-                    )
+        def _make_op(model_name: str):
+            async def _op(client):
+                # `client.aio` is natively async — no run_in_executor, and no
+                # blocking call on the event loop to offload in the first place.
+                response = await client.aio.models.generate_content(
+                    model=model_name,
+                    contents=user_prompt,
+                    config=self._config(system_prompt),
                 )
-                loop = asyncio.get_event_loop()
-                response = await loop.run_in_executor(None, model.generate_content, user_prompt)
                 # P3 — safe accessor: never crashes on empty parts /
-                # finish_reason=1/2/3 etc. Returns "" or a fallback msg
-                # which the caller handles like any other answer.
+                # finish_reason 1/2/3. Returns "" or a fallback message which
+                # the caller handles like any other answer.
                 return _safe_extract_text(response)
-            return _run
+            return _op
 
         try:
-            return await self._execute_with_rotation(_make_run(settings.GEMINI_MODEL))
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "404" in error_msg or "deprecated" in error_msg:
-                logger.warning(
-                    f"Model {settings.GEMINI_MODEL} unavailable (404/deprecated), "
-                    f"retrying once with fallback {settings.GEMINI_FALLBACK_MODEL}"
-                )
-                return await self._execute_with_rotation(_make_run(settings.GEMINI_FALLBACK_MODEL))
-            raise
+            return await run_with_rotation(
+                _make_op(settings.GEMINI_MODEL), purpose="generate"
+            )
+        except ModelUnavailableForAllKeys:
+            logger.warning(
+                "Model %s unavailable on every key; retrying once with fallback %s",
+                settings.GEMINI_MODEL, settings.GEMINI_FALLBACK_MODEL,
+            )
+            return await run_with_rotation(
+                _make_op(settings.GEMINI_FALLBACK_MODEL), purpose="generate-fallback"
+            )
 
     async def generate_stream(self, system_prompt: str, user_prompt: str) -> AsyncGenerator[str, None]:
-        def _make_get_stream(model_name: str):
-            async def _get_stream():
-                model = genai.GenerativeModel(
-                    model_name=model_name,
-                    system_instruction=system_prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=settings.GEMINI_TEMPERATURE,
-                        top_p=settings.GEMINI_TOP_P,
-                        max_output_tokens=settings.GEMINI_MAX_OUTPUT_TOKENS,
-                    )
+        def _make_open(model_name: str):
+            async def _open(client):
+                # Returns the async iterator. Awaiting this establishes the
+                # stream; rotation applies to THIS step only. Once chunks start
+                # flowing the key is committed — switching mid-stream would
+                # splice two different completions into one answer.
+                return await client.aio.models.generate_content_stream(
+                    model=model_name,
+                    contents=user_prompt,
+                    config=self._config(system_prompt),
                 )
-                loop = asyncio.get_event_loop()
-                return await loop.run_in_executor(None, lambda: model.generate_content(user_prompt, stream=True))
-            return _get_stream
+            return _open
+
+        async def _iterate(model_name: str):
+            async for chunk in stream_with_rotation(
+                _make_open(model_name), purpose="generate_stream"
+            ):
+                # P3 — a stream chunk can carry finish_reason with no parts;
+                # reading .text directly would raise and kill the SSE stream.
+                token = _safe_extract_text(chunk)
+                if token:
+                    yield token
 
         try:
-            stream_response = await self._execute_with_rotation(_make_get_stream(settings.GEMINI_MODEL))
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "404" in error_msg or "deprecated" in error_msg:
-                logger.warning(
-                    f"Model {settings.GEMINI_MODEL} unavailable (404/deprecated), "
-                    f"retrying once with fallback {settings.GEMINI_FALLBACK_MODEL}"
-                )
-                stream_response = await self._execute_with_rotation(_make_get_stream(settings.GEMINI_FALLBACK_MODEL))
-            else:
-                raise
-
-        # S1 — this was `for chunk in stream_response:`. Only the call that
-        # OBTAINS the stream was offloaded (above); the iteration that performs
-        # the actual network I/O ran on the event loop thread. The returned
-        # object is a blocking generator whose `__next__` waits on the network,
-        # so every chunk froze the whole worker — other requests, other SSE
-        # streams and the health check alike. Wrapping only the constructor
-        # looks correct and is not.
-        #
-        # Pump the sync iterator through the executor one step at a time. The
-        # sentinel distinguishes "generator exhausted" from a falsy chunk;
-        # StopIteration cannot cross an executor boundary, so `next(it, default)`
-        # is used rather than letting it raise.
-        loop = asyncio.get_event_loop()
-        iterator = iter(stream_response)
-        exhausted = object()
-
-        while True:
-            try:
-                # Bound each STEP, not the whole stream: total generation time
-                # is legitimately long, but an individual chunk that never
-                # arrives previously hung forever — generate_stream had no
-                # timeout at all, while _provider_generate enforces this same
-                # setting.
-                chunk = await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda it=iterator: next(it, exhausted)),
-                    timeout=settings.LLM_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                logger.error(
-                    "[Gemini] stream stalled — no chunk within %ss. Ending the "
-                    "stream rather than hanging the request indefinitely.",
-                    settings.LLM_TIMEOUT_SECONDS,
-                )
-                return
-
-            if chunk is exhausted:
-                break
-
-            # P3 — safe accessor: a stream chunk can have finish_reason set
-            # on the last frame with no parts; reading chunk.text would
-            # raise ValueError and kill the entire SSE stream mid-response.
-            token = _safe_extract_text(chunk)
-            if token:
+            async for token in _iterate(settings.GEMINI_MODEL):
                 yield token
+        except ModelUnavailableForAllKeys:
+            logger.warning(
+                "Model %s unavailable on every key; retrying stream with fallback %s",
+                settings.GEMINI_MODEL, settings.GEMINI_FALLBACK_MODEL,
+            )
+            async for token in _iterate(settings.GEMINI_FALLBACK_MODEL):
+                yield token
+
 
 class LLMService:
     def __init__(self, provider: BaseLLMProvider = None):
@@ -469,7 +349,7 @@ class LLMService:
         # so tests can still pass DummyLLMProvider() directly.
         allow_dummy = settings.ENVIRONMENT == "test"
 
-        if genai:
+        if google_genai:
             # GeminiLLMProvider raises ValueError when the rotator has no
             # keys; the old code only caught RuntimeError, so the intended
             # friendly message never fired. Catch both.
@@ -489,9 +369,9 @@ class LLMService:
             if allow_dummy:
                 return DummyLLMProvider()
             raise RuntimeError(
-                "The 'google-generativeai' package is not installed and DummyLLMProvider is "
+                "The 'google-genai' package is not installed and DummyLLMProvider is "
                 f"disabled in ENVIRONMENT={settings.ENVIRONMENT!r}. Install it "
-                "(pip install google-generativeai) and configure GEMINI_API_KEY_1.. in "
+                "(pip install google-genai) and configure GEMINI_API_KEY_1.. in "
                 "backend/.env. Refusing to serve mock 'grounded' responses."
             )
         

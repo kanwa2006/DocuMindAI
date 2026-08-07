@@ -37,12 +37,19 @@ def _check_redis():
 
 def _check_gemini():
     try:
-        import google.generativeai as genai
+        # S5: per-key client. This used to call genai.configure() on the
+        # process global, so a scheduled health check silently reassigned the
+        # key every other caller in this worker was about to use.
+        from google.genai import types as genai_types
+        from app.services.gemini_client import get_client_pool
         from app.services.llm_key_rotation import get_key_rotator
+
         key = get_key_rotator().get_key()
-        genai.configure(api_key=key)
-        model = genai.GenerativeModel(settings.GEMINI_MODEL)
-        model.generate_content("hi", generation_config={"max_output_tokens": 1})
+        get_client_pool().client_for(key).models.generate_content(
+            model=settings.GEMINI_MODEL,
+            contents="hi",
+            config=genai_types.GenerateContentConfig(max_output_tokens=1),
+        )
         return True, "ok"
     except Exception as exc:
         return False, str(exc)[:200]

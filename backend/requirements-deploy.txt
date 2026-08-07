@@ -87,7 +87,10 @@ transformers>=4.37.2
 numpy>=1.26.0
 
 # ── LLM ──────────────────────────────────────────────────────────────────────
-google-generativeai>=0.8.0
+google-genai>=2.5.0          # S5: per-key clients. REPLACED google-generativeai,
+                             # which is END OF SUPPORT and had no way to bind an
+                             # api_key to a request — every call read a process
+                             # global, so a 429 cooled the wrong key under load.
 
 # ── Billing / storage / errors ───────────────────────────────────────────────
 razorpay>=1.4.1

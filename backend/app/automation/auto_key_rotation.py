@@ -16,10 +16,19 @@ KEY_STATUS_HASH = "api_key_status"
 
 def _test_api_key(key: str) -> str:
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=key)
-        model = genai.GenerativeModel(settings.GEMINI_MODEL)
-        model.generate_content("test", generation_config={"max_output_tokens": 1})
+        # S5: THIS was the worst global writer. It walks EVERY key testing
+        # each one, and `genai.configure` left the process global set to
+        # whichever key it happened to test last — in the same worker process
+        # as embedding_service. A per-key client tests exactly the key it was
+        # asked about and affects nothing else.
+        from google.genai import types as genai_types
+        from app.services.gemini_client import get_client_pool
+
+        get_client_pool().client_for(key).models.generate_content(
+            model=settings.GEMINI_MODEL,
+            contents="test",
+            config=genai_types.GenerateContentConfig(max_output_tokens=1),
+        )
         return "pass"
     except Exception as exc:
         err = str(exc)

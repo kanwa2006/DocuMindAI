@@ -52,34 +52,75 @@ class GeminiEmbeddingProvider(BaseEmbeddingProvider):
     MODEL = "models/text-embedding-004"
 
     def __init__(self):
-        import google.generativeai as genai
-        keys_csv = os.getenv("GEMINI_API_KEYS", "")
-        key = keys_csv.split(",")[0].strip() if keys_csv else os.getenv("GEMINI_API_KEY_1", "")
-        if key:
-            genai.configure(api_key=key)
-        self._genai = genai
+        # S5: this used to call `genai.configure(api_key=...)`, mutating the
+        # SAME process-global the key rotator wrote to. In the worker process
+        # it also raced the Beat-scheduled `auto_key_rotation`, which walks
+        # every key and leaves the global set to whichever it tested last — so
+        # embeddings went out on an arbitrary key and a 429 was attributed to
+        # whichever key the rotator happened to think was current.
+        #
+        # Now the key is chosen per call and the client is bound to it.
+        from app.services.gemini_client import get_client_pool
+        self._pool = get_client_pool()
         logger.info("[embedding] GeminiEmbeddingProvider ready (text-embedding-004)")
+
+    def _embed_one(self, text: str, task_type: str):
+        """Embed on a healthy key, reporting failures against the key USED.
+
+        Synchronous on purpose: this provider runs in the Celery worker and
+        behind `run_in_executor` on the request path, so the rotator's blocking
+        `get_key()` (the M-9 out-of-lock wait) is the correct primitive here —
+        it is the async path that must never block, not this one.
+        """
+        from google.genai import types as genai_types
+        from app.services.gemini_client import classify_failure
+        from app.services.llm_key_rotation import get_key_rotator
+
+        rotator = get_key_rotator()
+        attempts = max(1, len(rotator.keys))
+        last_exc = None
+        for _ in range(attempts):
+            key = rotator.get_key()
+            try:
+                res = self._pool.client_for(key).models.embed_content(
+                    model=self.MODEL,
+                    contents=text,
+                    config=genai_types.EmbedContentConfig(task_type=task_type),
+                )
+                return list(res.embeddings[0].values)
+            except Exception as exc:  # noqa: BLE001 - classified immediately
+                last_exc = exc
+                kind = classify_failure(exc)
+                if kind == "rate_limit":
+                    rotator.report_rate_limit(key, 300)
+                elif kind == "invalid_key":
+                    rotator.report_invalid_key(key)
+                elif kind == "server_error":
+                    rotator.report_rate_limit(key, 30)
+                else:
+                    raise
+        raise RuntimeError(
+            f"[embedding] all Gemini keys exhausted while embedding: {last_exc}"
+        ) from last_exc
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         results = []
         for text in texts:
             try:
-                res = self._genai.embed_content(
-                    model=self.MODEL,
-                    content=text,
-                    task_type="retrieval_document",
-                )
-                raw = res["embedding"]  # 768-dim from text-embedding-004
+                # S5: per-key client, and a 429 is now reported against the key
+                # that actually served the call.
+                raw = self._embed_one(text, task_type="retrieval_document")
+                returned_dim = len(raw)
                 # BUG-006 FIX: DocumentChunk.embedding is Vector(1024).
                 # Gemini text-embedding-004 returns 768-dim vectors.
                 # Pad to EMBEDDING_DIM with zeros so pgvector accepts the INSERT.
                 # Retrieval works because the query embedding goes through the same
                 # fallback chain and gets padded identically.
-                if len(raw) < EMBEDDING_DIM:
-                    raw = raw + [0.0] * (EMBEDDING_DIM - len(raw))
+                if returned_dim < EMBEDDING_DIM:
+                    raw = raw + [0.0] * (EMBEDDING_DIM - returned_dim)
                     logger.warning(
                         f"[embedding] GeminiEmbeddingProvider padded vector from "
-                        f"{len(res['embedding'])}-dim to {EMBEDDING_DIM}-dim. "
+                        f"{returned_dim}-dim to {EMBEDDING_DIM}-dim. "
                         "Primary BAAI/bge-m3 model may not be loaded — check worker startup logs."
                     )
                 results.append(raw[:EMBEDDING_DIM])  # truncate if somehow larger

@@ -47,6 +47,15 @@ if not _loaded_keys and not _os.environ.get("GEMINI_API_KEY"):
     logger.error("=" * 70)
 else:
     logger.info("[startup] Gemini keys available: %d", len(_loaded_keys) or 1)
+    # S5: build one immutable client per key up front. Construction costs
+    # ~2.5s each against google-genai 2.5.0, and paying that lazily would
+    # charge it to whichever request first touches a cold key. Failures here
+    # are logged per key and never block startup — the pool rebuilds on demand.
+    try:
+        from app.services.gemini_client import get_client_pool as _get_pool
+        logger.info("[startup] Gemini clients warmed: %d", _get_pool().warm())
+    except Exception as _exc:  # pragma: no cover - never block startup
+        logger.error("[startup] Gemini client warm-up failed: %s", _exc)
 
 if settings.SENTRY_DSN:
     sentry_sdk.init(
