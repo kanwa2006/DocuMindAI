@@ -1366,3 +1366,52 @@ earlier in this same session and is already `config.py`'s default.
   Owner decision: what constitutes a flagged clause.
 - Composer buttons are 32x32 / 36x36, below the 44px touch-target minimum. Pre-existing.
 - Sidebar dead zone at short viewports; user bubble contrast competes with the response.
+
+
+---
+
+### 2026-08-14 — Bug Report Validation + Fixes (commit 39c9293)
+
+**Scope:** Validated every finding in the Bug & Readiness Report produced by the initial audit.
+Classified each as CONFIRMED / FALSE POSITIVE / LATENT RISK. Implemented fixes for all confirmed
+bugs. 5 regression tests added. Zero regressions across 32 test suite items.
+
+#### Findings classified
+
+| # | Finding | Classification | Action |
+|---|---------|---------------|--------|
+| 1 | `starlette==1.0.0` non-existent version | **FALSE POSITIVE** | starlette 1.0.0 is installed and working in venv. CLAUDE.md §Stack explicitly documents this as an intentional pin. Not changed. |
+| 2 | Gemini key filter silently discards short keys | **LATENT RISK** | Filter is correct per comments (ignores placeholder strings). Developers using `GEMINI_API_KEY_1` with real keys ≥20 chars are unaffected. Documented. Not changed. |
+| 3 | `audio_tasks` module missing → worker crash | **FALSE POSITIVE** | `backend/app/workers/tasks/audio_tasks.py` exists (2579 bytes). Verified by `test_every_include_module_imports`. |
+| 4 | `upload_local` returns `mime_type: "application/pdf"` for all formats | **CONFIRMED** | **FIXED** — use `file.content_type` (already validated against `ALLOWED_MIMES`). DOCX/PPTX were being sent to the PDF extractor → empty text. Regression test added. |
+| 5 | `verify_token()` drops `token_type` → refresh always 401 | **CONFIRMED** | **FIXED** — conditionally include `token_type` in verify_token return dict. Access tokens emit no extra key; refresh tokens pass `token_type='refresh'` through to the endpoint guard. 3 regression tests added. |
+| 6 | `asyncio.get_event_loop()` deprecated inside async def | **CONFIRMED** | **FIXED** — replaced with `asyncio.get_running_loop()` in `verify_email` handler. DeprecationWarning eliminated on Python 3.10+. |
+| 7 | Frontend middleware checks `/signup` but route is `/register` | **CONFIRMED** | **FIXED** — changed `isAuthPage` check from `/signup` to `/register`. Authenticated users now correctly redirected away from `/register`. TypeScript typecheck passes. |
+| 8 | Duplicate `next.config.js` + `next.config.ts` | **FALSE POSITIVE** | `.js` comments explicitly state "Next.js 16 prefers next.config.ts when both exist; this mirrors it." Both files are identical stubs. Intentional. |
+| 9 | `get_optional_current_user` skips tenant scope setup | **FALSE POSITIVE** | Only used by `feedback.py`, which never queries `TenantScoped` models. Inserts `Feedback` rows directly with explicit `user_id` (nullable). No scope required. |
+| 10 | Refresh token expiry: `timedelta(minutes=days*24*60)` | **LATENT RISK** | Arithmetically correct. `timedelta(days=...)` would be cleaner but the current code works. Low priority; changing it risks confusion if settings keys are later renamed. Not changed. |
+| — | `hmac.new()` (from prior report) | **FALSE POSITIVE** | Already explicitly retracted in the report. Not investigated. |
+| — | Redis connection leak in `finally` (from prior report) | **FALSE POSITIVE** | Already explicitly retracted. `finally` runs on `return`. Not investigated. |
+
+#### Evidence
+
+- Backend test suite: **32 / 32 PASS** (after fixes, targeting auth + worker + storage + tenant tests)
+- New tests: `test_upload_local_mime_type.py` (2), `test_auth_security.py` BUG-008 additions (3)
+- Frontend TypeScript: `tsc --noEmit` EXIT 0
+- Commit: `39c9293` on branch `security/redact-env-example`
+
+#### What is NOT addressed (by design)
+
+- P0-10 (double-colon in DATABASE_URL) — owner-access-required
+- P0-4 (credential rotation) — owner-access-required
+- Container image size (P0-3) — Phase 4
+- Trial gate on non-query endpoints — Phase 2
+- Workspace verification (legal/finance/study/research/exam) — Phase 7
+- Responsive audit — still in queue
+
+#### Next, in order
+
+1. Per-workspace upload → READY → indexing (all 7) — verifies BUG-004 MIME fix on real DOCX/PPTX
+2. Run the full 53-test backend suite (ignored heavy OCR/embedding tests in this session)
+3. Persistence / history / chat session continuity per workspace
+4. Responsive certification
