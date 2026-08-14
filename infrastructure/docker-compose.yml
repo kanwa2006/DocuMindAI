@@ -70,6 +70,10 @@ services:
       # Add GEMINI_API_KEY_1, GEMINI_API_KEY_2, _3, etc. as needed — no code changes required.
       # - GEMINI_API_KEY_1: ${GEMINI_API_KEY_1}
       # - GEMINI_API_KEY_2: ${GEMINI_API_KEY_2}  # uncomment to pass a second key
+      # Clear DATABASE_URL from .env so the POSTGRES_* overrides below are used
+      # (points to local pgbouncer, not Supabase). config.py's async_database_url
+      # property falls through to POSTGRES_* when DATABASE_URL is falsy.
+      - DATABASE_URL=
       - POSTGRES_SERVER=pgbouncer
       - POSTGRES_PORT=6432
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
@@ -103,6 +107,7 @@ services:
     env_file:
       - ../backend/.env
     environment:
+      - DATABASE_URL=
       - POSTGRES_SERVER=pgbouncer
       - POSTGRES_PORT=6432
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
@@ -169,6 +174,7 @@ services:
     env_file:
       - ../backend/.env
     environment:
+      - DATABASE_URL=
       - POSTGRES_SERVER=pgbouncer
       - POSTGRES_PORT=6432
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
