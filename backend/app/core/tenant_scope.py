@@ -35,6 +35,15 @@ explicitly via `system_scope()` — a bypass you have to type, never a default.
 - Covers reads. INSERTs still set `owner_id` explicitly; `owner_id` is
   `NOT NULL`, so a missed write fails loudly at the database instead of
   writing an unowned row.
+- **ORM UPDATE and DELETE bypass this hook.** `_apply_tenant_scope` returns
+  immediately for non-SELECT statements (`if not orm_execute_state.is_select:
+  return`). SQLAlchemy's `with_loader_criteria` only applies to SELECT-path
+  loaders. Safe practice for UPDATE/DELETE against a scoped model:
+  add `where(Model.owner_id == current_owner_id())` explicitly, or
+  fetch under a tenant_scope'd SELECT and mutate the returned objects
+  so the ORM emits filtered UPDATEs. Any UPDATE/DELETE without an explicit
+  owner predicate on a scoped table is a cross-tenant write vulnerability.
+  (S26 — recorded 2026-08-14; shape change is an owner decision.)
 """
 from __future__ import annotations
 
