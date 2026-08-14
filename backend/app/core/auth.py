@@ -37,12 +37,20 @@ class AuthProvider:
             # Audit logging hook
             logger.info(f"[Security Audit] Authenticated user {user_id} in workspace {workspace_id}")
             
-            return {
+            result = {
                 "id": user_id,
                 "email": claims.get("email", "unknown@domain.com"),
                 "workspace_id": workspace_id,
-                "roles": claims.get("roles", ["user"])
+                "roles": claims.get("roles", ["user"]),
             }
+            # BUG-008 FIX: pass token_type through so the /refresh endpoint can
+            # enforce `token_type == "refresh"`. Access tokens have no such claim
+            # (omitted at issue time), refresh tokens carry `token_type="refresh"`.
+            # Callers that do not need it simply ignore the extra key.
+            token_type = claims.get("token_type")
+            if token_type is not None:
+                result["token_type"] = token_type
+            return result
         except Exception as e:
             logger.error(f"[Auth] JWT Validation failed: {str(e)}")
             raise HTTPException(status_code=401, detail="Invalid authentication credentials")

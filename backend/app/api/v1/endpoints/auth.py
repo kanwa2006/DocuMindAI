@@ -476,7 +476,10 @@ async def verify_email(
     # Fire-and-forget welcome email — never blocks the response
     try:
         from app.services.email_service import send_welcome_email
-        _loop = asyncio.get_event_loop()
+        # BUG-006 FIX: get_event_loop() is deprecated inside a running async
+        # context (Python ≥3.10 DeprecationWarning, ≥3.12 may raise).
+        # get_running_loop() is correct here — we are already inside an async def.
+        _loop = asyncio.get_running_loop()
         _loop.run_in_executor(
             None, send_welcome_email,
             current_user["email"], current_user.get("full_name"),

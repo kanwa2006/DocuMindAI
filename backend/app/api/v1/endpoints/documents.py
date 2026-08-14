@@ -376,7 +376,11 @@ async def upload_local(
         "storage_path": storage_path,
         "filename": file.filename,
         "size_bytes": size,
-        "mime_type": "application/pdf",
+        # BUG-004 FIX: use the actual validated MIME type, not a hardcoded PDF.
+        # file.content_type was already checked against ALLOWED_MIMES above, so
+        # this is the correct type. A hardcoded "application/pdf" caused every
+        # DOCX/PPTX upload to be processed by the PDF extractor → empty text.
+        "mime_type": file.content_type,
         "file_hash": file_hash,
         "workspace_id": workspace_id,
     }

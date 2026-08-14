@@ -6,8 +6,11 @@ import type { NextRequest } from 'next/server';
 export function middleware(request: NextRequest) {
   const token = request.cookies.get('token')?.value;
 
+  // BUG-007 FIX: the registration page is /register, not /signup.
+  // /signup does not exist in this app — authenticated users navigating to
+  // /register would not be redirected to /dashboard because isAuthPage was false.
   const isAuthPage = request.nextUrl.pathname.startsWith('/login') ||
-                     request.nextUrl.pathname.startsWith('/signup');
+                     request.nextUrl.pathname.startsWith('/register');
 
   const isProtectedRoute = request.nextUrl.pathname.startsWith('/dashboard') ||
                            request.nextUrl.pathname.startsWith('/general') ||

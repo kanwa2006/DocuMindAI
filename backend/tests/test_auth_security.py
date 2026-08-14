@@ -66,3 +66,48 @@ def test_expired_token_is_rejected():
     )
     with pytest.raises(pyjwt.ExpiredSignatureError):
         _decode(expired)
+
+
+# ── BUG-008 regression: verify_token must pass token_type through ──────────────
+# The /refresh endpoint calls AuthProvider.verify_token(refresh_token) and then
+# checks `user.get("token_type") != "refresh"`. If verify_token strips the claim,
+# that check ALWAYS raises 401 — silent session refresh is completely broken.
+# These tests reproduce the exact failure condition.
+
+from app.core.auth import AuthProvider  # noqa: E402
+
+
+def test_verify_token_omits_token_type_for_access_tokens():
+    """Access tokens have no token_type claim; verify_token must not invent one."""
+    token = create_access_token(**TOKEN_ARGS)
+    result = AuthProvider.verify_token(token)
+    assert "token_type" not in result, (
+        "verify_token must not add token_type for access tokens — "
+        "the /refresh endpoint uses its absence to block access-token reuse"
+    )
+
+
+def test_verify_token_passes_token_type_for_refresh_tokens():
+    """Refresh tokens carry token_type='refresh'; verify_token must return it.
+
+    If this assertion fails the /refresh endpoint will always raise 401 because
+    user.get('token_type') will be None instead of 'refresh'.
+    """
+    token = create_refresh_token(**TOKEN_ARGS)
+    result = AuthProvider.verify_token(token)
+    assert result.get("token_type") == "refresh", (
+        "verify_token must pass token_type='refresh' through for refresh tokens — "
+        "without it the /refresh endpoint always raises 401 (BUG-008 regression)"
+    )
+
+
+def test_refresh_endpoint_accepts_refresh_token_type():
+    """Full /refresh contract: a properly typed refresh token must not be rejected
+    by the token_type guard at endpoints/auth.py::refresh_session."""
+    token = create_refresh_token(**TOKEN_ARGS)
+    user = AuthProvider.verify_token(token)
+    # Reproduce the guard logic exactly as it appears in the endpoint
+    assert user.get("token_type") == "refresh", (
+        "Refresh session would incorrectly 401 — token_type not passed through"
+    )
+
