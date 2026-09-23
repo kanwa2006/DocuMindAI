@@ -1,0 +1,151 @@
+# render.yaml — Render Blueprint for DocuMindAI free-tier public demo.
+#
+# Declares two services:
+#   documindai-api    — FastAPI web service (HTTP + SSE)
+#   documindai-worker — Celery worker (document ingestion pipeline)
+#
+# SECRETS: Variables marked `sync: false` are placeholders.
+# Set real values in the Render Dashboard → Environment → per service.
+# NEVER commit real credentials here.
+#
+# FREE-TIER NOTES (September 2026 verified limits):
+#   - Render Free: 512 MB RAM, 0.1 CPU, 750 hours/workspace/month
+#   - Services spin down after 15 min idle; cold start ~30-60 s
+#   - Disk is EPHEMERAL — uploaded files lost on restart/redeploy
+#   - REQUIREMENTS_FILE=requirements-deploy.txt drops paddlepaddle+docling
+#   - BAAI/bge-m3 (2.2 GB) OOMs; falls back to gemini-embedding-2 (1024-dim)
+
+services:
+  # ── FastAPI API Service ────────────────────────────────────────────────────
+  - type: web
+    name: documindai-api
+    runtime: docker
+    dockerfilePath: infrastructure/Dockerfile.backend
+    dockerContext: .
+    # Run migrations THEN start the server in a single command.
+    dockerCommand: >-
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    dockerBuildArgs:
+      REQUIREMENTS_FILE: requirements-deploy.txt
+    plan: free
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: PROJECT_NAME
+        value: DocuMindAI
+      - key: STORAGE_PROVIDER
+        value: local
+      - key: STORAGE_PATH
+        value: /tmp/documind_storage
+      - key: VECTOR_BACKEND
+        value: pgvector
+      - key: OCR_SCANNED_ENABLED
+        value: "false"
+      - key: MAX_UPLOAD_MB
+        value: "50"
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: RERANKER_PROVIDER
+        value: local
+      - key: RAZORPAY_ENABLED
+        value: "false"
+      - key: OTEL_ENABLED
+        value: "false"
+      - key: PROMETHEUS_ENABLED
+        value: "false"
+      # Required by Settings even when DATABASE_URL overrides individual fields:
+      - key: POSTGRES_SERVER
+        value: placeholder
+      - key: POSTGRES_PORT
+        value: "5432"
+      - key: POSTGRES_USER
+        value: placeholder
+      - key: POSTGRES_DB
+        value: documind
+      # ── Secrets — set only in Render Dashboard, NEVER here ────────────────
+      - key: DATABASE_URL
+        sync: false   # postgresql+asyncpg://postgres.<ref>:<pass>@<region>.pooler.supabase.com:6543/postgres
+      - key: REDIS_URL
+        sync: false   # rediss://default:<pass>@<host>.upstash.io:6379
+      - key: CELERY_BROKER_URL
+        sync: false   # same Upstash URL
+      - key: CELERY_RESULT_BACKEND
+        sync: false   # same Upstash URL
+      - key: AUTH_SECRET_KEY
+        sync: false   # openssl rand -hex 32
+      - key: CSRF_SECRET_KEY
+        sync: false   # openssl rand -hex 32  (DIFFERENT from AUTH_SECRET_KEY)
+      - key: FRONTEND_URL
+        sync: false   # https://<your-app>.vercel.app
+      - key: CORS_ORIGINS
+        sync: false   # ["https://<your-app>.vercel.app"]
+      - key: GEMINI_API_KEY_1
+        sync: false   # your Google AI Studio API key
+      - key: POSTGRES_PASSWORD
+        sync: false   # your Supabase DB password
+
+  # ── Celery Worker ─────────────────────────────────────────────────────────
+  - type: worker
+    name: documindai-worker
+    runtime: docker
+    dockerfilePath: infrastructure/Dockerfile.backend
+    dockerContext: .
+    dockerCommand: >-
+      celery -A app.workers.celery_app worker
+      -Q main-queue,celery,export_queue,ocr_gpu_queue
+      --concurrency=1
+      --loglevel=info
+    dockerBuildArgs:
+      REQUIREMENTS_FILE: requirements-deploy.txt
+    plan: free
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: STORAGE_PROVIDER
+        value: local
+      - key: STORAGE_PATH
+        value: /tmp/documind_storage
+      - key: VECTOR_BACKEND
+        value: pgvector
+      - key: OCR_SCANNED_ENABLED
+        value: "false"
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: RERANKER_PROVIDER
+        value: local
+      - key: RAZORPAY_ENABLED
+        value: "false"
+      - key: OTEL_ENABLED
+        value: "false"
+      - key: PROMETHEUS_ENABLED
+        value: "false"
+      - key: POSTGRES_SERVER
+        value: placeholder
+      - key: POSTGRES_PORT
+        value: "5432"
+      - key: POSTGRES_USER
+        value: placeholder
+      - key: POSTGRES_DB
+        value: documind
+      # ── Secrets ───────────────────────────────────────────────────────────
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: CELERY_BROKER_URL
+        sync: false
+      - key: CELERY_RESULT_BACKEND
+        sync: false
+      - key: AUTH_SECRET_KEY
+        sync: false
+      - key: CSRF_SECRET_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: GEMINI_API_KEY_1
+        sync: false
+      - key: POSTGRES_PASSWORD
+        sync: false

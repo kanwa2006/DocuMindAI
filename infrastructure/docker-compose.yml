@@ -1,5 +1,13 @@
 version: '3.8'
 
+# Run from the infrastructure/ directory:
+#   cd infrastructure && docker compose up
+# OR from the repo root:
+#   docker compose -f infrastructure/docker-compose.yml up
+#
+# Build context is the REPO ROOT (..) so Dockerfile.backend can COPY
+# backend/ as a subdirectory (Docker forbids COPY ../outside-context).
+
 services:
   db:
     image: ankane/pgvector:v0.5.1
@@ -25,6 +33,12 @@ services:
       - MAX_CLIENT_CONN=1000
       - DEFAULT_POOL_SIZE=20
       - IGNORE_STARTUP_PARAMETERS=extra_float_digits
+      # PostgreSQL 14+ defaults to SCRAM-SHA-256. Without this pgbouncer
+      # tries MD5 on the server leg, which the pg container refuses with
+      # "cannot do SCRAM authentication: wrong password type".
+      - AUTH_TYPE=scram-sha-256
+      # No TLS on the pgbouncer→db leg in local docker networking.
+      - SERVER_TLS_SSLMODE=disable
     ports:
       - "6432:6432"
     depends_on:
@@ -48,8 +62,9 @@ services:
 
   backend:
     build:
-      context: ../backend
-      dockerfile: ../infrastructure/Dockerfile.backend
+      # Repo root so Dockerfile.backend can COPY backend/ as a subdir.
+      context: ..
+      dockerfile: infrastructure/Dockerfile.backend
     ports:
       - "8000:8000"
     volumes:
@@ -61,10 +76,6 @@ services:
     env_file:
       - ../backend/.env
     environment:
-      # Gemini API keys — auto-detected by GeminiKeyRotator (Phase 12).
-      # Add GEMINI_API_KEY_1, GEMINI_API_KEY_2, _3, etc. as needed — no code changes required.
-      # - GEMINI_API_KEY_1: ${GEMINI_API_KEY_1}
-      # - GEMINI_API_KEY_2: ${GEMINI_API_KEY_2}  # uncomment to pass a second key
       - POSTGRES_SERVER=pgbouncer
       - POSTGRES_PORT=6432
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
@@ -73,6 +84,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      # Clear DATABASE_URL so the POSTGRES_* vars above are used (local pgbouncer).
+      - DATABASE_URL=
     depends_on:
       db:
         condition: service_healthy
@@ -87,8 +100,8 @@ services:
 
   worker:
     build:
-      context: ../backend
-      dockerfile: ../infrastructure/Dockerfile.backend
+      context: ..
+      dockerfile: infrastructure/Dockerfile.backend
     volumes:
       - ../backend:/app
       - storage_data:/tmp/documind_storage
@@ -106,6 +119,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=
     depends_on:
       redis:
         condition: service_healthy
@@ -127,8 +141,8 @@ services:
   # The schedule file lives in /tmp so it never pollutes the bind mount.
   beat:
     build:
-      context: ../backend
-      dockerfile: ../infrastructure/Dockerfile.backend
+      context: ..
+      dockerfile: infrastructure/Dockerfile.backend
     volumes:
       - ../backend:/app
     # Beat needs the same env as the worker: auto_health_check probes Gemini,
@@ -144,6 +158,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=
     depends_on:
       redis:
         condition: service_healthy
@@ -153,8 +168,8 @@ services:
 
   frontend:
     build:
-      context: ../frontend
-      dockerfile: ../infrastructure/Dockerfile.frontend
+      context: ..
+      dockerfile: infrastructure/Dockerfile.frontend
     ports:
       - "3000:3000"
     volumes:

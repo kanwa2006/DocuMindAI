@@ -53,8 +53,14 @@ razorpay>=1.4.1
 # ── Previously missing packages (BUG-002) ────────────────────────────────────
 # These packages are imported throughout the codebase but were absent from
 # requirements.txt, causing fresh installs to fail at runtime.
-google-generativeai>=0.8.0   # llm_service.py + embedding_service.py
+google-generativeai>=0.8.0   # llm_service.py (legacy SDK — kept for LLM provider)
+google-genai>=2.5.0          # embedding_service.py — GeminiEmbeddingProvider
+                             # uses the new SDK for gemini-embedding-2 access
+                             # (text-embedding-004 shut down Jan 14 2026)
 sentry-sdk>=1.40.0           # main.py Sentry error tracking
-aioredis>=2.0.0              # query.py, documents.py, middleware.py Redis cache
+# aioredis REMOVED: 2.0.1 is broken on Python 3.11 with "duplicate base class
+# TimeoutError". Deprecated since 2022; redis.asyncio (ships in redis>=4.2)
+# is the correct replacement and is already pinned above.
 numpy>=1.26.0                # retrieval_service.py NumPy cosine similarity
 python-dotenv>=1.0.0         # main.py Gemini key bridge (.env reader)
+
