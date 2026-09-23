@@ -25,8 +25,6 @@ services:
     # Run migrations THEN start the server in a single command.
     dockerCommand: >-
       sh -c "alembic upgrade head && celery -A app.workers.celery_app worker -Q main-queue,celery,export_queue,ocr_gpu_queue --concurrency=1 --loglevel=info & exec uvicorn app.main:app --host 0.0.0.0 --port $PORT"
-    dockerBuildArgs:
-      REQUIREMENTS_FILE: requirements-deploy.txt
     plan: free
     healthCheckPath: /api/v1/health
     envVars:
