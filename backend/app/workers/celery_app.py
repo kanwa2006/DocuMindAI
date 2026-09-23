@@ -1,7 +1,13 @@
 import os
+import ssl
 from celery import Celery
 from app.core.config import settings
 from app.core.telemetry import setup_telemetry
+
+
+def _is_rediss(url: str) -> bool:
+    """Return True if the URL uses the rediss:// (TLS) scheme."""
+    return (url or "").startswith("rediss://")
 
 celery_app = Celery(
     "worker",
@@ -95,6 +101,23 @@ celery_app.conf.beat_schedule = {
     },
 }
 
+# H-SSL: Upstash (and many managed Redis providers) expose a rediss:// URL
+# (TLS) but do NOT require a client certificate. Celery/redis-py raises:
+#   "A rediss:// URL must have parameter ssl_cert_reqs and this must be set to
+#    CERT_REQUIRED, CERT_OPTIONAL, or CERT_NONE"
+# unless we explicitly declare ssl_cert_reqs. We use CERT_NONE because there
+# is no client cert to present (server cert is validated by the CA bundle).
+_ssl_conf = {}
+if _is_rediss(settings.CELERY_BROKER_URL) or _is_rediss(settings.CELERY_RESULT_BACKEND):
+    _ssl_conf = {
+        "broker_use_ssl": {
+            "ssl_cert_reqs": ssl.CERT_NONE,
+        },
+        "redis_backend_use_ssl": {
+            "ssl_cert_reqs": ssl.CERT_NONE,
+        },
+    }
+
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
@@ -105,6 +128,7 @@ celery_app.conf.update(
     # Free-tier deploy: CELERY_TASK_ALWAYS_EAGER=true runs tasks inline (no worker process)
     task_always_eager=os.environ.get("CELERY_TASK_ALWAYS_EAGER", "false").lower() == "true",
     task_eager_propagates=True,
+    **_ssl_conf,
 )
 
 # Initialize Distributed Tracing for Celery Worker Threads
