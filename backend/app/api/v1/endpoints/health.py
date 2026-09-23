@@ -4,7 +4,7 @@ from sqlalchemy import text
 from app.db.session import get_db
 
 import psycopg2
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 import asyncio
 import redis.asyncio as redis
 
@@ -27,8 +27,8 @@ def _db_ping():
         host=u.hostname,
         port=u.port or 5432,
         dbname=u.path.lstrip("/"),
-        user=u.username,
-        password=u.password or "",
+        user=unquote(u.username or ""),
+        password=unquote(u.password or ""),
         # H-9: forcing require here broke health against non-SSL local/compose
         # Postgres; prefer negotiates SSL when the server offers it.
         sslmode="prefer" if _is_local_db_host(settings.sync_database_url) else "require",

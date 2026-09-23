@@ -46,7 +46,7 @@ RUN pip install --no-cache --no-index --find-links=/wheels -r ${REQUIREMENTS_FIL
 # Copy application code.  Must include alembic/ and alembic.ini — the
 # deployment start command runs `alembic upgrade head` before uvicorn.
 COPY backend /app
-RUN chmod +x /app/scripts/*.sh
+RUN sed -i 's/\r$//' /app/scripts/*.sh && chmod +x /app/scripts/*.sh
 
 ENV PYTHONUNBUFFERED=1
 
