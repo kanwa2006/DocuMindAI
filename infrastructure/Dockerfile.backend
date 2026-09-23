@@ -10,13 +10,13 @@
 #   Pass --build-arg REQUIREMENTS_FILE=requirements-deploy.txt for free-tier
 #   hosts (Render Free) that cannot fit paddlepaddle + docling (multi-GB).
 #   See backend/requirements-deploy.txt for the exact list of what is dropped.
-ARG REQUIREMENTS_FILE=requirements.txt
+ARG REQUIREMENTS_FILE=requirements-deploy.txt
 
 # ── Stage 1: Builder ──────────────────────────────────────────────────────────
 FROM python:3.11-slim AS builder
 # Re-declare ARG inside the stage (Docker ARG scoping rule — global ARG does
 # not propagate into FROM stages automatically).
-ARG REQUIREMENTS_FILE=requirements.txt
+ARG REQUIREMENTS_FILE=requirements-deploy.txt
 WORKDIR /app
 COPY backend/requirements.txt backend/requirements-deploy.txt ./
 RUN apt-get update && apt-get install -y build-essential libpq-dev && rm -rf /var/lib/apt/lists/*
@@ -27,7 +27,7 @@ RUN pip wheel --no-cache-dir --wheel-dir /app/wheels -r ${REQUIREMENTS_FILE}
 
 # ── Stage 2: Production Image ─────────────────────────────────────────────────
 FROM python:3.11-slim
-ARG REQUIREMENTS_FILE=requirements.txt
+ARG REQUIREMENTS_FILE=requirements-deploy.txt
 WORKDIR /app
 
 # Runtime system dependencies:
@@ -46,9 +46,10 @@ RUN pip install --no-cache --no-index --find-links=/wheels -r ${REQUIREMENTS_FIL
 # Copy application code.  Must include alembic/ and alembic.ini — the
 # deployment start command runs `alembic upgrade head` before uvicorn.
 COPY backend /app
+RUN chmod +x /app/scripts/*.sh
 
 ENV PYTHONUNBUFFERED=1
 
 # Bind to $PORT when the platform injects one (Render/Railway), else 8000.
 EXPOSE 8000
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["/app/scripts/start-deploy.sh"]
