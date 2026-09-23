@@ -78,6 +78,10 @@ async def run_async_migrations() -> None:
     elif (split.hostname or "").lower() not in _LOCAL_HOSTS:
         connect_args["ssl"] = "require"
 
+    if "pooler.supabase.com" in (raw_url or ""):
+        connect_args["statement_cache_size"] = 0
+        connect_args["prepared_statement_cache_size"] = 0
+
     connectable = async_engine_from_config(
         configuration,
         prefix="sqlalchemy.",
