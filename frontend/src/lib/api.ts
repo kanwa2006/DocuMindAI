@@ -119,6 +119,12 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}, _ret
   const headers = new Headers(options.headers || {});
   if (isMutation && csrfToken) headers.set('X-CSRF-Token', csrfToken);
   if (deviceFingerprint) headers.set('X-Device-ID', deviceFingerprint);
+  if (typeof window !== 'undefined') {
+    const savedToken = localStorage.getItem('token');
+    if (savedToken && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${savedToken}`);
+    }
+  }
 
   let response: Response;
   try {
@@ -140,6 +146,7 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}, _ret
     if (refreshed) return apiFetch(endpoint, options, true);
     // Dispatch event — SessionExpiredOverlay catches this; no hard redirect
     if (typeof window !== 'undefined') {
+      localStorage.removeItem('token');
       window.dispatchEvent(new CustomEvent('session:expired'));
     }
     throw new Error('Session expired');
@@ -157,10 +164,17 @@ export const login = async (form: FormData) => {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || "Login failed");
   }
-  return res.json();
+  const data = await res.json();
+  if (data.access_token && typeof window !== 'undefined') {
+    localStorage.setItem('token', data.access_token);
+  }
+  return data;
 };
 
 export const logout = async () => {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('token');
+  }
   const res = await apiFetch('/auth/logout', { method: 'POST' });
   if (!res.ok) throw new Error("Logout failed");
   return res.json();

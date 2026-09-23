@@ -16,13 +16,14 @@ async def get_csrf_token(response: Response):
     """
     csrf_token = binascii.hexlify(os.urandom(32)).decode()
 
-    # FIX 0.4: secure=IS_PRODUCTION so cookie is stored on HTTP localhost
+    # FIX 0.4: secure=IS_PRODUCTION and samesite="none" so cookie is accepted cross-site (Vercel -> Render)
+    cookie_samesite = "none" if IS_PRODUCTION else "lax"
     response.set_cookie(
         key="csrf_token",
         value=csrf_token,
         httponly=False,       # Must be readable by JS to populate the header
         secure=IS_PRODUCTION,
-        samesite="strict",
+        samesite=cookie_samesite,
         path="/"
     )
     return {"csrf_token": csrf_token}

@@ -68,13 +68,14 @@ async def login(
         roles=roles
     )
 
-    # FIX 0.4: Use IS_PRODUCTION so cookies are accepted on HTTP localhost
+    # FIX 0.4: Use IS_PRODUCTION and samesite="none" so cookies are accepted cross-site (Vercel -> Render)
+    cookie_samesite = "none" if IS_PRODUCTION else "lax"
     response.set_cookie(
         key="token",
         value=access_token,
         httponly=True,
         secure=IS_PRODUCTION,
-        samesite="strict",
+        samesite=cookie_samesite,
         max_age=15 * 60,
         path="/"
     )
@@ -84,12 +85,16 @@ async def login(
         value=refresh_token,
         httponly=True,
         secure=IS_PRODUCTION,
-        samesite="strict",
+        samesite=cookie_samesite,
         max_age=7 * 24 * 60 * 60,
         path="/api/v1/auth/refresh"
     )
 
-    return {"message": "Successfully logged in. Session secured."}
+    return {
+        "message": "Successfully logged in. Session secured.",
+        "access_token": access_token,
+        "token_type": "bearer",
+    }
 
 
 @router.post("/refresh")
@@ -117,27 +122,34 @@ async def refresh_session(request: Request, response: Response):
         roles=user["roles"]
     )
 
+    cookie_samesite = "none" if IS_PRODUCTION else "lax"
     response.set_cookie(
         key="token",
         value=access_token,
         httponly=True,
         secure=IS_PRODUCTION,
-        samesite="strict",
+        samesite=cookie_samesite,
         max_age=15 * 60,
         path="/"
     )
 
-    return {"success": True, "message": "Session refreshed."}
+    return {
+        "success": True,
+        "message": "Session refreshed.",
+        "access_token": access_token,
+        "token_type": "bearer",
+    }
 
 
 @router.post("/logout")
 async def logout(response: Response):
     """Invalidates the session by clearing the cookie."""
+    cookie_samesite = "none" if IS_PRODUCTION else "lax"
     response.delete_cookie(
         key="token",
         httponly=True,
         secure=IS_PRODUCTION,
-        samesite="strict",
+        samesite=cookie_samesite,
         path="/"
     )
     return {"message": "Successfully logged out."}
@@ -204,12 +216,13 @@ async def impersonate_user(
     }
     token = jwt.encode(payload, settings.AUTH_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
+    cookie_samesite = "none" if IS_PRODUCTION else "lax"
     response.set_cookie(
         key="token",
         value=token,
         httponly=True,
         secure=IS_PRODUCTION,
-        samesite="strict",
+        samesite=cookie_samesite,
         max_age=3600,
         path="/",
     )
@@ -234,7 +247,8 @@ async def end_impersonation(
         current_user["id"],
         datetime.utcnow().isoformat(),
     )
-    response.delete_cookie(key="token", httponly=True, secure=IS_PRODUCTION, samesite="strict", path="/")
+    cookie_samesite = "none" if IS_PRODUCTION else "lax"
+    response.delete_cookie(key="token", httponly=True, secure=IS_PRODUCTION, samesite=cookie_samesite, path="/")
     return {"message": "Impersonation ended. Please log in again."}
 
 

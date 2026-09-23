@@ -48,8 +48,12 @@ class AuthProvider:
             raise HTTPException(status_code=401, detail="Invalid authentication credentials")
 
 async def get_current_user(request: Request) -> Dict[str, Any]:
-    """FastAPI Dependency to enforce protected routes and extract the validated tenant context from cookies."""
+    """FastAPI Dependency to enforce protected routes and extract the validated tenant context from cookies or Authorization header."""
     token = request.cookies.get("token")
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return AuthProvider.verify_token(token)
@@ -58,6 +62,10 @@ async def get_current_user(request: Request) -> Dict[str, Any]:
 async def get_optional_current_user(request: Request) -> Optional[Dict[str, Any]]:
     """Like get_current_user but returns None instead of raising for unauthenticated requests."""
     token = request.cookies.get("token")
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
     if not token:
         return None
     try:

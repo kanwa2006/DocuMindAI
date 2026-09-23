@@ -80,6 +80,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS, # Environment variable
+    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
@@ -104,7 +105,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY" # Prevent Clickjacking
         response.headers["X-XSS-Protection"] = "1; mode=block" # Legacy XSS protection
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains" # HSTS
-        response.headers["Content-Security-Policy"] = f"default-src 'self'; connect-src 'self' {settings.FRONTEND_URL}"
+        response.headers["Content-Security-Policy"] = f"default-src 'self'; connect-src 'self' {settings.FRONTEND_URL} https://*.vercel.app"
         return response
 
 app.add_middleware(SecurityHeadersMiddleware)

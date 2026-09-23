@@ -88,6 +88,10 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         org_id: str | None = None
 
         token = request.cookies.get("token")
+        if not token:
+            auth_header = request.headers.get("Authorization")
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header[7:].strip()
         if token:
             try:
                 import jwt as _jwt
