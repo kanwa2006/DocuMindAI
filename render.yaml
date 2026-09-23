@@ -44,7 +44,11 @@ services:
       - key: GEMINI_MODEL
         value: gemini-2.5-flash-lite
       - key: RERANKER_PROVIDER
-        value: local
+        value: none
+      - key: EMBEDDING_PROVIDER
+        value: gemini
+      - key: CELERY_TASK_ALWAYS_EAGER
+        value: "true"
       - key: RAZORPAY_ENABLED
         value: "false"
       - key: OTEL_ENABLED

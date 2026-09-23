@@ -167,13 +167,19 @@ class EmbeddingService:
     """Thin facade that selects a provider at construction time.
 
     Priority order:
-      1. LocalEmbeddingProvider (BAAI/bge-m3) — primary, full quality
-      2. GeminiEmbeddingProvider (gemini-embedding-2) — cloud fallback
-      3. DummyEmbeddingProvider — test double only, never in production
+      1. GeminiEmbeddingProvider — if EMBEDDING_PROVIDER=gemini (free-tier default)
+      2. LocalEmbeddingProvider (BAAI/bge-m3) — primary, full quality
+      3. GeminiEmbeddingProvider (gemini-embedding-2) — cloud fallback when local fails
+      4. DummyEmbeddingProvider — test double only, never in production
     """
 
     def __init__(self):
-        self._provider = LocalEmbeddingProvider()
+        provider = os.getenv("EMBEDDING_PROVIDER", "local").lower()
+        if provider == "gemini":
+            logger.info("[embedding] EMBEDDING_PROVIDER=gemini — skipping local model, using GeminiEmbeddingProvider directly.")
+            self._provider = GeminiEmbeddingProvider()
+        else:
+            self._provider = LocalEmbeddingProvider()
 
     def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         return self._provider.embed_documents(texts)

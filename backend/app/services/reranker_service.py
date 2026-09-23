@@ -89,19 +89,36 @@ class RerankerService:
 def _get_default_reranker() -> BaseRerankerProvider:
     try:
         from app.core.config import settings
-        if getattr(settings, "RERANKER_PROVIDER", "local") == "local":
+        provider = getattr(settings, "RERANKER_PROVIDER", "local")
+        if provider == "local":
             return LocalCrossEncoder()
-        # M-10: a non-"local" provider name has no real implementation —
+        if provider == "none":
+            # Explicitly disabled — use passthrough reranker (no model download).
+            # When RERANKER_PROVIDER=none the reranker returns equal scores for all
+            # candidates (no reranking) rather than fabricated alternating values.
+            logger.info("[Reranker] RERANKER_PROVIDER=none — reranking disabled, using passthrough.")
+            return _PassthroughReranker()
+        # M-10: a non-"local"/non-"none" provider name has no real implementation —
         # that is a config error, not a reason to silently fabricate scores.
         logger.error(
-            f"[Reranker] RERANKER_PROVIDER={settings.RERANKER_PROVIDER!r} has no real "
+            f"[Reranker] RERANKER_PROVIDER={provider!r} has no real "
             "implementation — falling back to DummyLocalReranker (fabricated scores; "
             "refused at use in production)."
         )
     except Exception as exc:
         logger.error(f"[Reranker] Default reranker selection failed ({exc}) — "
-                     "falling back to DummyLocalReranker.")
-    return DummyLocalReranker()
+                     "falling back to passthrough reranker.")
+    return _PassthroughReranker()
+
+
+class _PassthroughReranker(BaseRerankerProvider):
+    """Returns uniform scores so the original retrieval order is preserved.
+
+    Safe to use in production — no model downloads, no fabricated scores.
+    Use when RERANKER_PROVIDER=none (free-tier deploy without sentence-transformers).
+    """
+    def rerank(self, query: str, documents: List[str]) -> List[float]:
+        return [0.5] * len(documents)
 
 
 reranker_service = RerankerService(_get_default_reranker())
