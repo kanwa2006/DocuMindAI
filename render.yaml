@@ -1,0 +1,158 @@
+# render.yaml — Render Blueprint for DocuMindAI free-tier public demo.
+#
+# Declares two services:
+#   documindai-api    — FastAPI web service (handles HTTP + SSE)
+#   documindai-worker — Celery worker (document ingestion pipeline)
+#
+# SECRETS: All environment variables marked `sync: false` below are
+# placeholder names.  Set the real values in the Render dashboard under
+# "Environment" for each service.  NEVER commit real secrets here.
+#
+# FREE-TIER NOTES (September 2026):
+#   - Render Free instances: 512 MB RAM, 0.1 CPU, 750 hours/workspace/month.
+#   - Services spin down after 15 min of inactivity; cold start ~30-60s.
+#   - Disk is EPHEMERAL — uploaded files are lost on restart/redeploy.
+#   - REQUIREMENTS_FILE=requirements-deploy.txt drops paddlepaddle + docling
+#     (multi-GB OCR engines) — text-based PDF/DOCX/PPTX still work fine.
+#   - BAAI/bge-m3 (2.2 GB) will OOM; app falls back to gemini-embedding-2
+#     (1024-dim via output_dimensionality, native — no zero-padding).
+
+services:
+  # ── FastAPI API Service ────────────────────────────────────────────────────
+  - type: web
+    name: documindai-api
+    runtime: docker
+    dockerfilePath: infrastructure/Dockerfile.backend
+    dockerContext: .
+    dockerCommand: >-
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    # Use the slim requirements that omit heavy OCR engines (see Dockerfile ARG)
+    dockerBuildArgs:
+      REQUIREMENTS_FILE: requirements-deploy.txt
+    plan: free
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: PROJECT_NAME
+        value: DocuMindAI
+      - key: STORAGE_PROVIDER
+        value: local
+      - key: STORAGE_PATH
+        value: /tmp/documind_storage
+      - key: VECTOR_BACKEND
+        value: pgvector
+      - key: OCR_SCANNED_ENABLED
+        value: "false"
+      - key: MAX_UPLOAD_MB
+        value: "50"
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: GEMINI_FALLBACK_MODEL
+        value: gemini-2.0-flash
+      - key: RERANKER_PROVIDER
+        value: local
+      - key: RAZORPAY_ENABLED
+        value: "false"
+      - key: OTEL_ENABLED
+        value: "false"
+      - key: PROMETHEUS_ENABLED
+        value: "false"
+      # ── Secrets: set these in the Render dashboard, NOT here ──────────────
+      - key: DATABASE_URL
+        sync: false        # Supabase transaction-pooler URL (postgresql+asyncpg://...)
+      - key: REDIS_URL
+        sync: false        # Upstash TLS URL (rediss://...)
+      - key: CELERY_BROKER_URL
+        sync: false        # Same Upstash URL
+      - key: CELERY_RESULT_BACKEND
+        sync: false        # Same Upstash URL
+      - key: AUTH_SECRET_KEY
+        sync: false        # openssl rand -hex 32
+      - key: CSRF_SECRET_KEY
+        sync: false        # openssl rand -hex 32 (DIFFERENT from AUTH_SECRET_KEY)
+      - key: FRONTEND_URL
+        sync: false        # https://<your-project>.vercel.app
+      - key: CORS_ORIGINS
+        sync: false        # ["https://<your-project>.vercel.app"]
+      - key: GEMINI_API_KEY_1
+        sync: false        # Your Gemini API key
+      # Add GEMINI_API_KEY_2 .. _N in the dashboard for key rotation
+      # Required by Settings even when not using pgbouncer individually:
+      - key: POSTGRES_SERVER
+        value: placeholder  # Overridden by DATABASE_URL
+      - key: POSTGRES_PORT
+        value: "5432"
+      - key: POSTGRES_USER
+        value: placeholder
+      - key: POSTGRES_PASSWORD
+        sync: false
+      - key: POSTGRES_DB
+        value: documind
+
+  # ── Celery Worker ─────────────────────────────────────────────────────────
+  - type: worker
+    name: documindai-worker
+    runtime: docker
+    dockerfilePath: infrastructure/Dockerfile.backend
+    dockerContext: .
+    dockerCommand: >-
+      celery -A app.workers.celery_app worker
+      -Q main-queue,celery,export_queue,ocr_gpu_queue
+      --concurrency=1
+      --loglevel=info
+    dockerBuildArgs:
+      REQUIREMENTS_FILE: requirements-deploy.txt
+    plan: free
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: STORAGE_PROVIDER
+        value: local
+      - key: STORAGE_PATH
+        value: /tmp/documind_storage
+      - key: VECTOR_BACKEND
+        value: pgvector
+      - key: OCR_SCANNED_ENABLED
+        value: "false"
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: GEMINI_FALLBACK_MODEL
+        value: gemini-2.0-flash
+      - key: RERANKER_PROVIDER
+        value: local
+      - key: OTEL_ENABLED
+        value: "false"
+      - key: PROMETHEUS_ENABLED
+        value: "false"
+      - key: RAZORPAY_ENABLED
+        value: "false"
+      # ── Secrets: set in Render dashboard ──────────────────────────────────
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: CELERY_BROKER_URL
+        sync: false
+      - key: CELERY_RESULT_BACKEND
+        sync: false
+      - key: AUTH_SECRET_KEY
+        sync: false
+      - key: CSRF_SECRET_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: GEMINI_API_KEY_1
+        sync: false
+      - key: POSTGRES_SERVER
+        value: placeholder
+      - key: POSTGRES_PORT
+        value: "5432"
+      - key: POSTGRES_USER
+        value: placeholder
+      - key: POSTGRES_PASSWORD
+        sync: false
+      - key: POSTGRES_DB
+        value: documind

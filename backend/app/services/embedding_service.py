@@ -93,8 +93,19 @@ class LocalEmbeddingProvider(BaseEmbeddingProvider):
 
 
 class GeminiEmbeddingProvider(BaseEmbeddingProvider):
-    """Uses Gemini text-embedding-004 (768-dim, free-tier friendly)."""
-    MODEL = "models/text-embedding-004"
+    """Uses gemini-embedding-2 with output_dimensionality=1024.
+
+    text-embedding-004 was shut down on January 14 2026.  gemini-embedding-2
+    supports Matryoshka Representation Learning (MRL), so we can request
+    exactly 1024 dimensions — matching the pgvector Vector(1024) column —
+    without any zero-padding.  This makes the fallback chain self-consistent:
+    index-time and query-time embeddings are identical 1024-dim vectors.
+    Supported range: 128–3072.  Google recommends 768, 1536, or 3072 for
+    optimal retrieval quality; 1024 is valid and preserves backward
+    compatibility with the existing corpus schema.
+    """
+    MODEL = "gemini-embedding-2"
+    OUTPUT_DIM = EMBEDDING_DIM  # 1024 — must match Vector(1024) column
 
     def __init__(self):
         # S5: this used to call `genai.configure(api_key=...)`, mutating the
@@ -107,7 +118,10 @@ class GeminiEmbeddingProvider(BaseEmbeddingProvider):
         # Now the key is chosen per call and the client is bound to it.
         from app.services.gemini_client import get_client_pool
         self._pool = get_client_pool()
-        logger.info("[embedding] GeminiEmbeddingProvider ready (text-embedding-004)")
+        logger.info(
+            "[embedding] GeminiEmbeddingProvider ready (gemini-embedding-2, "
+            f"output_dimensionality={self.OUTPUT_DIM})"
+        )
 
     def _embed_one(self, text: str, task_type: str):
         """Embed on a healthy key, reporting failures against the key USED.
@@ -130,7 +144,12 @@ class GeminiEmbeddingProvider(BaseEmbeddingProvider):
                 res = self._pool.client_for(key).models.embed_content(
                     model=self.MODEL,
                     contents=text,
-                    config=genai_types.EmbedContentConfig(task_type=task_type),
+                    config=genai_types.EmbedContentConfig(
+                        task_type=task_type,
+                        # MRL truncation: request exactly 1024-dim so we match
+                        # the Vector(1024) pgvector column without any padding.
+                        output_dimensionality=self.OUTPUT_DIM,
+                    ),
                 )
                 return list(res.embeddings[0].values)
             except Exception as exc:  # noqa: BLE001 - classified immediately
@@ -154,21 +173,21 @@ class GeminiEmbeddingProvider(BaseEmbeddingProvider):
             try:
                 # S5: per-key client, and a 429 is now reported against the key
                 # that actually served the call.
-                raw = self._embed_one(text, task_type="retrieval_document")
+                # RETRIEVAL_DOCUMENT is the task_type string accepted by
+                # gemini-embedding-2 for indexing document chunks.
+                raw = self._embed_one(text, task_type="RETRIEVAL_DOCUMENT")
                 returned_dim = len(raw)
-                # BUG-006 FIX: DocumentChunk.embedding is Vector(1024).
-                # Gemini text-embedding-004 returns 768-dim vectors.
-                # Pad to EMBEDDING_DIM with zeros so pgvector accepts the INSERT.
-                # Retrieval works because the query embedding goes through the same
-                # fallback chain and gets padded identically.
-                if returned_dim < EMBEDDING_DIM:
-                    raw = raw + [0.0] * (EMBEDDING_DIM - returned_dim)
-                    logger.warning(
-                        f"[embedding] GeminiEmbeddingProvider padded vector from "
-                        f"{returned_dim}-dim to {EMBEDDING_DIM}-dim. "
-                        "Primary BAAI/bge-m3 model may not be loaded — check worker startup logs."
+                # gemini-embedding-2 with output_dimensionality=1024 must always
+                # return exactly 1024-dim vectors.  If the API ever returns the
+                # wrong size, refuse rather than silently corrupt the corpus (M-4).
+                if returned_dim != EMBEDDING_DIM:
+                    raise RuntimeError(
+                        f"[embedding] gemini-embedding-2 returned {returned_dim}-dim "
+                        f"vector but expected {EMBEDDING_DIM}-dim "
+                        f"(output_dimensionality={self.OUTPUT_DIM}). "
+                        "Refusing to insert a mis-sized vector into the pgvector column."
                     )
-                results.append(raw[:EMBEDDING_DIM])  # truncate if somehow larger
+                results.append(raw)
             except Exception as e:
                 # M-4: never silently index a zero vector — it poisons the
                 # corpus with rows that match nothing (or everything at

@@ -6,11 +6,21 @@
 # Docker forbids `COPY ../` — a COPY source can never escape the build context —
 # so every path below is repo-root-relative. infrastructure/docker-compose.yml
 # and railway.json both pass the repo root as the context to match.
+#
+# REQUIREMENTS_FILE (build-time ARG, default: requirements.txt)
+#   Pass --build-arg REQUIREMENTS_FILE=requirements-deploy.txt for free-tier hosts
+#   (Render, Railway free) that cannot fit paddlepaddle + docling in 512 MB RAM /
+#   build timeout.  The deploy file drops those heavy ML packages; everything else
+#   stays identical.  See backend/requirements-deploy.txt for the exact list of what
+#   is dropped and what degrades as a result.
+ARG REQUIREMENTS_FILE=requirements.txt
 
 # Stage 1: Builder
 FROM python:3.11-slim AS builder
+# Re-declare ARG inside the stage so it is visible here (Docker ARG scoping rule).
+ARG REQUIREMENTS_FILE=requirements.txt
 WORKDIR /app
-COPY backend/requirements.txt .
+COPY backend/requirements.txt backend/requirements-deploy.txt ./
 RUN apt-get update && apt-get install -y build-essential libpq-dev && rm -rf /var/lib/apt/lists/*
 # NOTE: no --no-deps here. With it, only the ~40 top-level requirements were
 # wheeled and their transitive dependencies were not; the final stage then ran
@@ -19,10 +29,11 @@ RUN apt-get update && apt-get install -y build-essential libpq-dev && rm -rf /va
 # unsatisfiable and failed the build with ResolutionImpossible. Wheeling the
 # full dependency closure and installing via the requirements file lets pip
 # resolve once, in the builder, exactly as a normal install would.
-RUN pip wheel --no-cache-dir --wheel-dir /app/wheels -r requirements.txt
+RUN pip wheel --no-cache-dir --wheel-dir /app/wheels -r ${REQUIREMENTS_FILE}
 
 # Stage 2: Production Engine
 FROM python:3.11-slim
+ARG REQUIREMENTS_FILE=requirements.txt
 WORKDIR /app
 
 # Install runtime dependencies (OpenCV requires libgl1; curl for the healthcheck)
@@ -34,8 +45,8 @@ RUN apt-get update && \
 # must come from the wheels built above, so the image cannot drift from what
 # the builder resolved.
 COPY --from=builder /app/wheels /wheels
-COPY backend/requirements.txt .
-RUN pip install --no-cache --no-index --find-links=/wheels -r requirements.txt
+COPY backend/requirements.txt backend/requirements-deploy.txt ./
+RUN pip install --no-cache --no-index --find-links=/wheels -r ${REQUIREMENTS_FILE}
 
 # Copy Application Code. This must include alembic/ and alembic.ini — the
 # deployment start command runs `alembic upgrade head`, which silently no-ops
@@ -48,3 +59,4 @@ ENV PYTHONUNBUFFERED=1
 # Bind to $PORT when the platform injects one (Railway/Render), else 8000.
 EXPOSE 8000
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+

@@ -30,6 +30,12 @@ services:
       - MAX_CLIENT_CONN=1000
       - DEFAULT_POOL_SIZE=20
       - IGNORE_STARTUP_PARAMETERS=extra_float_digits
+      # PostgreSQL 14+ defaults to SCRAM-SHA-256. Without this pgbouncer tries
+      # MD5 on the server leg, which the local pg container refuses with
+      # "cannot do SCRAM authentication: wrong password type".
+      - AUTH_TYPE=scram-sha-256
+      # No TLS on the pgbouncer→db leg in local docker networking.
+      - SERVER_TLS_SSLMODE=disable
     ports:
       - "6432:6432"
     depends_on:
