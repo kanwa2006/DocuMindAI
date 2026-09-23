@@ -24,7 +24,7 @@ services:
     dockerContext: .
     # Run migrations THEN start the server in a single command.
     dockerCommand: >-
-      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+      sh -c "alembic upgrade head && celery -A app.workers.celery_app worker -Q main-queue,celery,export_queue,ocr_gpu_queue --concurrency=1 --loglevel=info & exec uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     dockerBuildArgs:
       REQUIREMENTS_FILE: requirements-deploy.txt
     plan: free
@@ -84,68 +84,3 @@ services:
         sync: false   # your Google AI Studio API key
       - key: POSTGRES_PASSWORD
         sync: false   # your Supabase DB password
-
-  # ── Celery Worker ─────────────────────────────────────────────────────────
-  - type: worker
-    name: documindai-worker
-    runtime: docker
-    dockerfilePath: infrastructure/Dockerfile.backend
-    dockerContext: .
-    dockerCommand: >-
-      celery -A app.workers.celery_app worker
-      -Q main-queue,celery,export_queue,ocr_gpu_queue
-      --concurrency=1
-      --loglevel=info
-    dockerBuildArgs:
-      REQUIREMENTS_FILE: requirements-deploy.txt
-    plan: free
-    envVars:
-      - key: ENVIRONMENT
-        value: production
-      - key: STORAGE_PROVIDER
-        value: local
-      - key: STORAGE_PATH
-        value: /tmp/documind_storage
-      - key: VECTOR_BACKEND
-        value: pgvector
-      - key: OCR_SCANNED_ENABLED
-        value: "false"
-      - key: GEMINI_MODEL
-        value: gemini-2.5-flash-lite
-      - key: RERANKER_PROVIDER
-        value: local
-      - key: RAZORPAY_ENABLED
-        value: "false"
-      - key: OTEL_ENABLED
-        value: "false"
-      - key: PROMETHEUS_ENABLED
-        value: "false"
-      - key: POSTGRES_SERVER
-        value: placeholder
-      - key: POSTGRES_PORT
-        value: "5432"
-      - key: POSTGRES_USER
-        value: placeholder
-      - key: POSTGRES_DB
-        value: documind
-      # ── Secrets ───────────────────────────────────────────────────────────
-      - key: DATABASE_URL
-        sync: false
-      - key: REDIS_URL
-        sync: false
-      - key: CELERY_BROKER_URL
-        sync: false
-      - key: CELERY_RESULT_BACKEND
-        sync: false
-      - key: AUTH_SECRET_KEY
-        sync: false
-      - key: CSRF_SECRET_KEY
-        sync: false
-      - key: FRONTEND_URL
-        sync: false
-      - key: CORS_ORIGINS
-        sync: false
-      - key: GEMINI_API_KEY_1
-        sync: false
-      - key: POSTGRES_PASSWORD
-        sync: false
