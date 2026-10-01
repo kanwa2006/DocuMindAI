@@ -150,7 +150,10 @@ async def clip_text(
     await db.commit()
     await db.refresh(new_doc)
 
-    process_clip_document.delay(str(doc_id), request.content)
+    try:
+        process_clip_document.delay(str(doc_id), request.content)
+    except Exception as exc:
+        logger.error(f"[clip] Error dispatching process_clip_document: {exc}", exc_info=True)
 
     return {
         "document_id": str(doc_id),
@@ -223,13 +226,13 @@ async def verify_upload(
     except Exception as exc:
         # Worker/broker down — surface a real failure instead of leaving the doc
         # stuck in PROCESSING forever.
-        logger.error(f"[verify_upload] Could not enqueue process_document: {exc}")
+        logger.error(f"[verify_upload] Could not enqueue process_document: {exc}", exc_info=True)
         new_doc.status = DocumentStatus.FAILED
         await db.commit()
         await db.refresh(new_doc)
         raise HTTPException(
             status_code=503,
-            detail="Document queue unavailable. Try again in a moment.",
+            detail=f"Document queue unavailable: {type(exc).__name__}: {exc}",
         )
 
     return new_doc

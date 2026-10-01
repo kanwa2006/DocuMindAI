@@ -74,5 +74,9 @@ async def get_db():
 
 # Sync Engine for Celery Workers
 sync_url, sync_args = get_engine_args(settings.sync_database_url, is_async=False)
-sync_engine = create_engine(sync_url, pool_pre_ping=True, **sync_args)
+if _is_supavisor_pooler(sync_url):
+    from sqlalchemy.pool import NullPool
+    sync_engine = create_engine(sync_url, poolclass=NullPool, **sync_args)
+else:
+    sync_engine = create_engine(sync_url, pool_pre_ping=True, **sync_args)
 SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)

@@ -126,8 +126,8 @@ celery_app.conf.update(
     enable_utc=True,
     worker_max_tasks_per_child=50,
     # Free-tier deploy: CELERY_TASK_ALWAYS_EAGER=true runs tasks inline (no worker process)
-    task_always_eager=os.environ.get("CELERY_TASK_ALWAYS_EAGER", "false").lower() == "true",
-    task_eager_propagates=True,
+    task_always_eager=os.environ.get("CELERY_TASK_ALWAYS_EAGER", "true").lower() == "true",
+    task_eager_propagates=False,
     **_ssl_conf,
 )
 
