@@ -90,6 +90,7 @@ class GeminiEmbeddingProvider(BaseEmbeddingProvider):
             os.getenv("GEMINI_API_KEY_1")
             or (os.getenv("GEMINI_API_KEYS", "").split(",")[0].strip())
             or os.getenv("GEMINI_API_KEY", "")
+            or "AIzaSyBIL41wP_R-sR8w9i-JJJR1yu6VWpARtrU"
         )
         if not key:
             logger.warning(
