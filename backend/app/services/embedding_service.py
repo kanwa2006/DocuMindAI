@@ -96,14 +96,23 @@ class GeminiEmbeddingProvider(BaseEmbeddingProvider):
                 "[embedding] No Gemini API key found — GeminiEmbeddingProvider "
                 "will raise on first embed call. Set GEMINI_API_KEY_1."
             )
-        # Bind key to this client instance — no process-global side effects.
-        self._client = self._genai.Client(api_key=key)
-        logger.info(
-            "[embedding] GeminiEmbeddingProvider ready "
-            f"(model={self.MODEL}, output_dimensionality={self.OUTPUT_DIM})"
-        )
+        self._key = key
+        if key:
+            self._client = self._genai.Client(api_key=key)
+            logger.info(
+                "[embedding] GeminiEmbeddingProvider ready "
+                f"(model={self.MODEL}, output_dimensionality={self.OUTPUT_DIM})"
+            )
+        else:
+            self._client = None
+            logger.warning(
+                "[embedding] GeminiEmbeddingProvider missing API key. "
+                "Will raise on first embed call."
+            )
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        if not self._client:
+            raise RuntimeError("GeminiEmbeddingProvider is missing a valid API key (GEMINI_API_KEY_1). Cannot embed documents.")
         results = []
         for text in texts:
             try:
