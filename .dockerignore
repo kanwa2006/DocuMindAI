@@ -1,0 +1,17 @@
+.git
+.gitignore
+.github
+scratch
+frontend
+node_modules
+venv
+backend/venv
+.venv
+__pycache__
+*.pyc
+*.pyo
+.claude
+.agents
+LEARNING_GUIDE
+*.md
+.tempmediaStorage
