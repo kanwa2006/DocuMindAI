@@ -42,10 +42,10 @@ export default function LoginPage() {
       formData.append('password', password);
       await login(formData);
 
-      // Redirect to saved returnTo path or home
+      // Redirect to saved returnTo path or workspace (not home, which looks like logged-out)
       const returnTo = sessionStorage.getItem('returnTo');
       sessionStorage.removeItem('returnTo');
-      window.location.href = returnTo || '/';
+      window.location.href = returnTo || '/general';
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'An error occurred during login.';
       setError(message);
